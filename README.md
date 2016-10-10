@@ -1,0 +1,6 @@
+Hi. I am Vassilis Lemonidis, student of ECE,NTUA. Currently focusing on computer vision and robotics.
+# ProjectionPainting
+Paint on any surface using Kinect and Projecting hardware.
+
+# Curent Progress
+Till now I am able to read either a stream from windows kinect sdk, by using KinectStreamer, or a stream from the Kinect itself, followed by background modelling and subtraction (the background is supposed to be static and not reflecting, so that IR sensors identify depth accurately), moving object detection (the object is assumed initially to be an arm) and hand detection, by approximating forearm shape. Currently I am between the improvement of previous results by infusing color images to the process, something quite frustrating and time consuming (probably will leave it out), and the implementation of a 3d CNN that is capable of classifying 3 actions and 4 static gestures. I am using the action gestures training dataset from Cambridge University as starting point (http://www.iis.ee.ic.ac.uk/icvl/ges_db.htm). After this stage, I will match each gesture to an equivalent module behaviour ,furnish code in order to make the project friendlier to a normal user ,construct the GUI and join every part together. I am a bit off in terms of realtime application (~80 ms procedure for each frame till now)
