@@ -1,4 +1,6 @@
 '''Run this script first'''
+import subprocess
+import signal
 import sys
 import time
 import os
@@ -6,6 +8,7 @@ import statsmodels.robust.scale
 import yaml
 import numpy as np
 import cv2
+import rosbag
 import rospy
 import roslaunch
 import message_filters as mfilters
@@ -127,7 +130,7 @@ def initialise_global_vars(constants):
     co.meas.imy, co.meas.imx = co.data.depth_im.shape
     return co.counters, co.data, co.masks, co.meas, co.models, co.thres
 
-
+process= None
 class Kinect(object):
     '''Kinect Processing Class'''
 
@@ -137,15 +140,24 @@ class Kinect(object):
         co.meas.nprange = np.arange((co.meas.imy + 2) * (co.meas.imx + 2))
         self.initial_im_set_list = []
         self.vars = constants, self.initial_im_set_list
-        node = roslaunch.core.Node("kinect2_bridge", "kinect2_bridge")
-        # rospy.set_param('fps_limit',10)
-        launch = roslaunch.scriptapi.ROSLaunch()
-        launch.start()
         global process
-        process = launch.launch(node)
-        if process.is_alive():
-            print 'Starting subscribers to kinect'
-        self.image_pub = rospy.Publisher("results_topic",Image)
+        if constants['stream']=='live':
+            node = roslaunch.core.Node("kinect2_bridge", "kinect2_bridge")     
+            # rospy.set_param('fps_limit',10)
+            launch = roslaunch.scriptapi.ROSLaunch()
+            launch.start()
+            process = launch.launch(node)
+            if process.is_alive():
+                print 'Starting subscribers to kinect'    
+        elif constants['stream']=='recorded':
+            process=\
+                    subprocess.Popen(
+                        'rosbag play -l -q '+
+                        '/media/vassilis/Data/KinectData/rosbag_files/data.bag',
+                        stdin=subprocess.PIPE, shell=True,
+                        preexec_fn=os.setsid)
+
+        self.image_pub = rospy.Publisher("results_topic",Image,queue_size=10)
 
         
         self.depth_sub = mfilters.Subscriber(
@@ -223,8 +235,7 @@ class Kinect(object):
                 depth, desired_encoding="passthrough")
             co.data.color_im = self.bridge.imgmsg_to_cv2(
                 color, desired_encoding="passthrough")
-            co.data.depth_im = (co.data.depth_im - np.min(co.data.depth_im)) / float(12000)
-
+            co.data.depth_im = (co.data.depth_im) / float(12000)
         except CvBridgeError as err:
             print err
 
@@ -312,8 +323,13 @@ def main():
             rospy.spin()
         except KeyboardInterrupt:
             print "Shutting down"
-            cv2.destroyAllWindows()
-            process.stop()
+            if constants['stream']=='live':
+                process.stop()
+            else:
+                #process.terminate()
+                os.killpg(process.pid, signal.SIGINT)
+
+       
     co.flags.save = constants['save']
     if co.flags.save == 'y':
         np.save(constants['save_depth'], co.data.depth)
