@@ -2,6 +2,8 @@
 framerate: 30 
 #read=d/f/k; read from data/file/kinect
 read: k
+#if read from kinect, live or recorder
+stream: 'recorded'
 #save=y/n
 save: n
 #directories to load images/test data
@@ -31,7 +33,7 @@ outlier_shape_time: 1.5
 cond_erosions_num: 10
 already_segmented_path: AlrSegm.jpg
 segmentation_data: SegmData
-max_objects_size_ratio: 0.04
+max_objects_size_ratio: 0.01
 #Variables necessary for approximate wrist detection
 interp_window: 7
 cutoff_angle_ratio: 15
