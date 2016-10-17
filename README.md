@@ -20,9 +20,9 @@ For each frame after this:
 
 The main concept is that the intersection points will belong to the moving object. However, as for now, I have not been able to produce admirable results, therefore I am currently in the process of debugging/tuning. Due to this situation, it was impossible to move further with the rest of the project.
 
-#Update (17/10/2016)
+# Update (17/10/2016)
 
 I ended up abbandoning the idea of using the intersection points to identify the location of the object. I now use the mean intensity in each uniquely found object tile area and I assume that this corresponds to the object intensity. Yet, it seems like a real challenge to create a completely invariant method to changes of intensity and Kinect sensors aberrations. I am reaching the completion of the suggested algorithm, by addressing to small bugs, that prevent me from making any more progress. When I have solved them all, while I believe that after that the speed of the computations will have drastically increased, I might add a scipy library to accelerate the 'find the center of mass' pass. Apart from the above, I implemented a method to read from recorded data, aka rosbag files. This will enable me to assess the quality of my method on known video data, before proceeding to the real-time implementation. 
-=======
-The main concept is that the intersection points will belong to the moving object. However, as for now, I have not been able to produce admirable results, therefore I am currently in the process of debugging/tuning. Due to this situation, it was impossible to move further with the rest of the project.
+
+
 
