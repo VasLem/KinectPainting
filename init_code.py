@@ -136,7 +136,6 @@ class Kinect(object):
 
 
     def __init__(self, constants):
-        co.meas.erode_size = (constants['calib_secs']) * 2 + 1
         co.meas.nprange = np.arange((co.meas.imy + 2) * (co.meas.imx + 2))
         self.initial_im_set_list = []
         self.vars = constants, self.initial_im_set_list
@@ -151,13 +150,14 @@ class Kinect(object):
                 print 'Starting subscribers to kinect'    
         elif constants['stream']=='recorded':
             process=\
-                    subprocess.Popen(
+                   subprocess.Popen(
                         'rosbag play -l -q '+
                         '/media/vassilis/Data/KinectData/rosbag_files/data.bag',
                         stdin=subprocess.PIPE, shell=True,
                         preexec_fn=os.setsid)
 
         self.image_pub = rospy.Publisher("results_topic",Image,queue_size=10)
+
 
         
         self.depth_sub = mfilters.Subscriber(
@@ -210,10 +210,10 @@ class Kinect(object):
 
     def detection_with_scene_segmentation(self):
         constants, self.initial_im_set_list = self.vars
+        co.data.depth3d = np.tile(co.data.depth_im[:, :, None], (1, 1, 3))
         if co.counters.im_number == 0:
             co.meas.imy, co.meas.imx = co.data.depth_im.shape
             co.meas.nprange = np.arange((co.meas.imy + 2) * (co.meas.imx + 2))
-            co.data.depth3d = np.tile(co.data.depth_im[:, :, None], (1, 1, 3))
             co.segclass.all_objects_im=np.zeros_like(co.data.depth_im)
         if co.counters.im_number < 2:
             self.initial_im_set_list.append(co.data.depth_im)
@@ -236,6 +236,7 @@ class Kinect(object):
             co.data.color_im = self.bridge.imgmsg_to_cv2(
                 color, desired_encoding="passthrough")
             co.data.depth_im = (co.data.depth_im) / float(12000)
+
         except CvBridgeError as err:
             print err
 
@@ -319,17 +320,14 @@ def main():
             print 'Please move randomly kinect in space' \
                 'for the next 10 seconds (DONT BREAK IT) and wait for' \
                 'program to exit'
-        try:
-            rospy.spin()
-        except KeyboardInterrupt:
-            print "Shutting down"
-            if constants['stream']=='live':
+       
+        rospy.spin()
+        print "Shutting down"
+        if constants['stream']=='live':
                 process.stop()
-            else:
+        else:
                 #process.terminate()
                 os.killpg(process.pid, signal.SIGINT)
-
-       
     co.flags.save = constants['save']
     if co.flags.save == 'y':
         np.save(constants['save_depth'], co.data.depth)

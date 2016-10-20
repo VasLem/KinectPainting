@@ -9,6 +9,8 @@ from scipy import ndimage
 import matplotlib.pyplot as plt
 
 
+
+
 def find_partitions(points, dim):
     '''Separate big segments'''
     center = np.mean(points, axis=1)
@@ -43,18 +45,14 @@ def find_partitions(points, dim):
             points[np.tile(np.logical_not(compare[0, :])[None,:], (2,
                                                                    1))],(2,-1)))
     return objs
-
-
 def register_object(points, pixsize, xsize, ysize):
     '''Register object to objects structure'''
     minsize=10
     if xsize>minsize and ysize>minsize:
-        if co.segclass.objects.all_objects_im.size == 0:
-            co.segclass.objects.all_objects_im = np.zeros_like(co.data.depth_im)
         co.segclass.objects.obj_count += 1
         co.segclass.objects.all_objects_im[
             tuple(points)] = co.segclass.objects.obj_count 
-        co.segclass.objects.size.append(pixsize)
+        co.segclass.objects.pixsize.append(pixsize)
         co.segclass.objects.xsize.append(xsize)
         co.segclass.objects.ysize.append(ysize)
 
@@ -77,8 +75,7 @@ def check_object_dims(points):
         ans = 'x'
     else:
         ans = 'ok'
-    return [ans, len(points), ysize, xsize]
-
+    return [ans, len(points[0]), ysize, xsize]
 
 def object_partition(points, check):
     '''Recursively check and register objects to objects structure'''
@@ -90,14 +87,12 @@ def object_partition(points, check):
         if obj.size <= 2:
             continue
         object_partition(obj, check_object_dims(points))
-
-
+        
 def object_process(val, pos):
     '''Process segments'''
     points = np.unravel_index(pos, co.data.depth_im.shape)
     object_partition(points, check_object_dims(points))
-
-
+    
 def detection_by_scene_segmentation(constants):
     '''Detection of moving object by using Distortion field of centers of mass
     of background objects'''
@@ -153,8 +148,8 @@ def detection_by_scene_segmentation(constants):
         elif co.counters.im_number == (constants['framerate'] *
                                        constants['calib_secs'] - 1):
             co.segclass.objects.all_objects_im = np.zeros_like(
-                co.data.depth_im)
-            co.segclass.objects.obj_count = 0
+                co.data.depth_im)-1
+            co.segclass.objects.obj_count = -1
             for val in np.unique(co.segclass.segment_values):
                 if val != 0:
                     objs = np.ones_like(co.data.depth_im) * \
@@ -164,40 +159,52 @@ def detection_by_scene_segmentation(constants):
                     ndimage.labeled_comprehension(objs, labeled, lbls,
                                                   object_process, float, 0,
                                                   True)
-
-            print 'Found or partitioned', co.segclass.objects.obj_count, 'background objects'
+            print np.max(co.segclass.objects.all_objects_im),np.min(co.segclass.objects.all_objects_im)
+            co.segclass.objects.find_object_center()
+            print 'Found or partitioned', co.segclass.objects.obj_count+1, 'background objects'
             with open(constants['segmentation_data'] + '.pkl', 'wb') as output:
                 pickle.dump(co.segclass.objects, output, -1)
-            cv2.imwrite(constants['already_segmented_path'],
-                        co.data.depth_im)
+            cv2.imwrite(constants['already_segmented_path'], co.data.depth_im)
             cv2.imwrite('segments.jpg', co.segclass.segment_values)
-            #plt.imshow(co.segclass.objects.all_objects_im)
-            #plt.savefig('partitioned_segments.jpg')
+            plt.imshow(co.segclass.objects.all_objects_im)
+            plt.savefig('partitioned_segments.jpg')
             print 'Saved segmentation data for future use.'
             co.segclass.needs_segmentation = 0
     elif (not co.segclass.needs_segmentation) and co.counters.im_number >= 2:
         if co.segclass.objects.initial_center == []:
+            print 'Loading scene objects from memory.'
             co.segclass.objects = pickle.load(
                 open(constants['segmentation_data'] + '.pkl', 'rb'))
-            co.segclass.objects.find_object_center()
         time1 = time.clock()
         co.segclass.objects.find_object_center()
-        if co.segclass.objects.center:
+        if co.segclass.objects.center.size>0:
             co.segclass.objects.find_centers_displacement()
             co.segclass.objects.find_objects()
             time2 = time.clock()
-            print 'total time needed', time2 - time1
+            print 'Total time needed for single frame', time2 - time1
             points_on_im = co.data.depth3d.copy()
-            for point1, point2 in zip(co.segclass.objects.initial_center,
-                                      co.segclass.objects.center):
+            #points_on_im[np.sum(points_on_im,axis=2)==0,:]=np.array([1,0,1])
 
-                if point1[0] != -1:
-                    cv2.arrowedLine(points_on_im,
-                                    (point1[1], point1[0]),
-                                    (point2[1], point2[0]), [0, 1, 0], 2, 1)
+            for calc,check,point1, point2 in zip(
+                co.segclass.objects.centers_to_calculate,
+                co.segclass.objects.is_unreliable, 
+                co.segclass.objects.initial_center,
+                co.segclass.objects.center):
+                if point1[0] != -1 :
+                    if check==1:
+                         cv2.arrowedLine(points_on_im,
+                                        (point1[1], point1[0]),
+                                        (point2[1], point2[0]), [1, 0, 0], 2, 1)    
+                    else:
+                        if calc:
+                             cv2.arrowedLine(points_on_im,
+                                            (point1[1], point1[0]),
+                                            (point2[1], point2[0]), [0, 1, 0], 2, 1)    
+                        else:
+                            cv2.arrowedLine(points_on_im,
+                                            (point1[1], point1[0]),
+                                            (point2[1], point2[0]), [0, 0, 1], 2, 1)
             co.im_results.images.append(points_on_im)
-            co.im_results.images.append(co.data.depth_im)
-
 
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''
