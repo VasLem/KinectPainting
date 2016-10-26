@@ -3,7 +3,10 @@ import cv2
 import time
 from cv_bridge import CvBridge, CvBridgeError
 import matplotlib.pyplot as plt
+from sklearn import preprocessing
 from scipy import ndimage
+import helping_functs as hf
+
 
 class ConvexityDefect(object):
     '''Convexity_Defects holder'''
@@ -51,6 +54,7 @@ class Data(object):
     def __init__(self):
         self.trusty_pixels = np.zeros(1)
         self.depth3d = np.zeros(1)
+        self.uint8_depth_im = np.zeros(1)
         self.depth = []
         self.color = []
         self.depth_im = np.zeros(1)
@@ -61,6 +65,8 @@ class Data(object):
         self.depth_mem = []
         self.background = np.zeros(1)
         self.trusty_pixels = np.zeros(1)
+        self.reference_uint8_depth_im = np.zeros(1)
+        self.valid_values = np.zeros(1)
 
 
 class Result(object):
@@ -104,7 +110,6 @@ class Result(object):
             if not isrgb:
                 montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
                         * imy, x_init:x_init + image.shape[1]] = image
-                #print (count / self.maxdim) * imy,(count / self.maxdim + 1)* imy,x_init,x_init + image.shape[1]
             else:
                 montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
                         * imy, x_init:x_init + image.shape[1], :] = image
@@ -123,7 +128,6 @@ class Result(object):
                 print(e)
         else:
             cv2.imwrite(var2, montage)
-        # print 'isrgb',isrgb
         return
 
     def print_results(self, filename):
@@ -211,6 +215,16 @@ class KalmanFilter:
         self.can_exist = np.zeros(0)
 
 
+class NoiseRemoval:
+
+    def remove_noise(self):
+        # All noisy pixels are either white or black. We must remove this shit.
+        time1 = time.clock()
+        data.depth_im *= data.depth_im < 0.35
+        data.depth_im /= 0.35
+        time2 = time.clock()
+
+
 class ExistenceProbability:
 
     def __init__(self):
@@ -219,190 +233,325 @@ class ExistenceProbability:
         self.distance_mask = np.zeros(0)
         self.objects_mask = np.zeros(0)
         self.can_exist = np.zeros(0)
-        self.max_distance = 50
+        self.max_distancex = 50
+        self.max_distancey = 25
         self.framex1 = 0
         self.framex2 = 0
         self.framey1 = 0
         self.framey2 = 0
         self.always_checked = []
-        self.wearing_par=10
-        self.wearing_mat=np.zeros(0)
+        self.wearing_par = 8
+        self.wearing_mat = np.zeros(0)
+
     def calculate(self):
         if self.init_val == 0:
-            self.wearing_mat=np.zeros(segclass.objects.obj_count+1)
+            self.wearing_mat = np.zeros(segclass.total_obj_num)
             self.init_val = 1
             # self.distance_mask = np.pad(
             # np.ones(tuple(np.array(data.depth_im.shape) - 2)), 1, 'constant')
             sums = np.sum(masks.calib_frame[
                           :, 1:masks.calib_frame.shape[1] / 2], axis=0) > 0
-            self.framex1 = np.where(np.diff(sums))[0] + self.max_distance
+            self.framex1 = np.where(np.diff(sums))[0] + self.max_distancex
             self.framex2 = meas.imx - self.framex1
-            self.framey1 = self.max_distance
-            self.framey2 = meas.imy - self.max_distance
-            for count, center in enumerate(segclass.objects.initial_center):
+            self.framey1 = self.max_distancey
+            self.framey2 = meas.imy - self.max_distancey
+            for count, center in enumerate(segclass.nz_objects.initial_center):
                 if center[0] < self.framey1 or center[0] > self.framey2 or\
                         center[1] < self.framex1 or center[1] > self.framex2:
                     self.always_checked.append(count)
 
-            #self.distance_mask *= masks.calib_frame
+        new_arrivals = []
+        for neighborhood in segclass.filled_neighborhoods:
+            new_arrivals += neighborhood
+        self.wearing_mat[new_arrivals + self.always_checked] = self.wearing_par
+        self.can_exist = np.where(
+            self.wearing_mat[:segclass.nz_objects.count] > 0)[0]
 
-            # self.distance = cv2.distanceTransform(
-            #    self.distance_mask.astype(np.uint8), cv2.DIST_L1, 3)
-            #self.objects_mask = np.ones_like(data.depth_im)
-            # plt.imshow(self.distance)
-            # plt.savefig('initial_existence_im,jpg')
-        
-        new_arrivals=[]
-        for neighborhood in segclass.objects.filled_neighborhoods:
-             new_arrivals += neighborhood
-        self.wearing_mat[new_arrivals+self.always_checked]=self.wearing_par
-        self.can_exist=np.where(self.wearing_mat>0)[0]
-        self.wearing_mat-=1
-        print 'Segments checked: ', self.can_exist
+        self.wearing_mat -= 1
+        # print 'Segments checked: ', self.can_exist
         '''
         im_res = np.zeros_like(data.depth_im, dtype=np.uint8)
         for val in self.can_exist:
-            im_res[segclass.objects.all_objects_im == val] = 255
+            im_res[segclass.objects.image == val] = 255
         im_results.images.append(im_res)
         '''
 
-class SceneObjects(object):
-    '''Class to describe found scene objects'''
+
+class HandSeparation(object):
+
+    def fingertip_detection(self):
+        '''
+        SE=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(15,15))
+        im_results.images.append(
+            cv2.morphologyEx((segclass.found_objects>0).astype(np.uint8),cv2.MORPH_TOPHAT,SE))
+        '''
+
+
+class SceneObjects():
+    '''Class to process segmented objects'''
 
     def __init__(self):
         self.pixsize = []
         self.xsize = []
         self.ysize = []
-        self.contour = []
         self.center = np.zeros(0)
+        self.center_displacement = np.zeros(0)
+        self.centers_to_calculate = np.zeros(0)
+        self.center_displ_angle = np.zeros(0)
+        self.count = -1
         self.initial_center = np.zeros(0)
-        self.initial_vals_set = []
-        self.valid_vals_loc = np.zeros(0)
-        self.center_displacement = []
-        self.obj_count = 0
-        self.all_objects_im = np.zeros(0)
+        self.initial_vals = []
+        self.locs = np.zeros(0)
+        self.masses = np.zeros(0)
+        self.vals = np.zeros(0)
+        self.count = np.zeros(0)
         self.is_unreliable = np.zeros(0)
-        self.found_objects = []
-        self.proximity_table = np.zeros(0)
-        self.neighborhood_existence = np.zeros(0)
-        self.filled_neighborhoods = []
-        self.valid_vals=np.zeros(0)
-        self.masses=np.zeros(0)
-        self.centers_to_calculate=np.zeros(0)
+        self.image = np.zeros(0)
+        self.pixel_dim = 0
+        self.untrusty = []
+
+    def find_partitions(self, points, dim):
+        '''Separate big segments'''
+        center = np.mean(points, axis=1)
+        objs = []
+        points = np.array(points)
+
+        compare = points <= center[:, None]
+        if dim == 'all':
+            objs.append(np.reshape(points[np.tile(np.all(compare, axis=0)[None, :],
+                                                  (2, 1))], (2, -1)))
+
+            objs.append(np.reshape(points[np.tile(
+                np.all((compare[0, :],
+                        np.logical_not(compare[1, :])), axis=0)[None, :], (2,
+                                                                           1))], (2, -1)))
+            objs.append(np.reshape(points[np.tile(
+                np.all((np.logical_not(compare[0, :]),
+                        compare[1, :]), axis=0)[None, :], (2, 1))], (2, -1)))
+            objs.append(np.reshape(
+                points[np.tile(np.all(np.logical_not(compare), axis=0)[None, :], (2,
+                                                                                  1))], (2, -1)))
+        elif dim == 'x':
+            objs.append(np.reshape(points[np.tile(compare[1, :][None, :], (2,
+                                                                           1))], (2, -1)))
+            objs.append(np.reshape(
+                points[np.tile(np.logical_not(compare[1, :])[None, :], (2,
+                                                                        1))], (2, -1)))
+        else:
+            objs.append(np.reshape(points[np.tile(compare[0, :][None, :], (2,
+                                                                           1))], (2, -1)))
+            objs.append(np.reshape(
+                points[np.tile(np.logical_not(compare[0, :])[None, :], (2,
+                                                                        1))], (2, -1)))
+        return objs
+
+    def register_object(self, points, pixsize, xsize, ysize):
+        '''Register object to objects structure'''
+        minsize = 5
+        if xsize > minsize or ysize > minsize:
+            self.count += 1
+            self.image[tuple(points)] = self.count
+            self.pixsize.append(pixsize)
+            self.xsize.append(xsize)
+            self.ysize.append(ysize)
+        else:
+            self.untrusty.append((points, pixsize, xsize, ysize))
+
+    def check_object_dims(self, points):
+        '''Check if segments are big'''
+        maxratio = 10
+        if len(points) == 1:
+            return ['ok', 1, 1, 1]
+        xymax = np.max(points, axis=1)
+        xymin = np.min(points, axis=1)
+        ysize = xymax[1] - xymin[1] + 1
+        xsize = xymax[0] - xymin[0] + 1
+        ans = ''
+        if ysize > 2 * meas.imx / maxratio and xsize > 2 * meas.imx / maxratio:
+            ans = 'all'
+        elif ysize > 2 * meas.imx / maxratio:
+            ans = 'x'
+        elif xsize > 2 * meas.imx / maxratio:
+            ans = 'y'
+        else:
+            ans = 'ok'
+        return [ans, len(points[0]), xsize, ysize]
+
+    def object_partition(self, points, check):
+        '''Recursively check and register objects to objects structure'''
+        if check[0] == 'ok':
+            if np.any(points):
+                self.register_object(points, check[1], check[2], check[3])
+            return
+        objs = self.find_partitions(points, check[0])
+        for obj in objs:
+            self.object_partition(obj, self.check_object_dims(points))
+
+    def process(self, val, pos):
+        '''Process segments'''
+        points = np.unravel_index(pos, data.depth_im.shape)
+        self.object_partition(points, self.check_object_dims(points))
+        return self.count
 
     def find_centers_displacement(self):
         self.center_displacement = self.center - self.initial_center
-        print self.center_displacement
-    def find_object_center(self):
+        self.center_displ_angle = np.arctan2(
+            self.center_displacement[:, 0], self.center_displacement[:, 1])
+
+    def find_object_center(self, refer_to_nz):
         '''Find scene objects centers of mass'''
-        time1 = time.clock()
-        preload =self.valid_vals_loc.size>0
-        # objects_on_im=np.zeros_like(data.depth_im)
-        if preload:
-            time01 = time.clock()
+        first_time = self.locs.size == 0
+        self.pixel_dim = np.max(self.pixsize)
+        time01 = time.clock()
+        if first_time:
+            data.uint8_depth_im = data.reference_uint8_depth_im
+            self.center = np.zeros((self.count + 1, 2), dtype=int)
+            self.centers_to_calculate = np.ones(
+                (self.count + 1), dtype=bool)
+            self.locs = np.zeros((self.pixel_dim, self.count + 1),
+                                 dtype=complex)
+            for count in range(self.count + 1):
+                vals_mask = (self.image == count)
+
+                locs = np.array(
+                    np.nonzero(vals_mask), dtype=int).T
+                self.locs[:locs.shape[0], count] = locs[:, 0] + locs[:, 1] * 1j
+
+                self.pixsize[count] = locs.shape[0]
+            self.vals = np.empty((self.count + 1,
+                                  self.pixel_dim))
+            self.initial_vals = np.zeros(
+                (self.count + 1, self.pixel_dim))
+            self.masses = np.ones(self.count + 1, dtype=int)
+
+        else:
+            data.uint8_depth_im = data.uint8_depth_im
+            self.center = self.initial_center.copy()
             existence.calculate()
-            self.centers_to_calculate = np.zeros((self.obj_count+1),dtype=bool)
-            
-            self.centers_to_calculate[np.array(existence.can_exist)]= 1
+            self.centers_to_calculate = np.zeros(
+                (self.count + 1), dtype=bool)
+
+            self.centers_to_calculate[np.array(existence.can_exist)] = 1
             time02 = time.clock()
             print 'time to load variables and compute \
                 existence:', time02 - time01, 's'
-        else:
+        time001 = time.clock()
+        '''cv2.imshow('test',self.uint8_depth_im)
+        cv2.waitKey(0)
+        '''
 
-            self.center = np.zeros((self.obj_count + 1,2),dtype=int)
-            self.centers_to_calculate = np.ones((self.obj_count+1),dtype=bool) 
-            self.is_unreliable = np.zeros_like(self.centers_to_calculate)
-
-
-        dim1=max(self.pixsize)
-        if not preload:
-            self.valid_vals_loc=np.zeros((dim1,self.obj_count+1),dtype=complex)
-            for count in range(self.obj_count+1):
-                if self.xsize[count] < 3 or self.ysize[count] < 3 or\
-                self.pixsize[count] < 900:
-                    self.is_unreliable[count] = 1
-                
-                valid_vals_mask = ((self.all_objects_im == count) *
-                                   data.trusty_pixels)
-                if np.all(valid_vals_mask == 0):
-                    self.is_unreliable[count] = 1
-                valid_vals_loc = np.array(
-                    np.nonzero(valid_vals_mask),dtype=int).T
-                self.valid_vals_loc[:valid_vals_loc.shape[0],count]=valid_vals_loc[:,0]+valid_vals_loc[:,1]*1j
-                
-                self.pixsize[count]=valid_vals_loc.shape[0]
-        time01=time.clock()
-        if self.valid_vals.size==0:
-            self.valid_vals=np.empty((self.obj_count+1,dim1))
-            self.masses=np.ones(self.obj_count+1,dtype=int)
-        
-        if preload:
-            self.center=self.initial_center.copy()
-        tmp = (255*data.depth_im).astype(np.uint8)
-        
-        time001=time.clock()
-        for count in np.arange(self.obj_count+1)[self.centers_to_calculate]:
-            xcoords=self.valid_vals_loc[:self.pixsize[count],count].real.astype(int)
-            ycoords=self.valid_vals_loc[:self.pixsize[count],count].imag.astype(int)
-            self.masses[count]=np.sum(tmp[xcoords,ycoords])
-            if not self.is_unreliable[count] and self.masses[count]>0:
-
-                self.valid_vals[count,:self.pixsize[count]]=tmp[xcoords,ycoords
-                                                                ][None,:]
-                complex_res=np.dot(
-                    self.valid_vals[count,:self.pixsize[count]],
-                    self.valid_vals_loc[:self.pixsize[count],count])/self.masses[count]
-                self.center[count,:]=np.array([complex_res.real,complex_res.imag])
+        for count in np.arange(self.count + 1)[self.centers_to_calculate]:
+            xcoords = self.locs[
+                :self.pixsize[count], count].real.astype(int)
+            ycoords = self.locs[
+                :self.pixsize[count], count].imag.astype(int)
+            self.masses[count] = np.sum(data.uint8_depth_im[xcoords, ycoords])
+            '''if self.masses[count]==0:
+                print 'masses=0',xcoords,ycoords,self.pixsize[count]
+            '''
+            if refer_to_nz:
+                if self.masses[count] > 0:
+                    self.vals[count, :self.pixsize[count]] = (data.uint8_depth_im
+                                                              )[xcoords, ycoords
+                                                                ][None, :]
+                    complex_res = np.dot(
+                        self.vals[count, :self.pixsize[count]],
+                        self.locs[:self.pixsize[count], count]) / self.masses[count]
+                    self.center[count, :] = np.array(
+                        [int(complex_res.real), int(complex_res.imag)])
+                else:
+                    if first_time:
+                        complex_res = np.mean(self.locs[
+                            :self.pixsize[count], count])
+                        self.center[count, :] = np.array(
+                            [complex_res.real.astype(int), complex_res.imag.astype(int)])
             else:
-                if not preload:
-                    complex_res=np.mean(self.valid_vals_loc[:self.pixsize[count],count])
-                    self.center[count,:]=np.array([complex_res.real.astype(int),complex_res.imag.astype(int)])
+                complex_res = np.mean(self.locs[
+                    :self.pixsize[count], count])
+                self.center[count, :] = np.array(
+                    [complex_res.real.astype(int), complex_res.imag.astype(int)])
 
-        #'''        
-        #self.center=np.array(np.unravel_index(self.center.astype(int),data.depth_im.shape)).T
-        time002=time.clock()
-        print 'time to fill valid_vals:',time002-time001,'s'
-        #time001=time.clock()
-        # mult=np.dot(self.valid_vals,self.valid_vals_loc)
-        #time002=time.clock()
-        #print 'time to multiply two arrays',time002-time001
+            if first_time:
 
-        # self.center=np.array(np.unravel_index((np.diagonal(mult)/self.masses).astype(int),data.depth_im.shape)).T
-        time02=time.clock()
-        print 'found centers in', time02-time01, 's'
-        if not preload:
+                self.initial_vals[
+                    count, :self.pixsize[count]] = \
+                    data.uint8_depth_im[xcoords, ycoords]
+        time002 = time.clock()
+        print 'time to fill vals:', time002 - time001, 's'
+        time02 = time.clock()
+        print 'found centers in', time02 - time01, 's'
+        if first_time:
             self.initial_center = self.center.copy()
-            zcenters = (self.center[:, 0] + self.center[:, 1] * 1j)[:,None]
-            distances = abs(zcenters-np.transpose(zcenters))
-            sorted_indices = np.argsort(distances, axis=0)
-            self.proximity_table = sorted_indices[:9, :]
-            self.neighborhood_existence = np.zeros((self.obj_count + 1,
-                                                    self.obj_count + 1))
-            for count in range(self.obj_count + 1):
-                self.neighborhood_existence[count, :] =\
-                    np.sum(self.proximity_table
-                           == count, axis=0)
-        time2 = time.clock()
-    def find_minmax_coords(self, count):
-        [y_max, x_max] = np.max(self.valid_vals_loc[count], axis=1)
-        [y_min, x_min] = np.min(self.valid_vals_loc[count], axis=1)
-        return (y_min, x_min, y_max, x_max)
 
-    def find_objects(self):
-        inters = []
-        count = 0
+
+class Path(object):
+    '''necessary paths for loading and saving'''
+
+    def __init__(self):
+        self.depth = ''
+        self.color = ''
+
+
+class Point(object):
+    '''variables addressing to image coordinates'''
+
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+        self.x_hand = 0
+        self.y_hand = 0
+        self.wristpoints = None
+
+
+class Segmentation(object):
+    ''' Objects used for background segmentation '''
+
+    def __init__(self):
+        self.bounding_box = []
+        self.needs_segmentation = 1
+        self.check_if_segmented_1 = 0
+        self.check_if_segmented_2 = 0
+        self.prev_im = np.zeros(0)
+        self.exists_previous_segmentation = 0
+        self.z_objects = SceneObjects()
+        self.nz_objects = SceneObjects()
+        self.neighborhood_existence = np.zeros(0)
+        self.proximity_table = np.zeros(0)
+        self.filled_neighborhoods = []
+        self.found_objects = np.zeros(0)
+        self.total_obj_num = 0
+
+    def initialise_neighborhoods(self):
+        center = np.array(list(self.nz_objects.center) +
+                          list(self.z_objects.center))
+        zcenters = (center[:, 0] + center[:, 1] * 1j)[:, None]
+        distances = abs(zcenters - np.transpose(zcenters))
+        sorted_indices = np.argsort(distances, axis=0)
+        self.proximity_table = sorted_indices[:18, :]
+        self.total_obj_num = self.nz_objects.count + self.z_objects.count + 2
+        self.neighborhood_existence = np.zeros((self.total_obj_num,
+                                                self.total_obj_num), dtype=int)
+
+        for count in range(self.total_obj_num):
+            self.neighborhood_existence[count, :] =\
+                np.sum(self.proximity_table
+                       == count, axis=0)
+
+    def find_objects(self,constants):
         time1 = time.clock()
         check_atoms = []
-
+        # nz_objects.center at the beginning of center list so following is
+        # valid
         for count1, vec in\
-                enumerate(self.center_displacement):
-            if vec[0] != 0 and vec[1] != 0:
-                if np.linalg.norm(vec) > 1:
+                enumerate(self.nz_objects.center_displacement):
+            if abs(vec[0]) > 1 or abs(vec[1]) > 1:
+                if np.linalg.norm(vec) > 0:
                     check_atoms.append(count1)
         sliced_proximity = list(self.proximity_table[:, check_atoms].T)
         neighborhoods = []
         self.filled_neighborhoods = []
         for atom, neighbors in enumerate(sliced_proximity):
+
             neighborhood_id = -1
             for n_id, neighborhood in enumerate(neighborhoods):
                 if check_atoms[atom] in neighborhood:
@@ -425,27 +574,60 @@ class SceneObjects(object):
             if 0 in neighborhood:
                 self.filled_neighborhoods.remove(neighborhood)
 
-        print 'Created cluster', neighborhoods, 'in', time2 - time1, 's'
-        print 'Filled cluster is', self.filled_neighborhoods
         time1 = time.clock()
-        found_objects = np.zeros(data.depth_im.shape)
-        for count, neighborhood in enumerate(self.filled_neighborhoods):
-            neighborhood_mask = np.in1d(self.all_objects_im.ravel(), neighborhood
-                                       ).reshape(data.depth_im.shape)
+        self.found_objects = np.zeros(data.depth_im.shape)
 
-            neighborhood_vals = data.depth_im[neighborhood_mask]
-            mean_val = np.mean(neighborhood_vals)
+        self.bounding_box = []
+        for neighborhood in self.filled_neighborhoods:
+            for neighbor in neighborhood:
+                if neighbor > self.nz_objects.count:  # z_objects here
+                    locs = self.z_objects.locs[
+                        :self.z_objects.pixsize[neighbor - (self.nz_objects.count + 1)],
+                        neighbor - (self.nz_objects.count + 1)]
+                    neighborhood_xs = np.real(locs).astype(int)
+                    neighborhood_ys = np.imag(locs).astype(int)
+                    vals = data.uint8_depth_im[
+                        neighborhood_xs, neighborhood_ys]
+                    valid_values = data.valid_values[
+                        neighborhood_xs, neighborhood_ys]
+                    vals = ((np.abs(valid_values.astype(float)
+                                    - vals.astype(float))).astype(np.uint8) >
+                            constants['depth_tolerance']) * (vals > 0)
+                else:  # nz_objects here
+                    locs = self.nz_objects.locs[
+                        :self.nz_objects.pixsize[neighbor],
+                        neighbor]
+                    init_vals = self.nz_objects.initial_vals[
+                        neighbor, :self.nz_objects.pixsize[neighbor]]
+                    last_vals = self.nz_objects.vals[
+                        neighbor,
+                        :self.nz_objects.pixsize[neighbor]]
+                    vals = (np.abs(last_vals -
+                                   init_vals) >
+                            constants['depth_tolerance']) * (last_vals > 0)
+                    neighborhood_xs = np.real(locs).astype(int)
+                    neighborhood_ys = np.imag(locs).astype(int)
 
-            #singular_vals = neighborhood_vals[check_singularities]
-            #singular_range = [np.min(singular_vals), np.max(singular_vals)]
+                self.found_objects[neighborhood_xs,
+                                   neighborhood_ys] = vals
 
-            found_objects[neighborhood_mask] =\
-                (np.abs(neighborhood_vals - mean_val)
-                 < 0.05) * (1 / float(count + 1))
-        im_results.images.append(found_objects)
+                ''''
+                if np.min(neighborhood_xs)<self.bounding_box[count][0]:
+                    self.bounding_box[count][0]=np.min(neighborhood_xs)
+                if np.min(neighborhood_ys)<self.bounding_box[count][1]:
+                    self.bounding_box[count][1]=np.min(neighborhood_ys)
+                if np.max(neighborhood_xs)>self.bounding_box[count][0]:
+                    self.bounding_box[count][2]=np.max(neighborhood_xs)
+                if np.max(neighborhood_ys)>self.bounding_box[count][1]:
+                    self.bounding_box[count][3]=np.max(neighborhood_ys)
+                '''
+
+        # self.found_objects=data.depth_im*((self.found_objects>20))
+        im_results.images.append(self.found_objects)
+        # im_results.images.append(np.abs(((self.found_objects+(data.trusty_pixels==0))>0)
+        #                        -0.5*(self.z_objects.image>0)))
         time2 = time.clock()
-        print 'Found objects in', time2 - time1, 's'
-
+        print 'Found', len(self.filled_neighborhoods), 'objects in', time2 - time1, 's'
         '''for count1 in range(len(self.size)):
             for count2 in range(count1, len(self.size)):
                 count += 1
@@ -482,65 +664,6 @@ class SceneObjects(object):
         '''
 
 
-class Path(object):
-    '''necessary paths for loading and saving'''
-
-    def __init__(self):
-        self.depth = ''
-        self.color = ''
-
-
-class Point(object):
-    '''variables addressing to image coordinates'''
-
-    def __init__(self):
-        self.x = 0
-        self.y = 0
-        self.x_hand = 0
-        self.y_hand = 0
-        self.wristpoints = None
-
-
-class Segmentation(object):
-    ''' Objects used for background segmentation '''
-
-    def __init__(self):
-        self.mask = np.array([np.matrix('[1 0 0;0 -1 0;0 0 0]'),
-                              np.matrix('[0 1 0;0 -1 0;0 0 0]'),
-                              np.matrix('[0 0 1;0 -1 0;0 0 0]'),
-                              np.matrix('[0 0 0;1 -1 0;0 0 0]'),
-                              np.matrix('[0 0 0;0 -1 1;0 0 0]'),
-                              np.matrix('[0 0 0;0 -1 0;1 0 0]'),
-                              np.matrix('[0 0 0;0 -1 0;0 1 0]'),
-                              np.matrix('[0 0 0;0 -1 0;0 0 1]')])
-        self.shift_ind = np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1],
-                                   [0, 1], [1, -1], [1, 0], [1, 1]])
-        self.segments = ''
-        self.segment_values = ''
-        self.array_instances = np.ones(1)
-        self.kernel = np.ones((3, 3))
-        self.seed_x_coord = None
-        self.seed_y_coord = None
-        self.segment_enum = ''
-        self.objects = SceneObjects()
-        self.needs_segmentation = 1
-        self.check_if_segmented_1 = 0
-        self.check_if_segmented_2 = 0
-        self.prev_im = np.zeros(0)
-        self.exists_previous_segmentation = 0
-        self.all_objects_im = np.zeros(0)
-
-    def start_segmentation(self, seed_num, meas):
-        tmpx = np.linspace(0, meas.imx - 1, seed_num, dtype=int)
-        tmpy = np.linspace(0, meas.imy - 1, seed_num, dtype=int)
-        self.seed_x_coord = np.tile(tmpx[:, None], (1, seed_num)).ravel()
-        self.seed_y_coord = np.transpose(np.tile(tmpy[:, None],
-                                                 (1, seed_num))).ravel()
-        self.segment_values = np.zeros((meas.imy, meas.imx))
-        self.segment_values[self.seed_y_coord,
-                            self.seed_x_coord] = np.array(range(seed_num**2))
-
-
 class Threshold(object):
     '''necessary threshold variables'''
 
@@ -564,3 +687,5 @@ im_results = Result()
 segclass = Segmentation()
 existence = ExistenceProbability()
 interpolated = contours.interpolated
+noise_proc = NoiseRemoval()
+handclass = HandSeparation()

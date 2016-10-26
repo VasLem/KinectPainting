@@ -25,7 +25,7 @@ max_depth_im_num_to_save: 200
 detection_method: segmentation
 # Variables necessary for object detection by using background noise model
 max_contours_num: 3
-calib_secs: 2
+calib_secs: 1
 lowest_pixel_noise_deviation: 0.02
 depth_thres: 10
 lap_thres: 0.01
@@ -36,6 +36,8 @@ cond_erosions_num: 10
 already_segmented_path: AlrSegm.jpg
 segmentation_data: SegmData
 max_objects_size_ratio: 0.04
+depth_tolerance: 20
+
 #Variables necessary for approximate wrist detection
 interp_window: 7
 cutoff_angle_ratio: 15

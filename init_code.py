@@ -211,13 +211,18 @@ class Kinect(object):
     def detection_with_scene_segmentation(self):
         constants, self.initial_im_set_list = self.vars
         co.data.depth3d = np.tile(co.data.depth_im[:, :, None], (1, 1, 3))
+        
+        co.data.uint8_depth_im = (255 * co.data.depth_im).astype(np.uint8)
         if co.counters.im_number == 0:
+            co.data.reference_uint8_depth_im=co.data.uint8_depth_im.copy()
             co.meas.imy, co.meas.imx = co.data.depth_im.shape
             co.meas.nprange = np.arange((co.meas.imy + 2) * (co.meas.imx + 2))
             co.segclass.all_objects_im=np.zeros_like(co.data.depth_im)
-        if co.counters.im_number < 2:
+        if co.counters.im_number < constants['framerate'
+                                           ]*constants['calib_secs']:
             self.initial_im_set_list.append(co.data.depth_im)
-        elif co.counters.im_number == 2:
+        elif co.counters.im_number ==\
+        constants['framerate']*constants['calib_secs']:
             co.data.initial_im_set = np.rollaxis(
                 np.array(self.initial_im_set_list), 0, 3)
             moda.extract_background_values()
@@ -241,11 +246,11 @@ class Kinect(object):
             print err
 
         if co.flags.exists_lim_calib_image:
+            co.noise_proc.remove_noise() 
             if constants['detection_method'] == 'segmentation':
                 self.detection_with_scene_segmentation()
             else:
                 self.detection_with_noise_model()
-            
             if constants['save']=='y':
                 if co.counters.save_im_num > co.lims.max_im_num_to_save - 1:
                     co.data.depth[co.counters.save_im_num %

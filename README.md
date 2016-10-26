@@ -24,5 +24,16 @@ The main concept is that the intersection points will belong to the moving objec
 
 I ended up abbandoning the idea of using the intersection points to identify the location of the object. I now use the mean intensity in each uniquely found object tile area and I assume that this corresponds to the object intensity. Yet, it seems like a real challenge to create a completely invariant method to changes of intensity and Kinect sensors aberrations. I am reaching the completion of the suggested algorithm, by addressing to small bugs, that prevent me from making any more progress. When I have solved them all, while I believe that after that the speed of the computations will have drastically increased, I might add a scipy library to accelerate the 'find the center of mass' part. Apart from the above, I implemented a method to read from recorded data, aka rosbag files. This will enable me to assess the quality of my method on known video data, before proceeding to the real-time implementation. 
 
+#Update (22/10/2016)
+
+Almost after a week of no particular development and a lot of brainstorming, I found out some beautiful ideas to implement, based on the center of masses concept. The first one is that the dislocation of the center of mass can approximate the vertical vector to the contour of the object, if linearity is assumed, captured inside a cell from the active ones. Sadly, this idea doesn't always work, because the assumption of contour linearity does not stand true in every cell and there is high susceptibility to noisy contours. The second one is less complex and seems it will work. Based on the idea presented on the previous update, I instead firstly normalise the intensity in each cell and compare that with the initial normalised one. By setting a threshold (which, I believe, can be found to be dependent of the total intensity variance in a cell neighborhood), I receive a mask, with the object inside. There are several bugs that don't allow this to happen, however it is a matter of little time and great patience that this piece of work is finally coming to an end. 
+
+#Update (27/10/2016)
+
+At last the object detection is over for now. This is because I have set high depth threshold, which in realtime applications will be probably useless, considering as normal action the touching of the surface on which someone wants to draw. At least now I have an algorithm highly invariant to Kinect noise, highly realtime (~100fps with CPU only) thus it is time to focus on the next big thing: How can I perform hand pose recognition. To this end, I found very interesting and highly promising the approach of a 2015 paper, in which random forests mixed with hand modeling are used, to find hand pose, with only input the depth image. They use many metrics to give outstanding results in above realtime processing with CPU utilisation. The paper is called 'Fast and Robust Hand Tracking Using Detection-Guided Optimization' and its respective page is http://handtracker.mpi-inf.mpg.de/projects/FastHandTracker/ 
+
+
+
+
 
 

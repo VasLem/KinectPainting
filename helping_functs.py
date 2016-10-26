@@ -52,6 +52,14 @@ def interpolate(points, winsize):
         interpolated_data.append(np.mean(points[max(0, i-(winsize-1)/2):(min(i+(winsize-1)/2, points.shape[0]-1)+1)], axis=0))
     return np.array(interpolated_data)
 
-
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 def compute_angles(points):
     return np.array([np.arctan2(n[1], n[0]) for n in points[1:]-points[:-1]])
