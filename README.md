@@ -32,6 +32,11 @@ Almost after a week of no particular development and a lot of brainstorming, I f
 
 At last the object detection is over for now. This is because I have set high depth threshold, which in realtime applications will be probably useless, considering as normal action the touching of the surface on which someone wants to draw. At least now I have an algorithm highly invariant to Kinect noise, highly realtime (~100fps with CPU only) thus it is time to focus on the next big thing: How can I perform hand pose recognition. To this end, I found very interesting and highly promising the approach of a 2015 paper, in which random forests mixed with hand modeling are used, to find hand pose, with only input the depth image. They use many metrics to give outstanding results in above realtime processing with CPU utilisation. The paper is called 'Fast and Robust Hand Tracking Using Detection-Guided Optimization' and its respective page is http://handtracker.mpi-inf.mpg.de/projects/FastHandTracker/ 
 
+#Update (30/10/2016)
+
+Created hand model (create_hand_model.py) , by inspecting (and slightly correcting) the DH parameters presented in the PHD thesis "Kinematic Model of the Hand using Computer Vision" of Edgar Simo Serra. I now need to give some volume to this model, by implementing the 3D gaussians, and also speed it up a little after this, as I think it might slow down a little the whole procedure.
+
+
 
 
 
