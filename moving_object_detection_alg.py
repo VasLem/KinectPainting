@@ -31,11 +31,6 @@ def detection_by_scene_segmentation(constants):
             co.segclass.check_if_segmented_2 = np.sqrt(
                 np.sum((co.data.color_im.astype(float) -
                         co.segclass.prev_im.astype(float))**2))
-            cv2.imshow('test1',co.data.color_im)
-            cv2.imshow('test2',co.segclass.prev_im)
-            cv2.waitKey(0)
-            print co.segclass.check_if_segmented_1
-            print co.segclass.check_if_segmented_2
             difference = abs(co.segclass.check_if_segmented_2 -
                              co.segclass.check_if_segmented_1)
             print 'Metric between old segmented and new background :', difference
@@ -126,7 +121,7 @@ def detection_by_scene_segmentation(constants):
                 exit()
         if co.segclass.nz_objects.center.size>0:
             co.segclass.nz_objects.find_centers_displacement()
-            co.segclass.find_objects(constants)
+            found_objects_mask=co.segclass.find_objects(constants)
             time2 = time.clock()
             print 'Total time needed for single frame', time2 - time1
             points_on_im = co.data.depth3d.copy()
@@ -146,6 +141,7 @@ def detection_by_scene_segmentation(constants):
                                         (point2[1], point2[0]), [0, 0, 1], 2, 1)
             
             co.im_results.images.append(points_on_im)
+            return found_objects_mask
 
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''

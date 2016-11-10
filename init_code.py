@@ -226,7 +226,13 @@ class Kinect(object):
             co.data.initial_im_set = np.rollaxis(
                 np.array(self.initial_im_set_list), 0, 3)
             moda.extract_background_values()
-        moda.detection_by_scene_segmentation(constants)
+        objects_mask=moda.detection_by_scene_segmentation(constants)
+        try:
+            lapl=np.abs(cv2.Laplacian(co.data.depth_im*objects_mask,cv2.CV_64F))
+            lapl=(lapl-np.max(lapl))/(np.max(lapl)-np.min(lapl))
+            co.im_results.images.append(lapl)
+        except TypeError:
+            a=1
         co.counters.im_number += 1
         return
 

@@ -611,6 +611,7 @@ class Segmentation(object):
                 self.found_objects[neighborhood_xs,
                                    neighborhood_ys] = vals
 
+                
                 ''''
                 if np.min(neighborhood_xs)<self.bounding_box[count][0]:
                     self.bounding_box[count][0]=np.min(neighborhood_xs)
@@ -662,7 +663,7 @@ class Segmentation(object):
             return 'Not found intersection points', []
 
         '''
-
+        return self.found_objects
 
 class Threshold(object):
     '''necessary threshold variables'''
