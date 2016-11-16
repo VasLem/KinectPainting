@@ -19,7 +19,7 @@ import palm_detection_alg as pda
 import helping_functs as hf
 import class_objects as co
 import matplotlib.pyplot as plt
-
+import hand_segmentation_alg as hsa
 def improve_final_mask():
     '''improve depth image result by comparing with color image'''
     co.models.med = np.median(
@@ -227,12 +227,15 @@ class Kinect(object):
                 np.array(self.initial_im_set_list), 0, 3)
             moda.extract_background_values()
         objects_mask=moda.detection_by_scene_segmentation(constants)
+           
+        '''
         try:
             lapl=np.abs(cv2.Laplacian(co.data.depth_im*objects_mask,cv2.CV_64F))
             lapl=(lapl-np.max(lapl))/(np.max(lapl)-np.min(lapl))
             co.im_results.images.append(lapl)
         except TypeError:
             a=1
+        '''
         co.counters.im_number += 1
         return
 
@@ -313,8 +316,12 @@ def main():
         co.flags.exists_lim_calib_image = 0
     else:
         co.flags.exists_lim_calib_image = 1
-        co.masks.calib_frame = cv2.imread(constants['cal_frame_path'], 0)
-
+        co.masks.calib_frame =cv2.imread(constants['cal_frame_path'],0)
+        co.masks.calib_edges =cv2.imread(constants['cal_edges_path'], 0)
+        '''
+        co.masks.calib_edges =\
+        cv2.dilate(co.masks.calib_edges,np.ones((3,3),np.uint8),cv2.CV_8U)
+        '''
     if co.flags.read == 'd':
         co.paths.depth = constants['path_depth']
         # path_color=constants['path_color']

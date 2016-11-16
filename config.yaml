@@ -36,6 +36,7 @@ cond_erosions_num: 10
 already_segmented_path: AlrSegm.jpg
 segmentation_data: SegmData
 max_objects_size_ratio: 0.04
+min_displacement: 2
 depth_tolerance: 20
 
 #Variables necessary for approximate wrist detection

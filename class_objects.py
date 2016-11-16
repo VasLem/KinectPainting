@@ -7,6 +7,8 @@ from sklearn import preprocessing
 from scipy import ndimage
 import helping_functs as hf
 
+def find_nonzero(arr):
+    return np.fliplr(cv2.findNonZero(arr).squeeze())
 
 class ConvexityDefect(object):
     '''Convexity_Defects holder'''
@@ -67,7 +69,7 @@ class Data(object):
         self.trusty_pixels = np.zeros(1)
         self.reference_uint8_depth_im = np.zeros(1)
         self.valid_values = np.zeros(1)
-
+        self.all_positions=np.zeros(1)
 
 class Result(object):
     '''class to keep results'''
@@ -126,6 +128,7 @@ class Result(object):
                 var2[0].publish(var2[1].cv2_to_imgmsg(montage, 'bgr8'))
             except CvBridgeError as e:
                 print(e)
+                raise(e)
         else:
             cv2.imwrite(var2, montage)
         return
@@ -196,7 +199,66 @@ class Measure(object):
         self.im_count = 0
         self.nprange = np.zeros(0)
         self.erode_size = 5
+        #lims: l->t->r->b
+        self.nonconvex_edges_lims=[]
+        self.convex_edges_lims=[]
+        self.edges_positions_indices=[]
+        self.edges_positions=[]
+    def find_non_convex_edges_lims(self,edges_mask,edge_tolerance=10):
+        '''
+        Find non convex symmetrical edges minimum orthogonal lims with some tolerance
+        Inputs: positions,edges mask[,edges tolerance=10]
+        '''
+        self.edges_positions_indices=np.nonzero(edges_mask>0)
+        self.edges_positions=np.transpose(np.array(self.edges_positions_indices))
+        lr_positions=self.edges_positions[np.abs(self.edges_positions[:,0]-edges_mask.shape[0]/2.0)<1,:]
+        tb_positions=self.edges_positions[np.abs(self.edges_positions[:,1]-edges_mask.shape[1]/2.0)<1,:]
+        self.nonconvex_edges_lims=np.array(
+            [np.min(lr_positions[:,1])+edge_tolerance,
+             np.min(tb_positions[:,0])+edge_tolerance,
+             np.max(lr_positions[:,1])-edge_tolerance,
+             np.max(tb_positions[:,0])-edge_tolerance])
 
+    def find_convex_edges_lims(self,positions,edges_mask):
+        '''
+        Find convex edges minimum orthogonal lims
+        '''
+        def calculate_cart_dists(cart_points,cart_point=[]):
+            '''
+            Input either numpy array either 2*2 list
+            Second optional argument is a point
+            '''
+            if cart_point==[]:
+
+                try:
+                    return np.sqrt(
+                        (cart_points[1:, 0] - cart_points[:-1, 0]) *
+                        (cart_points[1:, 0] - cart_points[:-1, 0]) +
+                        (cart_points[1:, 1] - cart_points[:-1, 1]) *
+                        (cart_points[1:, 1] - cart_points[:-1, 1]))
+                except (TypeError, AttributeError):
+                    return np.sqrt((cart_points[0][0] - cart_points[1][0])**2 +
+                                   (cart_points[0][1] - cart_points[1][1])**2)
+
+            else:
+                return np.sqrt(
+                    (cart_points[:, 0] - cart_point[0]) *
+                    (cart_points[:, 0] - cart_point[0]) +
+                    (cart_points[:, 1] - cart_point[1]) *
+                    (cart_points[:, 1] - cart_point[1]))
+        calib_positions=positions[edges_mask>0,:]
+        calib_dists=calculate_cart_dists(
+           calib_positions,
+          np.array([0,0]))
+        
+        upper_left=calib_positions[np.argmin(calib_dists),:]
+        calib_dists2=calculate_cart_dists(
+            calib_positions,
+            np.array([edges_mask.shape[0],
+                      edges_mask.shape[1]]))
+        lower_right=calib_positions[np.argmin(calib_dists2),:]
+        #Needs filling
+        self.convex_edges_lims=[]
 
 class Model(object):
     '''variables for modelling nonlinearities'''
@@ -277,18 +339,10 @@ class ExistenceProbability:
         '''
 
 
-class HandSeparation(object):
-
-    def fingertip_detection(self):
-        '''
-        SE=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(15,15))
-        im_results.images.append(
-            cv2.morphologyEx((segclass.found_objects>0).astype(np.uint8),cv2.MORPH_TOPHAT,SE))
-        '''
-
 
 class SceneObjects():
     '''Class to process segmented objects'''
+
 
     def __init__(self):
         self.pixsize = []
@@ -309,6 +363,7 @@ class SceneObjects():
         self.image = np.zeros(0)
         self.pixel_dim = 0
         self.untrusty = []
+
 
     def find_partitions(self, points, dim):
         '''Separate big segments'''
@@ -410,13 +465,14 @@ class SceneObjects():
                 (self.count + 1), dtype=bool)
             self.locs = np.zeros((self.pixel_dim, self.count + 1),
                                  dtype=complex)
+
             for count in range(self.count + 1):
                 vals_mask = (self.image == count)
-
-                locs = np.array(
-                    np.nonzero(vals_mask), dtype=int).T
-                self.locs[:locs.shape[0], count] = locs[:, 0] + locs[:, 1] * 1j
-
+                try:
+                    locs = find_nonzero(vals_mask.astype(np.uint8))
+                    self.locs[:locs.shape[0], count] = locs[:, 0] + locs[:, 1] * 1j
+                except:
+                    pass
                 self.pixsize[count] = locs.shape[0]
             self.vals = np.empty((self.count + 1,
                                   self.pixel_dim))
@@ -433,8 +489,10 @@ class SceneObjects():
 
             self.centers_to_calculate[np.array(existence.can_exist)] = 1
             time02 = time.clock()
+            '''
             print 'time to load variables and compute \
                 existence:', time02 - time01, 's'
+            '''
         time001 = time.clock()
         '''cv2.imshow('test',self.uint8_depth_im)
         cv2.waitKey(0)
@@ -477,9 +535,13 @@ class SceneObjects():
                     count, :self.pixsize[count]] = \
                     data.uint8_depth_im[xcoords, ycoords]
         time002 = time.clock()
+        '''
         print 'time to fill vals:', time002 - time001, 's'
+        '''
         time02 = time.clock()
+        '''
         print 'found centers in', time02 - time01, 's'
+        '''
         if first_time:
             self.initial_center = self.center.copy()
 
@@ -544,7 +606,8 @@ class Segmentation(object):
         # valid
         for count1, vec in\
                 enumerate(self.nz_objects.center_displacement):
-            if abs(vec[0]) > 1 or abs(vec[1]) > 1:
+            if (abs(vec[0]) > constants['min_displacement'] or abs(vec[1]) >
+                constants['min_displacement']):
                 if np.linalg.norm(vec) > 0:
                     check_atoms.append(count1)
         sliced_proximity = list(self.proximity_table[:, check_atoms].T)
@@ -628,8 +691,10 @@ class Segmentation(object):
         # im_results.images.append(np.abs(((self.found_objects+(data.trusty_pixels==0))>0)
         #                        -0.5*(self.z_objects.image>0)))
         time2 = time.clock()
+        '''
         print 'Found', len(self.filled_neighborhoods), 'objects in', time2 - time1, 's'
-        '''for count1 in range(len(self.size)):
+        
+        for count1 in range(len(self.size)):
             for count2 in range(count1, len(self.size)):
                 count += 1
                 vec2 = self.center_displacement[count2]
@@ -689,4 +754,3 @@ segclass = Segmentation()
 existence = ExistenceProbability()
 interpolated = contours.interpolated
 noise_proc = NoiseRemoval()
-handclass = HandSeparation()

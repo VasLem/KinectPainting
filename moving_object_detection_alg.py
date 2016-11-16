@@ -5,6 +5,7 @@ import cPickle as pickle
 import numpy as np
 import cv2
 import class_objects as co
+import hand_segmentation_alg as hsa
 from scipy import ndimage
 import matplotlib.pyplot as plt
 
@@ -34,11 +35,14 @@ def detection_by_scene_segmentation(constants):
             difference = abs(co.segclass.check_if_segmented_2 -
                              co.segclass.check_if_segmented_1)
             print 'Metric between old segmented and new background :', difference
-            co.segclass.needs_segmentation = difference >= 100
+            '''
+            co.segclass.needs_segmentation = difference >= 5000
             if co.segclass.needs_segmentation:
                 print 'Segmentation is needed.The initialisation will delay...'
             else:
                 print 'Found match with previous segmentation...'
+                co.segclass.needs_segmentation=0
+            '''
     elif not co.segclass.exists_previous_segmentation\
             and co.counters.im_number < 2:
         co.segclass.needs_segmentation = 1
@@ -83,6 +87,7 @@ def detection_by_scene_segmentation(constants):
             print 'Found or partitioned',\
                     co.segclass.nz_objects.count+\
                     co.segclass.z_objects.count+2, 'background objects'
+            co.segclass.needs_segmentation = 0
             with open(constants['segmentation_data'] + '.pkl', 'wb') as output:
                 pickle.dump(co.segclass, output, -1)
             cv2.imwrite(constants['already_segmented_path'],
@@ -93,12 +98,13 @@ def detection_by_scene_segmentation(constants):
             plt.imshow(co.segclass.z_objects.image)
             plt.savefig('z_partitioned_segments.jpg')
             print 'Saved segmentation data for future use.'
-            co.segclass.needs_segmentation = 0
     elif (not co.segclass.needs_segmentation) and co.counters.im_number >= 2:
-        if co.segclass.nz_objects.initial_center == []:
+        '''
+        if co.segclass.nz_objects.initial_center.shape[0]==0:
             print 'Loading scene objects from memory.'
             co.segclass= pickle.load(
                 open(constants['segmentation_data'] + '.pkl', 'rb'))
+        '''
         time1 = time.clock()
         if co.counters.im_number ==constants['framerate'
                                             ]*constants['calib_secs']+1 :
@@ -106,24 +112,26 @@ def detection_by_scene_segmentation(constants):
             try:
                 co.segclass.nz_objects.find_object_center(1)
             except:
+                print 'hi'
                 exit()
             try:
                 co.segclass.z_objects.find_object_center(0)
-
-
             except :
+                print 'hi2'
                 exit()
             co.segclass.initialise_neighborhoods()
         else:
             try:
                 co.segclass.nz_objects.find_object_center(1)
             except:
+                print 'hi3'
                 exit()
         if co.segclass.nz_objects.center.size>0:
             co.segclass.nz_objects.find_centers_displacement()
             found_objects_mask=co.segclass.find_objects(constants)
+            
             time2 = time.clock()
-            print 'Total time needed for single frame', time2 - time1
+            #print 'Total time needed for single frame', time2 - time1
             points_on_im = co.data.depth3d.copy()
             #points_on_im[np.sum(points_on_im,axis=2)==0,:]=np.array([1,0,1])
             for calc, point1, point2 in zip(
@@ -139,8 +147,19 @@ def detection_by_scene_segmentation(constants):
                         cv2.arrowedLine(points_on_im,
                                         (point1[1], point1[0]),
                                         (point2[1], point2[0]), [0, 0, 1], 2, 1)
+            hand_points=hsa.main_process(found_objects_mask.astype(np.uint8),co.data.all_positions,1)
             
+            if len(co.im_results.images)==1:
+                co.im_results.images.append((255*found_objects_mask).astype(np.uint8))
+            '''
+            elif len(co.im_results.images)==2:
+                co.im_results.images[1][co.im_results.images[1]==0]=(255*points_on_im).astype(np.uint8)[co.im_results.images[1]==0]
+            '''
+            '''
+            if hand_points.shape[1]>1:
+                points_on_im[tuple(hand_points.T)]=[1,0,0]
             co.im_results.images.append(points_on_im)
+            '''
             return found_objects_mask
 
 def extract_background_values():
@@ -151,6 +170,9 @@ def extract_background_values():
     initial_nonzero_im_set = np.zeros(co.data.initial_im_set.shape)
     initial_nonunary_im_set = np.zeros_like(co.data.depth_im)
     valid_values=np.zeros_like(co.data.background)
+    co.data.all_positions = np.fliplr(cv2.findNonZero(np.ones_like(
+        co.data.background,dtype=np.uint8)).squeeze()).reshape(co.data.background.shape + (2,))
+    co.meas.find_non_convex_edges_lims(co.masks.calib_edges)
     for count in range(im_num):
         valid_values[
             co.data.initial_im_set[:,:,count]>0
@@ -165,8 +187,6 @@ def extract_background_values():
     co.data.valid_values=(valid_values*255).astype(np.uint8)
 
     co.data.trusty_pixels = ((valid_freq) == np.max(valid_freq)).astype(np.uint8)
-    #cv2.imshow('test1',co.data.trusty_pixels.astype(float))
-    #cv2.waitKey(0)
     valid_freq[valid_freq == 0] = 1
     co.data.background = co.data.background / valid_freq
     
@@ -254,8 +274,9 @@ def find_moving_object(constants):
         chosen_depth = sorted_depth[0]
         matched = 0
     else:
-        found_match = np.nonzero(match)
-        matched = found_match[0][0]
+        found_match = np.fliplr(cv2.findNonZero(match).squeeze())
+        #the following line might want debugging
+        matched = found_match[0,0]
         chosen_contour = sorted_contours[matched]
         chosen_depth = sorted_depth[matched]
     if np.abs(chosen_depth - co.meas.aver_depth) < co.meas.aver_depth:

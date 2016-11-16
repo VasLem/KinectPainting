@@ -37,7 +37,21 @@ At last the object detection is over for now. This is because I have set high de
 Created hand model (create_hand_model.py) , by inspecting (and slightly correcting) the DH parameters presented in the PHD thesis "Kinematic Model of the Hand using Computer Vision" of Edgar Simo Serra. I now need to give some volume to this model, by implementing the 3D gaussians, and also speed it up a little after this, as I think it might slow down a little the whole procedure.
 
 
+#Update (16/11/2016)
 
+I ended up abbandoning the whole idea of the paper  as it needed different
+dataset from the one provide and too much effort and I had no time to 
+accomplish such a target. Instead I created a fast hand segmentation 
+algorithm, which makes use of polar coordinates to identify joints
+and links that form the arm and by scanning for anomalies it ends up
+identifying hand and fingers area. The algorithm is robust to noise and
+low missing data rates, but needs tuning and, while it was pretty efficient in
+identifying the example given (run 'python hand_segmentation_alg.py' to view
+it), does not provide good results while it is matched with the 'distortion
+field' algorithm. Apart from the tuning, there is not taken into account the
+possibility that more than one hands can enter the detection field, although
+this can be fixed with simple operations. SO, when I finish tuning, I hope to
+start organizing the long-awaited action recognition algorithm.
 
 
 
