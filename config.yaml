@@ -32,12 +32,18 @@ lap_thres: 0.01
 running_mean_depth_count: 5
 outlier_shape_time: 1.5
 #Variables for object detection by scene segmentation
+similar_bg_min_dist: 2
 cond_erosions_num: 10
-already_segmented_path: AlrSegm.jpg
 segmentation_data: SegmData
 max_objects_size_ratio: 0.04
 min_displacement: 2
-depth_tolerance: 20
+depth_tolerance: 20 #Too high, needs fixing
+
+#Variables for hand segmentation
+angle_resolution: 0.01
+abnormality_tol: 2 #1
+angle_tol: 0.1 #0.1
+dist_tol: 2 #2
 
 #Variables necessary for approximate wrist detection
 interp_window: 7

@@ -2,10 +2,6 @@ import numpy as np
 import cv2
 import time
 from cv_bridge import CvBridge, CvBridgeError
-import matplotlib.pyplot as plt
-from sklearn import preprocessing
-from scipy import ndimage
-import helping_functs as hf
 
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
@@ -54,7 +50,6 @@ class Data(object):
     '''variables necessary for input and output'''
 
     def __init__(self):
-        self.trusty_pixels = np.zeros(1)
         self.depth3d = np.zeros(1)
         self.uint8_depth_im = np.zeros(1)
         self.depth = []
@@ -65,11 +60,7 @@ class Data(object):
         self.hand_im = np.zeros(1)
         self.initial_im_set = np.zeros(1)
         self.depth_mem = []
-        self.background = np.zeros(1)
-        self.trusty_pixels = np.zeros(1)
         self.reference_uint8_depth_im = np.zeros(1)
-        self.valid_values = np.zeros(1)
-        self.all_positions=np.zeros(1)
 
 class Result(object):
     '''class to keep results'''
@@ -98,14 +89,16 @@ class Result(object):
                                 coord in zip(*shapes)])
         yaxis = len(self.images) / self.maxdim + 1
         xaxis = min(self.maxdim, len(self.images))
-        montage = 255 * \
-            np.tile(np.ones((imy, imx), dtype=np.uint8), (yaxis, xaxis))
-        if isrgb:
-            montage = np.tile(montage[:, :, None], (1, 1, 3))
+        if not isrgb:
+            montage = 255 * \
+                np.ones((imy*yaxis, imx*xaxis), dtype=np.uint8)
+        elif isrgb:
+            montage = 255 * \
+                np.ones((imy*yaxis, imx*xaxis, 3), dtype=np.uint8)
         x_init = 0
         for count, image in enumerate(sorted_images):
             image = ((image - np.min(image)) / float(np.max(image) - np.min(image)) *
-                     255).astype(int)
+                     255).astype(np.uint8)
             if isrgb:
                 if len(image.shape) == 2:
                     image = np.tile(image[:, :, None], (1, 1, 3))
@@ -204,6 +197,14 @@ class Measure(object):
         self.convex_edges_lims=[]
         self.edges_positions_indices=[]
         self.edges_positions=[]
+        #trusty_pixels is 1 for the pixels that remained nonzero during
+        #initialisation
+        self.trusty_pixels = np.zeros(1)
+        #valid_values hold the last seen nonzero value of an image pixel
+        #during initialisation
+        self.valid_values = np.zeros(1)
+        self.all_positions=np.zeros(1)
+        self.background = np.zeros(1)
     def find_non_convex_edges_lims(self,edges_mask,edge_tolerance=10):
         '''
         Find non convex symmetrical edges minimum orthogonal lims with some tolerance
@@ -575,6 +576,7 @@ class Segmentation(object):
         self.check_if_segmented_2 = 0
         self.prev_im = np.zeros(0)
         self.exists_previous_segmentation = 0
+        self.initialised_centers=0
         self.z_objects = SceneObjects()
         self.nz_objects = SceneObjects()
         self.neighborhood_existence = np.zeros(0)
@@ -582,6 +584,15 @@ class Segmentation(object):
         self.filled_neighborhoods = []
         self.found_objects = np.zeros(0)
         self.total_obj_num = 0
+    
+    def flush_previous_segmentation(self):
+        self.bounding_box=[]
+        self.z_objects= SceneObjects()
+        self.nz_objects= SceneObjects()
+        self.proximity_table = np.zeros(0)
+        self.filled_neighborhoods=[]
+        self.found_objects=np.zeros(0)
+        self.total_obj_num=0
 
     def initialise_neighborhoods(self):
         center = np.array(list(self.nz_objects.center) +
@@ -651,7 +662,7 @@ class Segmentation(object):
                     neighborhood_ys = np.imag(locs).astype(int)
                     vals = data.uint8_depth_im[
                         neighborhood_xs, neighborhood_ys]
-                    valid_values = data.valid_values[
+                    valid_values = meas.valid_values[
                         neighborhood_xs, neighborhood_ys]
                     vals = ((np.abs(valid_values.astype(float)
                                     - vals.astype(float))).astype(np.uint8) >
@@ -688,7 +699,7 @@ class Segmentation(object):
 
         # self.found_objects=data.depth_im*((self.found_objects>20))
         im_results.images.append(self.found_objects)
-        # im_results.images.append(np.abs(((self.found_objects+(data.trusty_pixels==0))>0)
+        # im_results.images.append(np.abs(((self.found_objects+(meas.trusty_pixels==0))>0)
         #                        -0.5*(self.z_objects.image>0)))
         time2 = time.clock()
         '''

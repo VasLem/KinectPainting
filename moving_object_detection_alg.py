@@ -1,156 +1,147 @@
 '''Functions for identifying moving object in almost static scene'''
 import time
 import os.path
+#import matplotlib.pyplot as plt
 import cPickle as pickle
 import numpy as np
 import cv2
 import class_objects as co
 import hand_segmentation_alg as hsa
 from scipy import ndimage
-import matplotlib.pyplot as plt
 
 
-
-
-def detection_by_scene_segmentation(constants):
+def detection_by_scene_segmentation(CONST):
     '''Detection of moving object by using Distortion field of centers of mass
     of background objects'''
     if co.counters.im_number == 0:
-        co.segclass.exists_previous_segmentation = os.path.isfile(
-            constants['already_segmented_path'])
-        if co.segclass.exists_previous_segmentation:
-            print 'Existing previous segmentation. Checking similarity...'
+        co.segclass.needs_segmentation=1
+        if not co.segclass.exists_previous_segmentation:
+            print 'No existing previous segmentation. The initialisation will delay...'
         else:
-            print 'No existing segmentation. The initialisation will delay...'
-    if co.segclass.exists_previous_segmentation and co.counters.im_number < 2:
-        if co.counters.im_number == 0:
-            old_im = cv2.imread(constants['already_segmented_path'])
-            co.segclass.check_if_segmented_1 = np.sqrt(np.sum(
-                (co.data.color_im.astype(float) - old_im.astype(float))**2))
-            co.segclass.prev_im = co.data.color_im.copy()
-        elif co.counters.im_number == 1:
-            co.segclass.check_if_segmented_2 = np.sqrt(
-                np.sum((co.data.color_im.astype(float) -
-                        co.segclass.prev_im.astype(float))**2))
-            difference = abs(co.segclass.check_if_segmented_2 -
-                             co.segclass.check_if_segmented_1)
-            print 'Metric between old segmented and new background :', difference
-            '''
-            co.segclass.needs_segmentation = difference >= 5000
-            if co.segclass.needs_segmentation:
-                print 'Segmentation is needed.The initialisation will delay...'
-            else:
-                print 'Found match with previous segmentation...'
+            print 'Checking similarity..'
+            old_im = co.meas.background
+            check_if_segmented = np.sqrt(np.sum(
+                (co.data.depth_im[co.meas.trusty_pixels.astype(bool)].astype(float) -
+                 old_im[co.meas.trusty_pixels.astype(bool)].astype(float))**2))
+            print 'Euclidean Distance of old and new background is '+\
+                str(check_if_segmented)
+            print 'Minimum Distance to approve previous segmentation is '+\
+                str(CONST['similar_bg_min_dist'])
+            if check_if_segmented<CONST['similar_bg_min_dist']:
+                print 'No need to segment again'
                 co.segclass.needs_segmentation=0
-            '''
-    elif not co.segclass.exists_previous_segmentation\
-            and co.counters.im_number < 2:
-        co.segclass.needs_segmentation = 1
-    if co.segclass.needs_segmentation and co.counters.im_number >= 2:
-        if co.counters.im_number == (constants['framerate']*
-                                     constants['calib_secs']-1):
-            co.segclass.nz_objects.image=np.zeros_like(co.data.depth_im)-1
-            co.segclass.z_objects.image=np.zeros_like(co.data.depth_im)-1
-            levels_num=8
-            levels=np.linspace(np.min(co.data.depth_im[co.data.depth_im>0]),np.max(co.data.depth_im),levels_num)
-            co.segclass.segment_values=np.zeros_like(co.data.depth_im)
-            for count in range(levels_num-1):
-                co.segclass.segment_values[(co.data.depth_im>=levels[count]) *
-                                           (co.data.depth_im<=levels[count+1])]=count+1
-        
-        elif co.counters.im_number == (constants['framerate'] *
-                                       constants['calib_secs'] ):
+            else:
+                print 'Segmentation is needed'
+    if co.segclass.needs_segmentation and co.counters.im_number >= 1:
+        if co.counters.im_number == (CONST['framerate'] *
+                                     CONST['calib_secs'] - 1):
+            co.segclass.flush_previous_segmentation()
+            co.segclass.nz_objects.image = np.zeros_like(co.data.depth_im) - 1
+            co.segclass.z_objects.image = np.zeros_like(co.data.depth_im) - 1
+            levels_num = 8
+            levels = np.linspace(np.min(co.data.depth_im[co.data.depth_im > 0]), np.max(
+                co.data.depth_im), levels_num)
+            co.segclass.segment_values = np.zeros_like(co.data.depth_im)
+            for count in range(levels_num - 1):
+                co.segclass.segment_values[(co.data.depth_im >= levels[count]) *
+                                           (co.data.depth_im <= levels[count + 1])] = count + 1
+
+        elif co.counters.im_number == (CONST['framerate'] *
+                                       CONST['calib_secs']):
             co.segclass.nz_objects.count = -1
             co.segclass.z_objects.count = -1
-            co.segclass.segment_values=co.segclass.segment_values*co.data.trusty_pixels
+            co.segclass.segment_values = co.segclass.segment_values * co.meas.trusty_pixels
             for val in np.unique(co.segclass.segment_values):
                 objs = np.ones_like(co.data.depth_im) * \
                     (val == co.segclass.segment_values)
                 labeled, nr_objects =\
-                ndimage.label(objs*co.masks.calib_frame)
+                    ndimage.label(objs * co.masks.calib_frame)
                 lbls = np.arange(1, nr_objects + 1)
-                if val>0:
+                if val > 0:
                     ndimage.labeled_comprehension(objs, labeled, lbls,
                                                   co.segclass.nz_objects.process, float, 0,
                                                   True)
                 else:
-                    test=ndimage.labeled_comprehension(objs, labeled, lbls,
+                    ndimage.labeled_comprehension(objs, labeled, lbls,
                                                   co.segclass.z_objects.process,
                                                   float, 0, True)
-            for points,pixsize,xsize,ysize in co.segclass.nz_objects.untrusty+co.segclass.z_objects.untrusty:
-                co.segclass.z_objects.count+=1
+            for (points, pixsize,
+                 xsize, ysize) in (co.segclass.nz_objects.untrusty +
+                                   co.segclass.z_objects.untrusty):
+                co.segclass.z_objects.count += 1
                 co.segclass.z_objects.image[
-                    tuple(points)]=co.segclass.z_objects.count
+                    tuple(points)] = co.segclass.z_objects.count
                 co.segclass.z_objects.pixsize.append(pixsize)
                 co.segclass.z_objects.xsize.append(xsize)
                 co.segclass.z_objects.ysize.append(ysize)
             print 'Found or partitioned',\
-                    co.segclass.nz_objects.count+\
-                    co.segclass.z_objects.count+2, 'background objects'
+                co.segclass.nz_objects.count +\
+                co.segclass.z_objects.count + 2, 'background objects'
             co.segclass.needs_segmentation = 0
-            with open(constants['segmentation_data'] + '.pkl', 'wb') as output:
-                pickle.dump(co.segclass, output, -1)
-            cv2.imwrite(constants['already_segmented_path'],
-                        co.segclass.prev_im)
+            with open(CONST['segmentation_data'] + '.pkl', 'wb') as output:
+                pickle.dump((co.segclass, co.meas), output, -1)
+            '''
             cv2.imwrite('segments.jpg', co.segclass.segment_values)
             plt.imshow(co.segclass.nz_objects.image)
             plt.savefig('nz_partitioned_segments.jpg')
             plt.imshow(co.segclass.z_objects.image)
             plt.savefig('z_partitioned_segments.jpg')
+            '''
             print 'Saved segmentation data for future use.'
     elif (not co.segclass.needs_segmentation) and co.counters.im_number >= 2:
-        '''
-        if co.segclass.nz_objects.initial_center.shape[0]==0:
-            print 'Loading scene objects from memory.'
-            co.segclass= pickle.load(
-                open(constants['segmentation_data'] + '.pkl', 'rb'))
-        '''
-        time1 = time.clock()
-        if co.counters.im_number ==constants['framerate'
-                                            ]*constants['calib_secs']+1 :
-            co.data.depth_im=co.data.initial_im_set[:,:,0]
+        if not co.segclass.initialised_centers:
             try:
                 co.segclass.nz_objects.find_object_center(1)
-            except:
-                print 'hi'
-                exit()
+            except BaseException as err:
+                print 'Centers initialisation Exception'
+                raise err
             try:
                 co.segclass.z_objects.find_object_center(0)
-            except :
-                print 'hi2'
-                exit()
+            except BaseException as err:
+                print 'Centers initialisation Exception'
+                raise err
             co.segclass.initialise_neighborhoods()
+            co.segclass.initialised_centers = 1
         else:
             try:
                 co.segclass.nz_objects.find_object_center(1)
-            except:
-                print 'hi3'
-                exit()
-        if co.segclass.nz_objects.center.size>0:
+            except BaseException as err:
+                print 'Centers calculation Exception'
+                raise err
+        if co.segclass.nz_objects.center.size > 0:
             co.segclass.nz_objects.find_centers_displacement()
-            found_objects_mask=co.segclass.find_objects(constants)
-            
-            time2 = time.clock()
-            #print 'Total time needed for single frame', time2 - time1
+            found_objects_mask = co.segclass.find_objects(CONST)
+
             points_on_im = co.data.depth3d.copy()
-            #points_on_im[np.sum(points_on_im,axis=2)==0,:]=np.array([1,0,1])
+            # points_on_im[np.sum(points_on_im,axis=2)==0,:]=np.array([1,0,1])
             for calc, point1, point2 in zip(
-                co.segclass.nz_objects.centers_to_calculate,
-                co.segclass.nz_objects.initial_center,
-                co.segclass.nz_objects.center):
-                if point1[0] != -1 :
+                    co.segclass.nz_objects.centers_to_calculate,
+                    co.segclass.nz_objects.initial_center,
+                    co.segclass.nz_objects.center):
+                if point1[0] != -1:
                     if calc:
-                         cv2.arrowedLine(points_on_im,
+                        cv2.arrowedLine(points_on_im,
                                         (point1[1], point1[0]),
-                                        (point2[1], point2[0]), [0, 1, 0], 2, 1)    
+                                        (point2[1], point2[0]), [0, 1, 0], 2, 1)
                     else:
                         cv2.arrowedLine(points_on_im,
                                         (point1[1], point1[0]),
                                         (point2[1], point2[0]), [0, 0, 1], 2, 1)
-            hand_points=hsa.main_process(found_objects_mask.astype(np.uint8),co.data.all_positions,1)
-            
-            if len(co.im_results.images)==1:
-                co.im_results.images.append((255*found_objects_mask).astype(np.uint8))
+            struct_el = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, tuple(2 * [5]))
+            found_objects_mask = cv2.morphologyEx(
+                found_objects_mask.astype(np.uint8), cv2.MORPH_CLOSE, struct_el)
+            struct_el = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, tuple(2 * [10]))
+            found_objects_mask = cv2.morphologyEx(
+                found_objects_mask.astype(np.uint8), cv2.MORPH_OPEN, struct_el)
+            hand_points = hsa.main_process(
+                found_objects_mask.astype(np.uint8), co.meas.all_positions, 1,
+                CONST)
+
+            if len(co.im_results.images) == 1:
+                co.im_results.images.append(
+                    (255 * found_objects_mask).astype(np.uint8))
             '''
             elif len(co.im_results.images)==2:
                 co.im_results.images[1][co.im_results.images[1]==0]=(255*points_on_im).astype(np.uint8)[co.im_results.images[1]==0]
@@ -162,51 +153,52 @@ def detection_by_scene_segmentation(constants):
             '''
             return found_objects_mask
 
+
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''
     _, _, im_num = co.data.initial_im_set.shape
     valid_freq = np.zeros(co.data.initial_im_set[:, :, 0].shape)
-    co.data.background = np.zeros(co.data.initial_im_set[:, :, 0].shape)
+    co.meas.background = np.zeros(co.data.initial_im_set[:, :, 0].shape)
     initial_nonzero_im_set = np.zeros(co.data.initial_im_set.shape)
-    initial_nonunary_im_set = np.zeros_like(co.data.depth_im)
-    valid_values=np.zeros_like(co.data.background)
-    co.data.all_positions = np.fliplr(cv2.findNonZero(np.ones_like(
-        co.data.background,dtype=np.uint8)).squeeze()).reshape(co.data.background.shape + (2,))
+    valid_values = np.zeros_like(co.meas.background)
+    co.meas.all_positions = np.fliplr(cv2.findNonZero(np.ones_like(
+        co.meas.background, dtype=np.uint8)).squeeze()).reshape(co.meas.background.shape + (2,))
     co.meas.find_non_convex_edges_lims(co.masks.calib_edges)
     for count in range(im_num):
         valid_values[
-            co.data.initial_im_set[:,:,count]>0
-            ]=co.data.initial_im_set[:,:,count][
-                co.data.initial_im_set[:,:,count]>0]
-        co.data.background = co.data.background + \
+            co.data.initial_im_set[:, :, count] > 0
+        ] = co.data.initial_im_set[:, :, count][
+            co.data.initial_im_set[:, :, count] > 0]
+        co.meas.background = co.meas.background + \
             co.data.initial_im_set[:, :, count]
         valid_freq[co.data.initial_im_set[:, :, count] != 0] += 1
-        
+
         initial_nonzero_im_set[:, :, count] += co.data.initial_im_set[
             :, :, count] != 0
-    co.data.valid_values=(valid_values*255).astype(np.uint8)
+    co.meas.valid_values = (valid_values * 255).astype(np.uint8)
 
-    co.data.trusty_pixels = ((valid_freq) == np.max(valid_freq)).astype(np.uint8)
+    co.meas.trusty_pixels = (
+        (valid_freq) == np.max(valid_freq)).astype(np.uint8)
     valid_freq[valid_freq == 0] = 1
-    co.data.background = co.data.background / valid_freq
-    
+    co.meas.background = co.meas.background / valid_freq
+
     return valid_freq, initial_nonzero_im_set, im_num
 
 
-def init_noise_model(constants):
+def init_noise_model(CONST):
     '''Compute Initial Background and Noise Estimate from the first im_num
      images with no moving object presence'''
 
     valid_freq, initial_nonzero_im_set, im_num = extract_background_values()
     # Assume Noise dependency from location
 
-    cv2.imwrite('Background.jpg', (255 * co.data.background).astype(int))
+    cv2.imwrite('Background.jpg', (255 * co.meas.background).astype(int))
     cv2.imwrite('Validfreq.jpg', (255 * valid_freq /
                                   float(np.max(valid_freq))).astype(int))
     noise_deviation = np.zeros_like(co.data.depth_im)
     for c_im in range(im_num):
         # Remove white pixels from co.data.initial_im_set
-        noise_deviation0 = ((co.data.background -
+        noise_deviation0 = ((co.meas.background -
                              co.data.initial_im_set[:, :, c_im]) *
                             initial_nonzero_im_set[:, :, c_im])
         noise_deviation0 = noise_deviation0 * noise_deviation0
@@ -217,19 +209,19 @@ def init_noise_model(constants):
 
     noise_deviation = np.minimum(noise_deviation, 0.2)
     noise_deviation = np.maximum(
-        noise_deviation, constants['lowest_pixel_noise_deviation'])
-    max_background_thres = co.data.background + noise_deviation
+        noise_deviation, CONST['lowest_pixel_noise_deviation'])
+    max_background_thres = co.meas.background + noise_deviation
     cv2.imwrite('Max_Background.jpg', (255 * max_background_thres).astype(int))
     cv2.imwrite('Zero_Background.jpg', (255 *
-                                        (co.data.background == 0)).astype(int))
-    min_background_thres = (co.data.background - noise_deviation) * \
-        ((co.data.background - noise_deviation) > 0)
+                                        (co.meas.background == 0)).astype(int))
+    min_background_thres = (co.meas.background - noise_deviation) * \
+        ((co.meas.background - noise_deviation) > 0)
     cv2.imwrite('Min_Background.jpg', (255 * min_background_thres).astype(int))
     print "Recognition starts now"
     return min_background_thres, max_background_thres
 
 
-def find_moving_object(constants):
+def find_moving_object(CONST):
     '''Find the biggest moving object in scene'''
     found_object0 = np.ones(co.data.depth_im.shape)
     min_background_thres, max_background_thres = co.models.noise_model
@@ -259,8 +251,8 @@ def find_moving_object(constants):
 
     sorted_contours = [x for (_, x) in sorted_contours]
     mask = np.zeros(co.data.depth_im.shape, np.uint8)
-    sorted_depth = np.zeros(constants['max_contours_num'])
-    for i in range(min(len(co.scene_contours), constants['max_contours_num'] - 1)):
+    sorted_depth = np.zeros(CONST['max_contours_num'])
+    for i in range(min(len(co.scene_contours), CONST['max_contours_num'] - 1)):
         # Find mean depth for each shape matching each contour
         mask[:] = 0
         cv2.drawContours(mask, sorted_contours, 0, 255, -1)
@@ -268,35 +260,35 @@ def find_moving_object(constants):
     if (co.meas.aver_depth == []) | (co.meas.aver_depth == 0):
         co.meas.aver_depth = sorted_depth[0]
     match = (sorted_depth < (co.meas.aver_depth + co.thres.depth_thres)
-             ) & (sorted_depth > (co.meas.aver_depth - co.thres.depth_thres))
+            ) & (sorted_depth > (co.meas.aver_depth - co.thres.depth_thres))
     if np.sum(match[:]) == 0:
         chosen_contour = sorted_contours[0]
         chosen_depth = sorted_depth[0]
         matched = 0
     else:
         found_match = np.fliplr(cv2.findNonZero(match).squeeze())
-        #the following line might want debugging
-        matched = found_match[0,0]
+        # the following line might want debugging
+        matched = found_match[0, 0]
         chosen_contour = sorted_contours[matched]
         chosen_depth = sorted_depth[matched]
     if np.abs(chosen_depth - co.meas.aver_depth) < co.meas.aver_depth:
         co.counters.outlier_time = 0
         co.data.depth_mem.append(chosen_depth)
         co.counters.aver_count += 1
-        if co.counters.aver_count > constants['running_mean_depth_count']:
+        if co.counters.aver_count > CONST['running_mean_depth_count']:
             co.meas.aver_depth = ((chosen_depth -
                                    co.data.depth_mem[
                                        co.counters.aver_count -
-                                       constants['running_mean_depth_count']] +
+                                       CONST['running_mean_depth_count']] +
                                    co.meas.aver_depth *
-                                   constants['running_mean_depth_count']) /
-                                  constants['running_mean_depth_count'])
+                                   CONST['running_mean_depth_count']) /
+                                  CONST['running_mean_depth_count'])
         else:
             co.meas.aver_depth = (chosen_depth + co.meas.aver_depth *
                                   (co.counters.aver_count - 1)) / co.counters.aver_count
     else:
         co.counters.outlier_time += 1
-    if co.counters.outlier_time == constants['outlier_shape_time'] * constants['framerate']:
+    if co.counters.outlier_time == CONST['outlier_shape_time'] * CONST['framerate']:
         co.counters.aver_count = 1
         co.meas.aver_depth = chosen_depth
         co.data.depth_mem = []

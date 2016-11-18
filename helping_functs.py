@@ -3,11 +3,8 @@ import cv2
 import os
 import numpy as np
 import time
-import matplotlib.pyplot as plt
-from scipy import signal
+#import matplotlib.pyplot as plt
 
-def initiate_objects(num):
-    return tuple([DataObj()]*num)
 
 def im_convert(fil, path, flag):
     if flag=='Depth':
@@ -31,11 +28,12 @@ def im_load(path, flag):
     return(imdata)
 
 
+'''
 def hist(image):
     hbins=30
     plt.hist(image.ravel()*256, 256, [1, 256])
     plt.show()
-
+'''
 def diff(a, b):
     if sum(list(b.shape))/2>1:
         return [np.sqrt((i[0]-j[0])**2+(i[1]-j[1])**2) for i, j in zip(np.array(a), np.array(b))]
