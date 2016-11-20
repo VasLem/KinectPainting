@@ -2,7 +2,7 @@
 framerate: 30 
 #read=d/f/k; read from data/file/kinect
 read: k
-#if read from kinect, live or recorder
+#if read from kinect, live or recorded
 stream: recorded
 #if recorded stream, the .bag path
 bag_path: /media/vassilis/Data/KinectData/rosbag_files/data.bag
