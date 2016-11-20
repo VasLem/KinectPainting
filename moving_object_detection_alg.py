@@ -135,6 +135,7 @@ def detection_by_scene_segmentation(CONST):
                 cv2.MORPH_ELLIPSE, tuple(2 * [10]))
             found_objects_mask = cv2.morphologyEx(
                 found_objects_mask.astype(np.uint8), cv2.MORPH_OPEN, struct_el)
+            found_objects_mask=found_objects_mask
             hand_points = hsa.main_process(
                 found_objects_mask.astype(np.uint8), co.meas.all_positions, 1,
                 CONST)

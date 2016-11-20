@@ -210,7 +210,8 @@ class Measure(object):
         Find non convex symmetrical edges minimum orthogonal lims with some tolerance
         Inputs: positions,edges mask[,edges tolerance=10]
         '''
-        self.edges_positions_indices=np.nonzero(edges_mask>0)
+        self.edges_positions_indices=np.nonzero(cv2.dilate(
+            edges_mask,np.ones((3,3),np.uint8),cv2.CV_8U)>0)
         self.edges_positions=np.transpose(np.array(self.edges_positions_indices))
         lr_positions=self.edges_positions[np.abs(self.edges_positions[:,0]-edges_mask.shape[0]/2.0)<1,:]
         tb_positions=self.edges_positions[np.abs(self.edges_positions[:,1]-edges_mask.shape[1]/2.0)<1,:]

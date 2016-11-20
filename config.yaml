@@ -41,8 +41,8 @@ depth_tolerance: 20 #Too high, needs fixing
 
 #Variables for hand segmentation
 angle_resolution: 0.01
-abnormality_tol: 2 #1
-angle_tol: 0.1 #0.1
+abnormality_tol: 1 #1
+angle_tol: 0.01 #0.1
 dist_tol: 2 #2
 
 #Variables necessary for approximate wrist detection
