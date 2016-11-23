@@ -1,5 +1,9 @@
 #framerate
-framerate: 30 
+framerate: 30
+#depth maximum value, 0 is the minimum
+max_depth: 12000
+#depth intensity, above which everything is considered noise
+noise_thres: 0.35
 #read=d/f/k; read from data/file/kinect
 read: k
 #if read from kinect, live or recorded

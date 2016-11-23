@@ -74,6 +74,7 @@ def detection_by_scene_segmentation(CONST):
                 co.segclass.z_objects.pixsize.append(pixsize)
                 co.segclass.z_objects.xsize.append(xsize)
                 co.segclass.z_objects.ysize.append(ysize)
+
             print 'Found or partitioned',\
                 co.segclass.nz_objects.count +\
                 co.segclass.z_objects.count + 2, 'background objects'
@@ -110,7 +111,7 @@ def detection_by_scene_segmentation(CONST):
                 raise err
         if co.segclass.nz_objects.center.size > 0:
             co.segclass.nz_objects.find_centers_displacement()
-            found_objects_mask = co.segclass.find_objects(CONST)
+            co.meas.found_objects_mask = co.segclass.find_objects(CONST)
 
             points_on_im = co.data.depth3d.copy()
             # points_on_im[np.sum(points_on_im,axis=2)==0,:]=np.array([1,0,1])
@@ -129,20 +130,26 @@ def detection_by_scene_segmentation(CONST):
                                         (point2[1], point2[0]), [0, 0, 1], 2, 1)
             struct_el = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, tuple(2 * [5]))
-            found_objects_mask = cv2.morphologyEx(
-                found_objects_mask.astype(np.uint8), cv2.MORPH_CLOSE, struct_el)
+            co.meas.found_objects_mask = cv2.morphologyEx(
+                co.meas.found_objects_mask.astype(np.uint8), cv2.MORPH_CLOSE, struct_el)
             struct_el = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, tuple(2 * [10]))
-            found_objects_mask = cv2.morphologyEx(
-                found_objects_mask.astype(np.uint8), cv2.MORPH_OPEN, struct_el)
-            found_objects_mask=found_objects_mask
-            hand_points = hsa.main_process(
-                found_objects_mask.astype(np.uint8), co.meas.all_positions, 1,
-                CONST)
+            co.meas.found_objects_mask = cv2.morphologyEx(
+                co.meas.found_objects_mask.astype(np.uint8), cv2.MORPH_OPEN, struct_el)
 
+            hand_patch,hand_patch_pos = hsa.main_process(
+                co.meas.found_objects_mask.astype(np.uint8), co.meas.all_positions, 1,
+                CONST)
+            if hand_patch.shape[1]:
+                co.action_recog.update(hand_patch,hand_patch_pos)
+                frame_difference=co.action_recog.curr_count-co.action_recog.prev_count
+                if frame_difference<3 and\
+                    co.action_recog.prev_patch_pos.shape[0]:
+                    co.action_recog.extract_features(CONST)
             if len(co.im_results.images) == 1:
                 co.im_results.images.append(
-                    (255 * found_objects_mask).astype(np.uint8))
+                    (255 * co.meas.found_objects_mask).astype(np.uint8))
+            co.im_results.images.append(points_on_im)
             '''
             elif len(co.im_results.images)==2:
                 co.im_results.images[1][co.im_results.images[1]==0]=(255*points_on_im).astype(np.uint8)[co.im_results.images[1]==0]
@@ -152,8 +159,7 @@ def detection_by_scene_segmentation(CONST):
                 points_on_im[tuple(hand_points.T)]=[1,0,0]
             co.im_results.images.append(points_on_im)
             '''
-            return found_objects_mask
-
+            return 1
 
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''

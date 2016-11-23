@@ -294,13 +294,13 @@ class Kinect(object):
                 depth, desired_encoding="passthrough")
             co.data.color_im = self.bridge.imgmsg_to_cv2(
                 color, desired_encoding="passthrough")
-            co.data.depth_im = (co.data.depth_im) / float(12000)
+            co.data.depth_im = (co.data.depth_im) / float(CONST['max_depth'])
 
         except CvBridgeError as err:
             print err
 
         if co.flags.exists_lim_calib_image:
-            co.noise_proc.remove_noise()
+            co.noise_proc.remove_noise(CONST)
             if CONST['detection_method'] == 'segmentation':
                 self.detection_with_segmentation()
             else:

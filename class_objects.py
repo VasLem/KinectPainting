@@ -1,26 +1,131 @@
 import numpy as np
 import cv2
+from math import pi
 import time
 from cv_bridge import CvBridge, CvBridgeError
 
+
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
+
+
+class SpaceHistogram(object):
+
+    def __init__(self):
+        self.binarized_space = []
+        self.bin_size = 0
+
+    def binarize_3d(self, constants):
+        b_x = np.arange(0, meas.imx, self.bin_size)
+        b_y = np.arange(0, meas.imy, self.bin_size)
+        b_z = np.arange(0.0, 1.0, self.bin_size / (constants['max_depth'] *
+                                                   constants['noise_thres']))
+        self.binarized_space = [b_x, b_y, b_z]
+
+    def binarize_1d(self, constants):
+        self.binarized_space = [np.arange(0, pi+0.001, self.bin_size)]
+    def hist_data(self, sample):
+        return np.histogramdd(sample, self.binarized_space, normed=True)[0].ravel()
+
+class ActionRecognition(object):
+
+    def __init__(self):
+        self.prev_depth_im = np.zeros(0)
+        self.curr_depth_im = np.zeros(0)
+        self.unified_roi = np.zeros(0)
+        self.prev_count = 0
+        self.curr_count = 0
+        self.features = FeatureExtraction()
+        self.prev_patch = np.zeros(0)
+        self.curr_patch = np.zeros(0)
+        self.prev_patch_pos = np.zeros(0)
+        self.curr_patch_pos = np.zeros(0)
+
+    def extract_features(self, constants):
+        self.features.find_roi(self.prev_patch, self.curr_patch,
+                               self.prev_patch_pos, self.curr_patch_pos)
+        hof_features = self.features.hof3d(
+            self.prev_depth_im, self.curr_depth_im, constants)
+        hog_features = self.features.ghog(self.curr_depth_im, constants)
+        return hof_features,hog_features 
+    def update(self,hand_patch,hand_patch_pos):
+        (self.prev_depth_im,
+         self.curr_depth_im) = (self.curr_depth_im,
+                                data.uint8_depth_im*meas.found_objects_mask)
+        (self.curr_count,
+         self.prev_count)=(meas.im_count,
+                           self.curr_count)
+        (self.prev_patch,
+         self.curr_patch)=(self.curr_patch,
+                                      hand_patch)
+        (self.prev_patch_pos,
+         self.curr_patch_pos)=(self.curr_patch_pos,
+                                      hand_patch_pos)
+
+
+class FeatureExtraction(object):
+
+    def __init__(self):
+        self.features = np.zeros(0)
+        self.PRIM_X = 479.75
+        self.PRIM_Y = 269.75
+        self.FLNT = 540.68603515625
+        self.prev_projection = np.zeros(0)
+        self.curr_projection = np.zeros(0)
+        self.roi = np.zeros(0)
+
+    def compute_scene_flow(self, prev_depth_im, curr_depth_im):
+        prev_hand_patch = prev_depth_im[self.roi[0, 0]:self.roi[0, 1],
+                              self.roi[1, 0]:self.roi[1, 1]]
+        curr_hand_patch = curr_depth_im[self.roi[0,0]:self.roi[0, 1],
+                                        self.roi[1,0]:self.roi[1, 1]]
+        nonzero_mask=prev_hand_patch+curr_hand_patch
+        yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8))-
+                     np.array([[self.PRIM_Y,self.PRIM_X]]))
+        prev_z_coords = prev_hand_patch[nonzero_mask > 0][:,None]
+        curr_z_coords = curr_hand_patch[nonzero_mask > 0][:,None]
+        dz_coords=curr_z_coords-prev_z_coords
+        return np.concatenate((yx_coords * dz_coords / self.FLNT,
+                               dz_coords), axis=1)
+
+    def find_roi(self, prev_patch, curr_patch, prev_patch_pos, curr_patch_pos):
+        self.roi = np.array([[
+            min(prev_patch.shape[0], curr_patch.shape[0]),
+            max((prev_patch.shape[0] + prev_patch_pos[0],
+                    curr_patch.shape[0] + curr_patch_pos[0]))],
+            [min(prev_patch.shape[1], curr_patch.shape[1]),
+             max(prev_patch.shape[1] + prev_patch_pos[1],
+                    curr_patch.shape[1] + curr_patch_pos[1])]])
+
+    def hof3d(self, prev_depth_im, curr_depth_im, constants):
+        if len(hofhist.binarized_space) == 0:
+            hofhist.bin_size = 4
+            hofhist.binarize_3d(constants)
+        disp = self.compute_scene_flow(prev_depth_im,curr_depth_im)
+        disp_norm = (disp[:, 0] * disp[:, 0] + disp[:, 1] *
+                     disp[:, 1] + disp[:, 2] * disp[:, 2])[:,None]
+        disp_norm[disp_norm == 0] = 1
+        disp /= disp_norm
+        return hofhist.hist_data(disp)
+
+    def grad_angles(self, patch):
+        gradx, grady = np.gradient(patch)
+        return np.arctan(grady, gradx)  # returns values 0 to pi
+
+    def ghog(self, depth_im, constants):
+        im_patch = depth_im[self.roi[0, 0]:self.roi[0, 1],
+                            self.roi[1, 0]:self.roi[1, 1]]
+        if len(hoghist.binarized_space) == 0:
+            hoghist.bin_size = pi / 9.0
+            hoghist.binarize_1d(constants)
+        return hoghist.hist_data(self.grad_angles(im_patch)[1, -1])
+
 
 class ConvexityDefect(object):
     '''Convexity_Defects holder'''
 
     def __init__(self):
         self.hand = None
-
-
-class Interp(object):
-    '''Interpolated Contour variables'''
-
-    def __init__(self):
-        self.vecs_starting_ind = None
-        self.vecs_ending_ind = None
-        self.points = None
-        self.final_segments = None
 
 
 class Contour(object):
@@ -61,232 +166,6 @@ class Data(object):
         self.initial_im_set = np.zeros(1)
         self.depth_mem = []
         self.reference_uint8_depth_im = np.zeros(1)
-
-class Result(object):
-    '''class to keep results'''
-
-    def __init__(self):
-        self.images = []
-        self.data = []
-        self.name = 'Results'
-        self.im_name = ' '
-        self.maxdim = 3
-        self.images = []
-        self.data = []
-        self.name = 'Results'
-
-    def show_results(self, var1, var2):
-        '''class to save or display images like montage'''
-        if len(self.images) == 0:
-            # print "No results to show"
-            return 1
-        shapes = [(im_shape[0], im_shape[1], c, len(im_shape))
-                  for (c, im_shape) in enumerate([im.shape for im in self.images])]
-        isrgb = 1 if sum(zip(*shapes)[3]) != 2 * len(shapes) else 0
-        sorted_images = [self.images[i] for i in list(
-            zip(*sorted(shapes, key=lambda x: x[0], reverse=True))[2])]
-        imy, imx, _, _ = tuple([max(coord) for
-                                coord in zip(*shapes)])
-        yaxis = len(self.images) / self.maxdim + 1
-        xaxis = min(self.maxdim, len(self.images))
-        if not isrgb:
-            montage = 255 * \
-                np.ones((imy*yaxis, imx*xaxis), dtype=np.uint8)
-        elif isrgb:
-            montage = 255 * \
-                np.ones((imy*yaxis, imx*xaxis, 3), dtype=np.uint8)
-        x_init = 0
-        for count, image in enumerate(sorted_images):
-            image = ((image - np.min(image)) / float(np.max(image) - np.min(image)) *
-                     255).astype(np.uint8)
-            if isrgb:
-                if len(image.shape) == 2:
-                    image = np.tile(image[:, :, None], (1, 1, 3))
-            if not isrgb:
-                montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
-                        * imy, x_init:x_init + image.shape[1]] = image
-            else:
-                montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
-                        * imy, x_init:x_init + image.shape[1], :] = image
-            if (count + 1) % self.maxdim == 0:
-                x_init = 0
-            else:
-                x_init += image.shape[1]
-        if var1 == 'stdout':
-            cv2.imshow('results', montage)
-        elif var1 == 'ros':
-            if not isrgb:
-                montage = np.tile(montage[:, :, None], (1, 1, 3))
-            try:
-                var2[0].publish(var2[1].cv2_to_imgmsg(montage, 'bgr8'))
-            except CvBridgeError as e:
-                print(e)
-                raise(e)
-        else:
-            cv2.imwrite(var2, montage)
-        return
-
-    def print_results(self, filename):
-        '''class to print data to file'''
-        with open(filename, 'w') as fil:
-            for line in self.data:
-                fil.write(line + '\n')
-
-
-class Flag(object):
-    '''necessary flags for program flow'''
-
-    def __init__(self):
-        self.exists_lim_calib_image = 0
-        self.read = ''
-        self.save = ''
-
-
-class Lim(object):
-    '''limits for for-loops'''
-
-    def __init__(self):
-        self.max_im_num_to_save = 0
-        self.init_n = 0
-
-
-class Mask(object):
-    '''binary masks'''
-
-    def __init__(self):
-        self.rgb_final = None
-        self.background = None
-        self.final_mask = None
-        self.color_mask = None
-        self.calib_edges = None
-        self.calib_frame = np.zeros(0)
-
-
-class Hull(object):
-    '''Convex Hulls of contours'''
-
-    def __init__(self):
-        self.hand = None
-
-
-class Measure(object):
-    '''variables from measurements'''
-
-    def __init__(self):
-        self.w = 0
-        self.h = 0
-        self.w_hand = 0
-        self.h_hand = 0
-        self.imx = 0
-        self.imy = 0
-        self.min1 = 0
-        self.min2 = 0
-        self.least_resolution = 0
-        self.aver_depth = 0
-        self.len = None
-        self.lam = None
-        self.interpolated_contour_angles = 0
-        self.segment_angle = None
-        self.segment_points_num = None
-        self.contours_areas = None
-        self.im_count = 0
-        self.nprange = np.zeros(0)
-        self.erode_size = 5
-        #lims: l->t->r->b
-        self.nonconvex_edges_lims=[]
-        self.convex_edges_lims=[]
-        self.edges_positions_indices=[]
-        self.edges_positions=[]
-        #trusty_pixels is 1 for the pixels that remained nonzero during
-        #initialisation
-        self.trusty_pixels = np.zeros(1)
-        #valid_values hold the last seen nonzero value of an image pixel
-        #during initialisation
-        self.valid_values = np.zeros(1)
-        self.all_positions=np.zeros(1)
-        self.background = np.zeros(1)
-    def find_non_convex_edges_lims(self,edges_mask,edge_tolerance=10):
-        '''
-        Find non convex symmetrical edges minimum orthogonal lims with some tolerance
-        Inputs: positions,edges mask[,edges tolerance=10]
-        '''
-        self.edges_positions_indices=np.nonzero(cv2.dilate(
-            edges_mask,np.ones((3,3),np.uint8),cv2.CV_8U)>0)
-        self.edges_positions=np.transpose(np.array(self.edges_positions_indices))
-        lr_positions=self.edges_positions[np.abs(self.edges_positions[:,0]-edges_mask.shape[0]/2.0)<1,:]
-        tb_positions=self.edges_positions[np.abs(self.edges_positions[:,1]-edges_mask.shape[1]/2.0)<1,:]
-        self.nonconvex_edges_lims=np.array(
-            [np.min(lr_positions[:,1])+edge_tolerance,
-             np.min(tb_positions[:,0])+edge_tolerance,
-             np.max(lr_positions[:,1])-edge_tolerance,
-             np.max(tb_positions[:,0])-edge_tolerance])
-
-    def find_convex_edges_lims(self,positions,edges_mask):
-        '''
-        Find convex edges minimum orthogonal lims
-        '''
-        def calculate_cart_dists(cart_points,cart_point=[]):
-            '''
-            Input either numpy array either 2*2 list
-            Second optional argument is a point
-            '''
-            if cart_point==[]:
-
-                try:
-                    return np.sqrt(
-                        (cart_points[1:, 0] - cart_points[:-1, 0]) *
-                        (cart_points[1:, 0] - cart_points[:-1, 0]) +
-                        (cart_points[1:, 1] - cart_points[:-1, 1]) *
-                        (cart_points[1:, 1] - cart_points[:-1, 1]))
-                except (TypeError, AttributeError):
-                    return np.sqrt((cart_points[0][0] - cart_points[1][0])**2 +
-                                   (cart_points[0][1] - cart_points[1][1])**2)
-
-            else:
-                return np.sqrt(
-                    (cart_points[:, 0] - cart_point[0]) *
-                    (cart_points[:, 0] - cart_point[0]) +
-                    (cart_points[:, 1] - cart_point[1]) *
-                    (cart_points[:, 1] - cart_point[1]))
-        calib_positions=positions[edges_mask>0,:]
-        calib_dists=calculate_cart_dists(
-           calib_positions,
-          np.array([0,0]))
-        
-        upper_left=calib_positions[np.argmin(calib_dists),:]
-        calib_dists2=calculate_cart_dists(
-            calib_positions,
-            np.array([edges_mask.shape[0],
-                      edges_mask.shape[1]]))
-        lower_right=calib_positions[np.argmin(calib_dists2),:]
-        #Needs filling
-        self.convex_edges_lims=[]
-
-class Model(object):
-    '''variables for modelling nonlinearities'''
-
-    def __init__(self):
-        self.noise_model = (0, 0)
-        self.med = None
-        self.var = None
-
-
-class KalmanFilter:
-
-    def __init__(self):
-        self.prev_objects_mask = np.zeros(0)
-        self.cur_objects_mask = np.zeros(0)
-        self.can_exist = np.zeros(0)
-
-
-class NoiseRemoval:
-
-    def remove_noise(self):
-        # All noisy pixels are either white or black. We must remove this shit.
-        time1 = time.clock()
-        data.depth_im *= data.depth_im < 0.35
-        data.depth_im /= 0.35
-        time2 = time.clock()
 
 
 class ExistenceProbability:
@@ -332,7 +211,6 @@ class ExistenceProbability:
             self.wearing_mat[:segclass.nz_objects.count] > 0)[0]
 
         self.wearing_mat -= 1
-        # print 'Segments checked: ', self.can_exist
         '''
         im_res = np.zeros_like(data.depth_im, dtype=np.uint8)
         for val in self.can_exist:
@@ -341,10 +219,271 @@ class ExistenceProbability:
         '''
 
 
+class Flag(object):
+    '''necessary flags for program flow'''
+
+    def __init__(self):
+        self.exists_lim_calib_image = 0
+        self.read = ''
+        self.save = ''
+
+
+class Hull(object):
+    '''Convex Hulls of contours'''
+
+    def __init__(self):
+        self.hand = None
+
+
+class Interp(object):
+    '''Interpolated Contour variables'''
+
+    def __init__(self):
+        self.vecs_starting_ind = None
+        self.vecs_ending_ind = None
+        self.points = None
+        self.final_segments = None
+
+
+class KalmanFilter:
+
+    def __init__(self):
+        self.prev_objects_mask = np.zeros(0)
+        self.cur_objects_mask = np.zeros(0)
+        self.can_exist = np.zeros(0)
+
+
+class Lim(object):
+    '''limits for for-loops'''
+
+    def __init__(self):
+        self.max_im_num_to_save = 0
+        self.init_n = 0
+
+
+class Mask(object):
+    '''binary masks'''
+
+    def __init__(self):
+        self.rgb_final = None
+        self.background = None
+        self.final_mask = None
+        self.color_mask = None
+        self.calib_edges = None
+        self.calib_frame = np.zeros(0)
+
+
+class Measure(object):
+    '''variables from measurements'''
+
+    def __init__(self):
+        self.w = 0
+        self.h = 0
+        self.w_hand = 0
+        self.h_hand = 0
+        self.imx = 0
+        self.imy = 0
+        self.min1 = 0
+        self.min2 = 0
+        self.least_resolution = 0
+        self.aver_depth = 0
+        self.len = None
+        self.lam = None
+        self.interpolated_contour_angles = 0
+        self.segment_angle = None
+        self.segment_points_num = None
+        self.contours_areas = None
+        self.im_count = 0
+        self.nprange = np.zeros(0)
+        self.erode_size = 5
+        # lims: l->t->r->b
+        self.nonconvex_edges_lims = []
+        self.convex_edges_lims = []
+        self.edges_positions_indices = []
+        self.edges_positions = []
+        # trusty_pixels is 1 for the pixels that remained nonzero during
+        # initialisation
+        self.trusty_pixels = np.zeros(1)
+        # valid_values hold the last seen nonzero value of an image pixel
+        # during initialisation
+        self.valid_values = np.zeros(1)
+        self.all_positions = np.zeros(1)
+        self.background = np.zeros(1)
+        self.found_objects_mask=np.zeros(0)
+
+    def find_non_convex_edges_lims(self, edges_mask, edge_tolerance=10):
+        '''
+        Find non convex symmetrical edges minimum orthogonal lims with some tolerance
+        Inputs: positions,edges mask[,edges tolerance=10]
+        '''
+        self.edges_positions_indices = np.nonzero(cv2.dilate(
+            edges_mask, np.ones((3, 3), np.uint8), cv2.CV_8U) > 0)
+        self.edges_positions = np.transpose(
+            np.array(self.edges_positions_indices))
+        lr_positions = self.edges_positions[
+            np.abs(self.edges_positions[:, 0] - edges_mask.shape[0] / 2.0) < 1, :]
+        tb_positions = self.edges_positions[
+            np.abs(self.edges_positions[:, 1] - edges_mask.shape[1] / 2.0) < 1, :]
+        self.nonconvex_edges_lims = np.array(
+            [np.min(lr_positions[:, 1]) + edge_tolerance,
+             np.min(tb_positions[:, 0]) + edge_tolerance,
+             np.max(lr_positions[:, 1]) - edge_tolerance,
+             np.max(tb_positions[:, 0]) - edge_tolerance])
+
+    def find_convex_edges_lims(self, positions, edges_mask):
+        '''
+        Find convex edges minimum orthogonal lims
+        '''
+        def calculate_cart_dists(cart_points, cart_point=[]):
+            '''
+            Input either numpy array either 2*2 list
+            Second optional argument is a point
+            '''
+            if cart_point == []:
+
+                try:
+                    return np.sqrt(
+                        (cart_points[1:, 0] - cart_points[:-1, 0]) *
+                        (cart_points[1:, 0] - cart_points[:-1, 0]) +
+                        (cart_points[1:, 1] - cart_points[:-1, 1]) *
+                        (cart_points[1:, 1] - cart_points[:-1, 1]))
+                except (TypeError, AttributeError):
+                    return np.sqrt((cart_points[0][0] - cart_points[1][0])**2 +
+                                   (cart_points[0][1] - cart_points[1][1])**2)
+
+            else:
+                return np.sqrt(
+                    (cart_points[:, 0] - cart_point[0]) *
+                    (cart_points[:, 0] - cart_point[0]) +
+                    (cart_points[:, 1] - cart_point[1]) *
+                    (cart_points[:, 1] - cart_point[1]))
+        calib_positions = positions[edges_mask > 0, :]
+        calib_dists = calculate_cart_dists(
+            calib_positions,
+            np.array([0, 0]))
+
+        upper_left = calib_positions[np.argmin(calib_dists), :]
+        calib_dists2 = calculate_cart_dists(
+            calib_positions,
+            np.array([edges_mask.shape[0],
+                      edges_mask.shape[1]]))
+        lower_right = calib_positions[np.argmin(calib_dists2), :]
+        # Needs filling
+        self.convex_edges_lims = []
+
+
+class Model(object):
+    '''variables for modelling nonlinearities'''
+
+    def __init__(self):
+        self.noise_model = (0, 0)
+        self.med = None
+        self.var = None
+
+
+class NoiseRemoval:
+
+    def remove_noise(self, constants):
+        # All noisy pixels are either white or black. We must remove this shit.
+        time1 = time.clock()
+        data.depth_im *= data.depth_im < constants['noise_thres']
+        data.depth_im /= constants['noise_thres']
+        time2 = time.clock()
+
+
+class Path(object):
+    '''necessary paths for loading and saving'''
+
+    def __init__(self):
+        self.depth = ''
+        self.color = ''
+
+
+class Point(object):
+    '''variables addressing to image coordinates'''
+
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+        self.x_hand = 0
+        self.y_hand = 0
+        self.wristpoints = None
+
+
+class Result(object):
+    '''class to keep results'''
+
+    def __init__(self):
+        self.images = []
+        self.data = []
+        self.name = 'Results'
+        self.im_name = ' '
+        self.maxdim = 3
+        self.images = []
+        self.data = []
+        self.name = 'Results'
+
+    def show_results(self, var1, var2):
+        '''class to save or display images like montage'''
+        if len(self.images) == 0:
+            return 1
+        shapes = [(im_shape[0], im_shape[1], c, len(im_shape))
+                  for (c, im_shape) in enumerate([im.shape for im in self.images])]
+        isrgb = 1 if sum(zip(*shapes)[3]) != 2 * len(shapes) else 0
+        sorted_images = [self.images[i] for i in list(
+            zip(*sorted(shapes, key=lambda x: x[0], reverse=True))[2])]
+        imy, imx, _, _ = tuple([max(coord) for
+                                coord in zip(*shapes)])
+        yaxis = (len(self.images) - 1) / self.maxdim + 1
+        xaxis = min(self.maxdim, len(self.images))
+        if not isrgb:
+            montage = 255 * \
+                np.ones((imy * yaxis, imx * xaxis), dtype=np.uint8)
+        elif isrgb:
+            montage = 255 * \
+                np.ones((imy * yaxis, imx * xaxis, 3), dtype=np.uint8)
+        x_init = 0
+        for count, image in enumerate(sorted_images):
+            _max = np.max(image)
+            _min = np.min(image)
+            if _max != _min:
+                image = ((image - _min) / float(_max - _min) *
+                         255).astype(np.uint8)
+            if isrgb:
+                if len(image.shape) == 2:
+                    image = np.tile(image[:, :, None], (1, 1, 3))
+            if not isrgb:
+                montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
+                        * imy, x_init:x_init + image.shape[1]] = image
+            else:
+                montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
+                        * imy, x_init:x_init + image.shape[1], :] = image
+            if (count + 1) % self.maxdim == 0:
+                x_init = 0
+            else:
+                x_init += image.shape[1]
+        if var1 == 'stdout':
+            cv2.imshow('results', montage)
+        elif var1 == 'ros':
+            if not isrgb:
+                montage = np.tile(montage[:, :, None], (1, 1, 3))
+            try:
+                var2[0].publish(var2[1].cv2_to_imgmsg(montage, 'bgr8'))
+            except CvBridgeError as e:
+                raise(e)
+        else:
+            cv2.imwrite(var2, montage)
+        return
+
+    def print_results(self, filename):
+        '''class to print data to file'''
+        with open(filename, 'w') as fil:
+            for line in self.data:
+                fil.write(line + '\n')
+
 
 class SceneObjects():
     '''Class to process segmented objects'''
-
 
     def __init__(self):
         self.pixsize = []
@@ -365,7 +504,6 @@ class SceneObjects():
         self.image = np.zeros(0)
         self.pixel_dim = 0
         self.untrusty = []
-
 
     def find_partitions(self, points, dim):
         '''Separate big segments'''
@@ -417,7 +555,7 @@ class SceneObjects():
     def check_object_dims(self, points):
         '''Check if segments are big'''
         maxratio = 10
-        if len(points) == 1:
+        if len(points) <= 1:
             return ['ok', 1, 1, 1]
         xymax = np.max(points, axis=1)
         xymin = np.min(points, axis=1)
@@ -459,7 +597,6 @@ class SceneObjects():
         '''Find scene objects centers of mass'''
         first_time = self.locs.size == 0
         self.pixel_dim = np.max(self.pixsize)
-        time01 = time.clock()
         if first_time:
             data.uint8_depth_im = data.reference_uint8_depth_im
             self.center = np.zeros((self.count + 1, 2), dtype=int)
@@ -472,7 +609,8 @@ class SceneObjects():
                 vals_mask = (self.image == count)
                 try:
                     locs = find_nonzero(vals_mask.astype(np.uint8))
-                    self.locs[:locs.shape[0], count] = locs[:, 0] + locs[:, 1] * 1j
+                    self.locs[:locs.shape[0], count] = locs[
+                        :, 0] + locs[:, 1] * 1j
                 except:
                     pass
                 self.pixsize[count] = locs.shape[0]
@@ -490,25 +628,15 @@ class SceneObjects():
                 (self.count + 1), dtype=bool)
 
             self.centers_to_calculate[np.array(existence.can_exist)] = 1
-            time02 = time.clock()
-            '''
-            print 'time to load variables and compute \
-                existence:', time02 - time01, 's'
-            '''
-        time001 = time.clock()
         '''cv2.imshow('test',self.uint8_depth_im)
         cv2.waitKey(0)
         '''
-
         for count in np.arange(self.count + 1)[self.centers_to_calculate]:
             xcoords = self.locs[
                 :self.pixsize[count], count].real.astype(int)
             ycoords = self.locs[
                 :self.pixsize[count], count].imag.astype(int)
             self.masses[count] = np.sum(data.uint8_depth_im[xcoords, ycoords])
-            '''if self.masses[count]==0:
-                print 'masses=0',xcoords,ycoords,self.pixsize[count]
-            '''
             if refer_to_nz:
                 if self.masses[count] > 0:
                     self.vals[count, :self.pixsize[count]] = (data.uint8_depth_im
@@ -536,35 +664,8 @@ class SceneObjects():
                 self.initial_vals[
                     count, :self.pixsize[count]] = \
                     data.uint8_depth_im[xcoords, ycoords]
-        time002 = time.clock()
-        '''
-        print 'time to fill vals:', time002 - time001, 's'
-        '''
-        time02 = time.clock()
-        '''
-        print 'found centers in', time02 - time01, 's'
-        '''
         if first_time:
             self.initial_center = self.center.copy()
-
-
-class Path(object):
-    '''necessary paths for loading and saving'''
-
-    def __init__(self):
-        self.depth = ''
-        self.color = ''
-
-
-class Point(object):
-    '''variables addressing to image coordinates'''
-
-    def __init__(self):
-        self.x = 0
-        self.y = 0
-        self.x_hand = 0
-        self.y_hand = 0
-        self.wristpoints = None
 
 
 class Segmentation(object):
@@ -577,7 +678,7 @@ class Segmentation(object):
         self.check_if_segmented_2 = 0
         self.prev_im = np.zeros(0)
         self.exists_previous_segmentation = 0
-        self.initialised_centers=0
+        self.initialised_centers = 0
         self.z_objects = SceneObjects()
         self.nz_objects = SceneObjects()
         self.neighborhood_existence = np.zeros(0)
@@ -585,15 +686,15 @@ class Segmentation(object):
         self.filled_neighborhoods = []
         self.found_objects = np.zeros(0)
         self.total_obj_num = 0
-    
+
     def flush_previous_segmentation(self):
-        self.bounding_box=[]
-        self.z_objects= SceneObjects()
-        self.nz_objects= SceneObjects()
+        self.bounding_box = []
+        self.z_objects = SceneObjects()
+        self.nz_objects = SceneObjects()
         self.proximity_table = np.zeros(0)
-        self.filled_neighborhoods=[]
-        self.found_objects=np.zeros(0)
-        self.total_obj_num=0
+        self.filled_neighborhoods = []
+        self.found_objects = np.zeros(0)
+        self.total_obj_num = 0
 
     def initialise_neighborhoods(self):
         center = np.array(list(self.nz_objects.center) +
@@ -611,7 +712,7 @@ class Segmentation(object):
                 np.sum(self.proximity_table
                        == count, axis=0)
 
-    def find_objects(self,constants):
+    def find_objects(self, constants):
         time1 = time.clock()
         check_atoms = []
         # nz_objects.center at the beginning of center list so following is
@@ -619,7 +720,7 @@ class Segmentation(object):
         for count1, vec in\
                 enumerate(self.nz_objects.center_displacement):
             if (abs(vec[0]) > constants['min_displacement'] or abs(vec[1]) >
-                constants['min_displacement']):
+                    constants['min_displacement']):
                 if np.linalg.norm(vec) > 0:
                     check_atoms.append(count1)
         sliced_proximity = list(self.proximity_table[:, check_atoms].T)
@@ -686,7 +787,6 @@ class Segmentation(object):
                 self.found_objects[neighborhood_xs,
                                    neighborhood_ys] = vals
 
-                
                 ''''
                 if np.min(neighborhood_xs)<self.bounding_box[count][0]:
                     self.bounding_box[count][0]=np.min(neighborhood_xs)
@@ -705,7 +805,6 @@ class Segmentation(object):
         time2 = time.clock()
         '''
         print 'Found', len(self.filled_neighborhoods), 'objects in', time2 - time1, 's'
-        
         for count1 in range(len(self.size)):
             for count2 in range(count1, len(self.size)):
                 count += 1
@@ -742,6 +841,7 @@ class Segmentation(object):
         '''
         return self.found_objects
 
+
 class Threshold(object):
     '''necessary threshold variables'''
 
@@ -766,3 +866,6 @@ segclass = Segmentation()
 existence = ExistenceProbability()
 interpolated = contours.interpolated
 noise_proc = NoiseRemoval()
+hofhist = SpaceHistogram()
+hoghist = SpaceHistogram()
+action_recog = ActionRecognition()

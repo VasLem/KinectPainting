@@ -1,4 +1,5 @@
-'''Input: Hand Mask nonzero xy_points
+'''
+Input: Hand Mask nonzero xy_points
 Use laplacian of binary mask
 0.Find entry segment
 1.Calculate segment middle point
@@ -103,9 +104,9 @@ def find_rows_in_array(arr, rows):
     find indices of rows in array if they exist
     '''
     tmp = np.prod(np.swapaxes(
-        arr[:, :, None], 1, 2) == rows, axis=2).T
-    return np.sum(np.cumsum(tmp, axis=1) * tmp == 1,
-                  axis=0) > 0
+        arr[:, :, None], 1, 2) == rows, axis=2)
+    return np.sum(np.cumsum(tmp, axis=0) * tmp == 1,
+                  axis=1) > 0
 
 
 def array_row_intersection(arr1, arr2):
@@ -211,7 +212,7 @@ def find_segment_to_point_box(positions, entry_segment, point):
     _lambda0 = np.dot(entry_segment[1, :] -
                       entry_segment[0, :],
                       point - entry_segment[0, :]
-                     ) / segment_mag2
+                      ) / segment_mag2
     # perp_to_unit_e has direction from point to segment
     # p_to_seg_vec has direction from point to segment ->mi ends up negative
     # when moving positively...
@@ -345,7 +346,7 @@ def main_process(binarm3d, positions, display, constants):
             binarm3d = (255 * binarm3d).astype(np.uint8)
     else:
         binarm = binarm3d.copy()
-        if display:
+        if display == 1:
             binarm3d = np.tile(binarm[:, :, None], (1, 1, 3))
             if np.issubdtype(binarm3d[0, 0, 0], np.uint8):
                 if np.max(binarm3d) == 1:
@@ -355,10 +356,11 @@ def main_process(binarm3d, positions, display, constants):
     try:
         armpoints = find_nonzero(binarm)
     except AttributeError:  # binarm is []
-        if display:
+        if display == 1:
             tag_im(binarm3d, 'No object found')
             co.im_results.images.append(binarm3d)
-        return np.array([[]])
+        return np.array([[]]),np.array([[]])
+
     '''
     tmp=np.concatenate((np.array(co.meas.edges_positions_indices),
                     np.zeros((1,co.meas.edges_positions.shape[0]),int)),axis=0)
@@ -376,16 +378,18 @@ def main_process(binarm3d, positions, display, constants):
     try:
         entry = detect_entry(binarm)[0]
     except IndexError:
-        if display:
+        if display == 1:
             tag_im(binarm3d, 'No entry found')
             co.im_results.images.append(binarm3d)
-        return np.array([[]])
+        return np.array([[]]),np.array([[]])
+
     if entry.shape[0] <= 1:
-        if display:
+        if display == 1:
             tag_im(binarm3d, 'Arm in image corners or its entry is occluded' +
                    ', hand segmentation algorithm cannot function')
             co.im_results.images.append(binarm3d)
-        return np.array([[]])
+        return np.array([[]]),np.array([[]])
+
     link_end_radius = 1 / 2.0 * calculate_cart_dists(entry)
     link_end_segment = entry[:]
     new_ref_point = [0, 0]
@@ -401,10 +405,11 @@ def main_process(binarm3d, positions, display, constants):
         prev_ref_angle = new_ref_angle
         prev_ref_point = new_ref_point[:]
         if new_crit_ind > points_size - 10:
-            if display:
+            if display == 1:
                 tag_im(binarm3d, 'Reached Mask Limits')
                 co.im_results.images.append(binarm3d)
-            return np.array([[]])
+            return np.array([[]]),np.array([[]])
+
         new_ref_point = [(link_end_segment[0][0] + link_end_segment[1][0]) /
                          2.0, (link_end_segment[0][1] + link_end_segment[1][1]) / 2.0]
         new_polar = polar_change_origin(
@@ -419,7 +424,7 @@ def main_process(binarm3d, positions, display, constants):
                 new_polar, 0, new_ref_point, new_ref_radius, [angle1, angle2])
             box, perp_to_segment_unit = find_segment_to_point_box(
                 armpoints, link_end_segment, np.array(far_cocirc_point_xy))
-            if display:
+            if display == 1:
                 binarm3d = picture_box(binarm3d, box)
             new_ref_angle, new_corrected_segment = find_link_direction(
                 box, link_end_segment, perp_to_segment_unit, np.array(far_cocirc_point_xy))
@@ -434,7 +439,8 @@ def main_process(binarm3d, positions, display, constants):
                 comp_angle = new_polar[
                     np.argmin(new_polar[(new_polar[:, 0] - seg_len / 2.0) > 2, 0]), 1]
             except ValueError:
-                return np.array([[]])
+                return np.array([[]]),np.array([[]])
+
             angdiff1 = mod_diff(comp_angle, angle1)
             angdiff2 = mod_diff(comp_angle, angle2)
             if np.abs(angdiff1) < np.abs(angdiff2):
@@ -445,7 +451,7 @@ def main_process(binarm3d, positions, display, constants):
         mod_correct(new_polar)
         new_polar = new_polar[new_polar[:, 0] >= new_ref_radius, :]
         new_polar = new_polar[new_polar[:, 0].argsort(), :]
-        if display:
+        if display == 1:
             tmp = polar_to_cart(new_polar, new_ref_point, new_ref_angle)
             '''
             binarm3d[tuple(tmp[np.abs(np.sqrt((tmp[:, 0] - new_ref_point[0])**2
@@ -462,11 +468,12 @@ def main_process(binarm3d, positions, display, constants):
         cand_crit_points = new_polar[np.abs(new_polar[:, 1]) < constants[
             'angle_resolution'], :]
         if len(cand_crit_points) == 0:
-            if display:
+            if display == 1:
                 tag_im(binarm3d, 'No cocircular points found' +
                        ' reached end of hand')
                 co.im_results.images.append(binarm3d)
-            return np.array([[]])
+            return np.array([[]]),np.array([[]])
+
         _min = cand_crit_points[0, :]
         new_crit_ind = np.where(new_polar == _min)[0][0]
 
@@ -475,7 +482,7 @@ def main_process(binarm3d, positions, display, constants):
                                                  resolution)
         cocircular_crit = cocircular_crit[cocircular_crit[:, 1].argsort(), :]
         crit_chords = calculate_chords_lengths(cocircular_crit)
-        if display:
+        if display == 1:
             tmp = polar_to_cart(new_polar, new_ref_point, new_ref_angle)
             # binarm3d[tuple(tmp.T)] = [255, 255, 0]
             '''
@@ -502,10 +509,11 @@ def main_process(binarm3d, positions, display, constants):
                                  new_polar[new_crit_ind, 0] *
                                  np.sin(new_ref_angle))), [0, 0, 255], 2, 1)
         if cocircular_crit == []:
-            if display:
+            if display == 1:
                 tag_im(binarm3d, 'Reached end of hand without result')
             co.im_results.images.append(binarm3d)
-            return np.array([[]])
+            return np.array([[]]),np.array([[]])
+
             '''
             cv2.arrowedLine(binarm3d, (int(new_ref_point[1]), int(new_ref_point[0])), (
                 int(new_ref_point[1] + new_ref_radius * np.cos(new_ref_angle)),
@@ -516,32 +524,35 @@ def main_process(binarm3d, positions, display, constants):
         check_abnormality = ((crit_chords < width_lo_thres) *
                              (crit_chords > 1))
         reached_abnormality = np.sum(check_abnormality)
-        if display:
+        if display == 1:
             interesting_points_ind = np.nonzero(reached_abnormality)[0]
             for ind in interesting_points_ind:
                 cv2.line(binarm3d, tuple(polar_to_cart(
                     np.array([cocircular_crit[ind, :]]),
                     new_ref_point, new_ref_angle)[:, ::-1].flatten()),
-                         tuple(polar_to_cart(
-                             np.array([cocircular_crit[ind + 1, :]]),
-                             new_ref_point, new_ref_angle)
-                               [:, ::-1].flatten()), [0, 255, 0], 3)
+                    tuple(polar_to_cart(
+                        np.array([cocircular_crit[ind + 1, :]]),
+                        new_ref_point, new_ref_angle)
+                    [:, ::-1].flatten()), [0, 255, 0], 3)
         if reached_abnormality:
-            hand_points = find_hand(binarm, binarm3d, armpoints, display,
+            hand_patch, hand_patch_pos = find_hand(binarm, binarm3d, armpoints, display,
                                     new_polar,
                                     new_corrected_segment, new_ref_angle,
                                     new_crit_ind, new_ref_point, resolution,
                                     constants)
-        if display:
-            binarm3d[int(far_cocirc_point_xy[0]),
-                     int(far_cocirc_point_xy[1])] = [255, 0, 255]
-
+        if display == 1:
+            try:
+                binarm3d[int(far_cocirc_point_xy[0]),
+                         int(far_cocirc_point_xy[1])] = [255, 0, 255]
+            except UnboundLocalError:
+                pass
             if __name__ == '__main__':
                 cv2.imshow('test', binarm3d)
                 cv2.waitKey(0)
         if reached_abnormality:
             co.im_results.images.append(binarm3d)
-            return hand_points
+            return hand_patch,hand_patch_pos
+
         link_end_1st = new_polar[new_crit_ind, :]
         link_end_radius = link_end_1st[0]
         tmp = new_polar[
@@ -564,11 +575,17 @@ def find_hand(*args):
     separate_hand = 0
     ref_dist = calculate_cart_dists(corrected_segment)
     bins = np.arange(resolution, np.max(
-        polar[:crit_ind + 1, 0]) + resolution, resolution)
+        polar[:crit_ind + 1, 0]) + 2 * resolution, resolution)
     dig_rad = np.digitize(polar[crit_ind::-1, 0], bins)
     angles_bound = np.abs(np.arctan((ref_dist / 2.0) / (bins))) +\
         constants['angle_tol']
-    angles_bound = angles_bound[dig_rad]
+    try:
+        angles_bound = angles_bound[dig_rad]
+    except IndexError as e:
+        print 'dig_rad', dig_rad
+        print 'bins', bins
+        print 'angles_bound', angles_bound
+        raise(e)
     angles_thres = np.abs(polar[crit_ind::-1, 1]) < angles_bound
     # Compmat holds in every column elements of the same radius bin
     compmat = dig_rad[:, None] == np.arange(bins.shape[0])
@@ -586,11 +603,40 @@ def find_hand(*args):
     # criterion
 
     dig_rad_thres = np.sum(compmat[:, sameline], axis=1) > 0
+    dig_rad_thres = dig_rad_thres.astype(int)
+    # I make TRUE some solo FALSES, so that to create compact TRUEs segments
+    # 'dilate'
+    dig_rad_thres[1:-1] += (np.roll(dig_rad_thres, 1) +
+                            np.roll(dig_rad_thres, -1))[1:-1]
+    # 'erode'
+    dig_rad_thres[1:-1] *= (np.roll(dig_rad_thres, 1)
+                            * np.roll(dig_rad_thres, -1))[1:-1]
+
+    dig_rad_thres = (dig_rad_thres > 0).astype(np.uint8)
+    # I have to keep the biggest TRUEs segment and zero all the others
+    dig_rad_thres_diff = np.diff(np.pad(dig_rad_thres.astype(
+        int), (1, 1), 'constant', constant_values=0))[:-1]
+    dig_rad_thres_diff_cum = np.cumsum(dig_rad_thres)
+    tmp = dig_rad_thres_diff_cum[dig_rad_thres_diff != 0]
+    dig_rad_segments_mass = np.diff(tmp)
+    try:
+        _argmax = np.argmax(np.abs(dig_rad_segments_mass))
+    except ValueError as err:
+        if display == 1:
+            tag_im(binarm3d, 'Hand not found but reached abnormality')
+        return np.array([[]]),np.array([[]])
+
+    tmp = np.zeros((dig_rad_segments_mass.shape[0] + 1))
+    tmp[_argmax] = 2
+    tmp[_argmax + 1] = 3
+    dig_rad_thres[(dig_rad_thres_diff != 0)] = tmp
+    dig_rad_thres[:np.nonzero(dig_rad_thres == 2)[0][0]] = 0
+    dig_rad_thres[np.nonzero(dig_rad_thres == 3)[0][0] + 1:] = 0
+    dig_rad_thres = dig_rad_thres > 0
     # used_polar has every element of polar in reverse order, which satisfies
     # the criterion
     used_polar = polar[crit_ind::-1, :][dig_rad_thres]
-    if display:
-
+    if display == 1:
         binarm3d[tuple(polar_to_cart(
             used_polar,
             ref_point, ref_angle).T)] = [255, 0, 0]
@@ -605,8 +651,16 @@ def find_hand(*args):
     # so it does no bad, or big enough to get a working length that can help, or
     # too big, that is thrown away
     same_rad_dists = calculate_chords_lengths(used_polar)
-    dist_threshold = (np.abs(same_rad_dists - ref_dist)
-                      <= constants['dist_tol'])
+    dist_threshold = ((np.abs(same_rad_dists)
+                       <= constants['dist_tol'] + np.abs(ref_dist)) *
+                      (np.abs(same_rad_dists) >
+                       2 * np.abs(ref_dist) / 3.0))
+    if display == 1:
+        binarm3d[tuple(polar_to_cart(
+            used_polar[np.concatenate(
+                (dist_threshold, [0]), axis=0).astype(bool)],
+            ref_point, ref_angle).T)] = [0, 255, 0]
+    same_rad_dists[np.logical_not(dist_threshold)] = 1000
     if display == 3:
         flag = 1
         tmp = polar_to_cart(used_polar, ref_point, ref_angle)[:, ::-1]
@@ -616,9 +670,8 @@ def find_hand(*args):
             elif flag == 1:
                 cv2.line(binarm3d, tuple(row1), tuple(row2), [0, 0, 255], 1)
                 flag = 0
-        print used_polar[np.nonzero(dist_threshold)]
     try:
-        ind = np.nonzero(dist_threshold)[0][0]
+        ind = np.argmin(same_rad_dists)
         chosen = used_polar[ind:ind + 2, :]
         if display == 2:
             import matplotlib.pyplot as plt
@@ -636,8 +689,7 @@ def find_hand(*args):
             wristpoints) / 2.0
 
         hand_edges = polar_to_cart(
-            polar[polar[:, 0] > np.min(chosen[:, 0])], ref_point, ref_angle)
-
+            polar[polar[:, 0] > np.min(chosen[:, 0])], ref_point, ref_angle) 
         if separate_hand:
             hand_box = binarm[np.min(hand_edges[:, 0]):
                               np.max(hand_edges[:, 0]),
@@ -659,8 +711,8 @@ def find_hand(*args):
             binarm3d[tuple(polar_to_cart(np.array(
                 [np.mean(polar[ind:, :],
                          axis=0)]), ref_point, ref_angle).
-                           astype(int).T)] = [255, 0, 255]
-            if display:
+                astype(int).T)] = [255, 0, 255]
+            if display == 1:
                 tag_im(binarm3d, 'Hand found')
         if display == 2:
             if separate_hand:
@@ -669,16 +721,16 @@ def find_hand(*args):
                 binarm3d[tuple(hand_edges.T)] = [255, 0, 0]
                 binarm3d[tuple(wristpoints.T)] = [0, 0, 255]
         # binarm3d[tuple(polar_to_cart(polar[polar[:,1]>0],ref_point,ref_angle).T)]=[255,0,0]
-
-        handpoints = armpoints[(armpoints[:, 0] > np.min(hand_edges[:, 0])) *
-                               (armpoints[:, 0] < np.max(hand_edges[:, 0])) *
-                               (armpoints[:, 1] > np.min(hand_edges[:, 1])) *
-                               (armpoints[:, 1] < np.max(hand_edges[:, 1]))]
-        return handpoints
+        hand_patch = binarm[np.min(hand_edges[:, 0]):
+                          np.max(hand_edges[:, 0]),
+                          np.min(hand_edges[:, 1]):
+                          np.max(hand_edges[:, 1])]
+        hand_patch_pos=np.array([hand_edges[:,0].min(),hand_edges[:,1].min()])
+        return hand_patch, hand_patch_pos
     except IndexError:
-        if display:
+        if display == 1:
             tag_im(binarm3d, 'Hand not found but reached abnormality')
-        return np.array([[]])
+        return np.array([[]]), np.array([[]])
 
 
 def find_link_direction(
