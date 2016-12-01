@@ -232,7 +232,7 @@ class FeatureSignSearch(object):
         print 'Reconstruction error after dictionary correction:',\
                 reconst_error
         '''
-        return prev_err-reconst_error/max(0.1,prev_err)
+        return (prev_err-reconst_error)/max(0.1,prev_err)
 
 def main():
     import cv2
@@ -274,7 +274,7 @@ def main():
     spc.inp_features=concatenate((inp_features1,
                                     inp_features2),axis=1)
     error=spc.dictionary_training()
-    print '\t Final dictionary error:',error
+    print '\t Final dictionary error ratio:',error
     spc.flush_variables()
     reconst_error=spc.feature_sign_search_algorithm(
         inp_features1, des_dim, dist_sigma, dist_beta)
