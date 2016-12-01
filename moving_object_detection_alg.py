@@ -7,6 +7,7 @@ import numpy as np
 import cv2
 import class_objects as co
 import hand_segmentation_alg as hsa
+import action_recognition_alg as ara
 from scipy import ndimage
 
 
@@ -14,7 +15,7 @@ def detection_by_scene_segmentation(CONST):
     '''Detection of moving object by using Distortion field of centers of mass
     of background objects'''
     if co.counters.im_number == 0:
-        co.segclass.needs_segmentation=1
+        co.segclass.needs_segmentation = 1
         if not co.segclass.exists_previous_segmentation:
             print 'No existing previous segmentation. The initialisation will delay...'
         else:
@@ -23,13 +24,13 @@ def detection_by_scene_segmentation(CONST):
             check_if_segmented = np.sqrt(np.sum(
                 (co.data.depth_im[co.meas.trusty_pixels.astype(bool)].astype(float) -
                  old_im[co.meas.trusty_pixels.astype(bool)].astype(float))**2))
-            print 'Euclidean Distance of old and new background is '+\
+            print 'Euclidean Distance of old and new background is ' +\
                 str(check_if_segmented)
-            print 'Minimum Distance to approve previous segmentation is '+\
+            print 'Minimum Distance to approve previous segmentation is ' +\
                 str(CONST['similar_bg_min_dist'])
-            if check_if_segmented<CONST['similar_bg_min_dist']:
+            if check_if_segmented < CONST['similar_bg_min_dist']:
                 print 'No need to segment again'
-                co.segclass.needs_segmentation=0
+                co.segclass.needs_segmentation = 0
             else:
                 print 'Segmentation is needed'
     if co.segclass.needs_segmentation and co.counters.im_number >= 1:
@@ -137,15 +138,16 @@ def detection_by_scene_segmentation(CONST):
             co.meas.found_objects_mask = cv2.morphologyEx(
                 co.meas.found_objects_mask.astype(np.uint8), cv2.MORPH_OPEN, struct_el)
 
-            hand_patch,hand_patch_pos = hsa.main_process(
-                co.meas.found_objects_mask.astype(np.uint8), co.meas.all_positions, 1,
+            hand_patch, hand_patch_pos = hsa.main_process(
+                co.meas.found_objects_mask.astype(
+                    np.uint8), co.meas.all_positions, 1,
                 CONST)
             if hand_patch.shape[1]:
-                co.action_recog.update(hand_patch,hand_patch_pos)
-                frame_difference=co.action_recog.curr_count-co.action_recog.prev_count
-                if frame_difference<3 and\
-                    co.action_recog.prev_patch_pos.shape[0]:
-                    co.action_recog.extract_features(CONST)
+                ara.action_recog.update(hand_patch, hand_patch_pos)
+                frame_difference = ara.action_recog.curr_count - ara.action_recog.prev_count
+                if frame_difference < 3 and\
+                        ara.action_recog.prev_patch_pos.shape[0]:
+                    ara.action_recog.extract_features(CONST)
             if len(co.im_results.images) == 1:
                 co.im_results.images.append(
                     (255 * co.meas.found_objects_mask).astype(np.uint8))
@@ -160,6 +162,7 @@ def detection_by_scene_segmentation(CONST):
             co.im_results.images.append(points_on_im)
             '''
             return 1
+
 
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''
@@ -267,7 +270,7 @@ def find_moving_object(CONST):
     if (co.meas.aver_depth == []) | (co.meas.aver_depth == 0):
         co.meas.aver_depth = sorted_depth[0]
     match = (sorted_depth < (co.meas.aver_depth + co.thres.depth_thres)
-            ) & (sorted_depth > (co.meas.aver_depth - co.thres.depth_thres))
+             ) & (sorted_depth > (co.meas.aver_depth - co.thres.depth_thres))
     if np.sum(match[:]) == 0:
         chosen_contour = sorted_contours[0]
         chosen_depth = sorted_depth[0]
