@@ -6,9 +6,16 @@ import class_objects as co
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
 
+#Kinect Intrinsics
+'''
 PRIM_X = 479.75
 PRIM_Y = 269.75
 FLNT = 540.68603515625
+'''
+#Senz3d Intrinsics
+PRIM_X =317.37514566554989
+PRIM_Y=246.61273826510859
+FLNT= 595.333159044648 
 class SpaceHistogram(object):
 
     def __init__(self):
@@ -42,6 +49,12 @@ class ActionRecognition(object):
     def extract_features(self, constants):
         self.features.find_roi(self.prev_patch, self.curr_patch,
                                self.prev_patch_pos, self.curr_patch_pos)
+        roi=self.curr_depth_im[self.features.roi[0,0]:self.features.roi[0,1],
+                               self.features.roi[1,0]:self.features.roi[1,1]]
+        '''
+        cv2.imshow('test2',roi/np.max(roi).astype(float))
+        cv2.waitKey(0)
+        '''
         hof_features = self.features.hof3d(
             self.prev_depth_im, self.curr_depth_im, constants)
         hog_features = self.features.ghog(self.curr_depth_im, constants)
@@ -71,9 +84,9 @@ class FeatureExtraction(object):
 
     def compute_scene_flow(self, prev_depth_im, curr_depth_im):
         prev_hand_patch = prev_depth_im[self.roi[0, 0]:self.roi[0, 1],
-                              self.roi[1, 0]:self.roi[1, 1]]
-        curr_hand_patch = curr_depth_im[self.roi[0,0]:self.roi[0, 1],
-                                        self.roi[1,0]:self.roi[1, 1]]
+                                        self.roi[1, 0]:self.roi[1, 1]]
+        curr_hand_patch = curr_depth_im[self.roi[0, 0]:self.roi[0, 1],
+                                        self.roi[1, 0]:self.roi[1, 1]]
         nonzero_mask=prev_hand_patch+curr_hand_patch
         yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8))-
                      np.array([[PRIM_Y,PRIM_X]]))
@@ -85,14 +98,22 @@ class FeatureExtraction(object):
                                dz_coords), axis=1)
 
     def find_roi(self, prev_patch, curr_patch, prev_patch_pos, curr_patch_pos):
+        '''
+        print 'roi'
+        print '\t prev_patch shape',prev_patch.shape
+        print '\t curr_patch.shape',curr_patch.shape
+        '''
         self.roi = np.array([[
-            min(prev_patch.shape[0], curr_patch.shape[0]),
+            min(prev_patch_pos[0], curr_patch_pos[0]),
             max((prev_patch.shape[0] + prev_patch_pos[0],
                     curr_patch.shape[0] + curr_patch_pos[0]))],
-            [min(prev_patch.shape[1], curr_patch.shape[1]),
+            [min(prev_patch_pos[1], curr_patch_pos[1]),
              max(prev_patch.shape[1] + prev_patch_pos[1],
                     curr_patch.shape[1] + curr_patch_pos[1])]])
-
+        '''
+        print '\t roi shape',self.roi[0,1]-self.roi[0,0],\
+                self.roi[1,1]-self.roi[1,0]
+        '''
     def hof3d(self, prev_depth_im, curr_depth_im, constants):
         if len(hofhist.binarized_space) == 0:
             hofhist.bin_size = 4
@@ -114,7 +135,7 @@ class FeatureExtraction(object):
         if len(hoghist.binarized_space) == 0:
             hoghist.bin_size = 9
             hoghist.binarize_1d(constants)
-        return hoghist.hist_data(self.grad_angles(im_patch)[1, -1])
+        return hoghist.hist_data(self.grad_angles(im_patch).ravel())
 
 
 
