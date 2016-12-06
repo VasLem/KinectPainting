@@ -23,6 +23,7 @@ class FeatureSignSearch(object):
         self.display = 0
         self.prev_err = 0
         self.curr_error = 0
+        self.allow_big_vals=False
 
     def flush_variables(self):
         self.active_set = None
@@ -102,9 +103,9 @@ class FeatureSignSearch(object):
             _q_=dot(bmat_h.T,self.inp_features) - gamma * theta_h / 2.0
             bmat_h2=dot(bmat_h.T,bmat_h)
             try:
-                invbmat_h2=inv(bmat_h2)
-                if np.max(np.abs(invbmat_h2))>1000:
-                    invbmat_h2=pinv(bmat_h2)
+                new_out_f_h=np.linalg.solve(bmat_h2,_q_)
+                if np.max(np.abs(new_out_f_h))>1000:
+                    raise np.linalg.linalg.LinAlgError
             except np.linalg.linalg.LinAlgError:
                 rank=matrix_rank(bmat_h2)
                 col_space=qr(bmat_h2.T)[0][:,:rank]
@@ -114,11 +115,16 @@ class FeatureSignSearch(object):
                 if np.allclose(projected_q.ravel(),_q_.ravel(),atol=1e-03):
                     invbmat_h2 = pinv(bmat_h2)
                 else: #has not be seen, so I just add small diagonal quantities
+                    print 'Weird singularity met'
                     singularity_met=True
                     invbmat_h2 = inv(bmat_h2+0.001*
                                           np.eye(bmat_h2.shape[0]))
+                    if np.max(np.abs(invbmat_h2))>1000:
+                        print 'Argh'
+                        exit()
+                new_out_f_h=dot(invbmat_h2,_q_)
 
-            new_out_f_h=dot(invbmat_h2,_q_)
+
             lol=0
             #lol=np.all(out_feat_h==0)
             if np.prod(sign(out_feat_h)!=sign(new_out_f_h)):
@@ -149,13 +155,18 @@ class FeatureSignSearch(object):
             new_qp_der_outfeati = 2 *(dot(btb, self.out_features) - btf)
             cond_a = (new_qp_der_outfeati +
                       gamma * sign(self.out_features)) * nnz_coeff
-            if np.abs(objval)-np.abs(prev_objval)>100:
-                print 'Problem with bmat singularity, increase atol'
+            if np.abs(objval)-np.abs(prev_objval)>100 and not\
+            self.allow_big_vals and not count==0:
+                print 'Current Objective Function value:',np.abs(objval)
+                print 'Previous Objective Function value:',np.abs(prev_objval)
+                print 'Problem with big values of inv(B^T*B), increase atol'+\
+                        ' or set flag allow_big_vals to true (this might cause'+\
+                        ' problems)'
+                print new_out_f_h
                 exit()
             prev_objval=objval
             _q_prev=_q_.copy()
             bmat_h_prev=bmat_h2.copy()
-            
             if allclose(cond_a, 0,atol=acondtol):
                 # go to cond b:
                 z_coeff = self.out_features == 0
@@ -190,7 +201,8 @@ class FeatureSignSearch(object):
         print 'Reconstruction error after output vector correction:',\
                 reconst_error.ravel()[objval_argmin]
         '''
-        print 'Algorithm did not converge in the given iterations with'+\
+        if display_error:
+            print 'Algorithm did not converge in the given iterations with'+\
                     ' error',np.linalg.norm(
                         self.inp_features-dot(self.bmat,
                                               self.out_features)),', change'+\
@@ -316,70 +328,65 @@ def main():
     test = cv2.resize(test, None, fx=0.05, fy=0.05)
     test2 = cv2.resize(test2, test.shape)
     test_shape = test.shape
-    spc = FeatureSignSearch()
-    inp_features1 = test.ravel()[:, None]
-    inp_features2 = test2.ravel()[:, None]
-    des_dim = 2 * inp_features1.shape[0]
-    dist_sigma = 0.001
-    dist_beta = 0.001
-    print 'Feature Sign Search Algorithm:'
-    reconst_error = spc.feature_sign_search_algorithm(
-        inp_features1, des_dim, dist_sigma, dist_beta)
-    print '\tLena:Before:', spc.prev_err
-    print '\t\tAfter', reconst_error
-    out_features1 = spc.out_features.copy()
-    spc.flush_variables()
-    reconst_error = spc.feature_sign_search_algorithm(
-        inp_features2, des_dim, dist_sigma, dist_beta)
-    print '\tWolves:Before:', spc.prev_err
-    print '\t\tAfter:', reconst_error
-    print 'Dictionary Training:'
-    out_features2 = spc.out_features.copy()
-    spc.out_features = concatenate((out_features1,
-                                    out_features2), axis=1)
-    spc.inp_features = concatenate((inp_features1,
-                                    inp_features2), axis=1)
-    prev_err = (spc.inp_features -
-                dot(spc.bmat, spc.out_features))
-    prev_err = np.sqrt(trace(dot(prev_err.T, prev_err)))
-    print '\t\tBefore:', prev_err
-    repeat = 1
-    spc.display = 5
-    while repeat:
-        bmat = spc.dictionary_training()
-        reconst_error_mat = spc.inp_features - dot(bmat, spc.out_features)
-        error = np.sqrt(trace(dot(reconst_error_mat.T,
-                                  reconst_error_mat)))
-        if error > prev_err:
-            print '\t Warning:Dictionary training not completed' +\
-                ', must do it again, error=', error
-            print '(current_error-previous_error=', error - prev_err, ')'
-            repeat = 0
+    bmat=None
+    for count in range(4):
+        print 'Iteration',count
+        lena_sparse = FeatureSignSearch()
+        wolves_sparse = FeatureSignSearch()
+        if count>1:
+            lena_sparse.bmat=bmat
+            wolves_sparse.bmat=bmat
+        lena_sparse.max_iter=500
+        wolves_sparse.max_iter=500
+        inp_features1 = test.ravel()[:, None]
+        inp_features2 = test2.ravel()[:, None]
+        des_dim = 2 * inp_features1.shape[0]
+        dist_sigma = 0.01
+        dist_beta = 0.01
+        lena_error = lena_sparse.feature_sign_search_algorithm(
+            inp_features1, des_dim, dist_sigma, dist_beta,display_error=False)
+        wolves_sparse.bmat=lena_sparse.bmat.copy()
+        wolves_error = wolves_sparse.feature_sign_search_algorithm(
+            inp_features2, des_dim, dist_sigma, dist_beta,display_error=False)
+        if count==0:
+            print 'Sparse features initialisation'
+            print '\tLena:Previous Error:', lena_sparse.prev_err
+            print '\t\tCurrent Error', lena_error[0]
+            print '\tWolves:Previous Error:', wolves_sparse.prev_err
+            print '\t\tCurrent Error:', wolves_error[0]
+            print '\nDictionary Training:'
+        if count==3:
+            lena_reconstructed=dot(lena_sparse.bmat,lena_sparse.out_features)
+            wolves_reconstructed=dot(wolves_sparse.bmat,wolves_sparse.out_features)
+            print 'Final Errors'
+            print '\tLena:', lena_error[0]
+            print '\tWolves:',wolves_error[0]
+            print '\nDictionary Training:'
+
         else:
-            repeat = 0
-    spc.bmat = bmat.copy()
-    print '\t\tAfter:', error
-    spc.flush_variables()
-    spc.feature_sign_search_algorithm(
-        inp_features1, des_dim, dist_sigma, dist_beta)
-    reconstructed = np.dot(spc.bmat,
-                           spc.out_features)
-    reconst_error_mat = inp_features1 - reconstructed
-    rec_error = np.sqrt(dot(reconst_error_mat.T, reconst_error_mat).trace())
-    print '\tLena:', rec_error
-    spc.flush_variables()
-    reconst_error = spc.feature_sign_search_algorithm(
-        inp_features2, des_dim, dist_sigma, dist_beta)
-    reconstructed2 = np.dot(spc.bmat,
-                            spc.out_features)
-    reconst_error_mat = inp_features2 - reconstructed2
-    rec_error = np.sqrt(dot(reconst_error_mat.T, reconst_error_mat).trace())
-    print '\tWolves:', rec_error
+            out_features1 = lena_sparse.out_features.copy()
+            out_features2 = wolves_sparse.out_features.copy()
+            dictionary=FeatureSignSearch()
+            dictionary.bmat=lena_sparse.bmat.copy()
+            dictionary.out_features = concatenate((out_features1,
+                                            out_features2), axis=1)
+            dictionary.inp_features = concatenate((inp_features1,
+                                            inp_features2), axis=1)
+            dict_err_mat = (dictionary.inp_features -
+                        dot(dictionary.bmat, dictionary.out_features))
+            dict_err = np.linalg.norm(dict_err_mat)
+            if count==0:
+                print '\tInitial Error:', dict_err
+            else:
+                print '\tError after iteration',count-1,dict_err
+            dictionary.display = 5
+            bmat = dictionary.dictionary_training()
+
 
     cv2.imshow('test', test)
-    cv2.imshow('reconstructed', reconstructed.reshape(test_shape))
+    cv2.imshow('reconstructed', lena_reconstructed.reshape(test_shape))
     cv2.imshow('test2', test2)
-    cv2.imshow('reconstructed2', reconstructed2.reshape(test_shape))
+    cv2.imshow('reconstructed2', wolves_reconstructed.reshape(test_shape))
     cv2.waitKey(0)
 if __name__ == '__main__':
     main()
