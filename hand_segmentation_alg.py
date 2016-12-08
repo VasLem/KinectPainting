@@ -335,8 +335,14 @@ def mod_diff(angles1, angles2, ret_argmin=0):
         return sgn * np.min(diff, axis=0)
 
 
-def main_process(binarm3d, positions, display, constants):
+def main_process(binarm3d, positions=None, display=0):
     '''Main processing function'''
+    if positions is None:
+        if co.meas.all_positions is None:
+
+            co.meas.all_positions = np.transpose(np.nonzero(np.ones_like(
+                binarm3d[:, :, 0]))).reshape(binarm3d.shape[:-1] + (2,))
+        positions=co.meas.all_positions
     if len(binarm3d.shape) == 3:
         binarm = binarm3d[:, :, 0].copy()
         if np.issubdtype(binarm3d[0, 0, 0], np.uint8):
@@ -465,7 +471,7 @@ def main_process(binarm3d, positions, display, constants):
                      link_end_segment[1][1]] = [0, 0, 255]
             cv2.line(binarm3d, (new_corrected_segment[0][1], new_corrected_segment[0][0]),
                      (new_corrected_segment[1][1], new_corrected_segment[1][0]), [0, 0, 255])
-        cand_crit_points = new_polar[np.abs(new_polar[:, 1]) < constants[
+        cand_crit_points = new_polar[np.abs(new_polar[:, 1]) < co.CONST[
             'angle_resolution'], :]
         if len(cand_crit_points) == 0:
             if display == 1:
@@ -520,7 +526,7 @@ def main_process(binarm3d, positions, display, constants):
                 int(new_ref_point[0] + new_ref_radius * np.sin(new_ref_angle))),
                 [0, 0, 255], 2, 1)
             '''
-        width_lo_thres = new_ref_radius * constants['abnormality_tol']
+        width_lo_thres = new_ref_radius * co.CONST['abnormality_tol']
         check_abnormality = ((crit_chords < width_lo_thres) *
                              (crit_chords > 1))
         reached_abnormality = np.sum(check_abnormality)
@@ -538,8 +544,7 @@ def main_process(binarm3d, positions, display, constants):
             hand_patch, hand_patch_pos = find_hand(binarm, binarm3d, armpoints, display,
                                     new_polar,
                                     new_corrected_segment, new_ref_angle,
-                                    new_crit_ind, new_ref_point, resolution,
-                                    constants)
+                                    new_crit_ind, new_ref_point, resolution)
         if display == 1:
             try:
                 binarm3d[int(far_cocirc_point_xy[0]),
@@ -571,14 +576,14 @@ def find_hand(*args):
     '''
     # binarm,polar,ref_angle,ref_point,crit_ind,corrected_segment,resolution,display,binarm3d
     [binarm, binarm3d, armpoints, display, polar, corrected_segment,
-     ref_angle, crit_ind, ref_point, resolution, constants] = args[0:11]
+     ref_angle, crit_ind, ref_point, resolution]=args[0:10]
     separate_hand = 0
     ref_dist = calculate_cart_dists(corrected_segment)
     bins = np.arange(resolution, np.max(
         polar[:crit_ind + 1, 0]) + 2 * resolution, resolution)
     dig_rad = np.digitize(polar[crit_ind::-1, 0], bins)
     angles_bound = np.abs(np.arctan((ref_dist / 2.0) / (bins))) +\
-        constants['angle_tol']
+        co.CONST['angle_tol']
     try:
         angles_bound = angles_bound[dig_rad]
     except IndexError as e:
@@ -652,7 +657,7 @@ def find_hand(*args):
     # too big, that is thrown away
     same_rad_dists = calculate_chords_lengths(used_polar)
     dist_threshold = ((np.abs(same_rad_dists)
-                       <= constants['dist_tol'] + np.abs(ref_dist)) *
+                       <= co.CONST['dist_tol'] + np.abs(ref_dist)) *
                       (np.abs(same_rad_dists) >
                        2 * np.abs(ref_dist) / 3.0))
     if display == 1:
@@ -683,7 +688,7 @@ def find_hand(*args):
             plt.pause(0.1)
             plt.waitforbuttonpress(timeout=-1)
             plt.close(fig)
-        wristpoints = polar_to_cart(
+        wristpoints= polar_to_cart(
             chosen, ref_point, ref_angle)
         wrist_radius = calculate_cart_dists(
             wristpoints) / 2.0
@@ -798,8 +803,8 @@ def main():
     co.meas.find_non_convex_edges_lims(co.masks.calib_edges)
     print\
         timeit.timeit(lambda: main_process(binarm3d.copy(),
-                                           binarm3d_positions, 0, CONST), number=100) / 100
-    profile.runctx('main_process(binarm3d,binarm3d_positions,0,CONST)',
+                                           binarm3d_positions, 0), number=100) / 100
+    profile.runctx('main_process(binarm3d,binarm3d_positions,0)',
                    globals(), locals())
     # main_process(binarm3d.copy(), binarm3d_positions)
 
@@ -811,7 +816,7 @@ def main():
         rot_mat[1, 2] += np.floor(cols / 2.0 - rows / 2.0)
         binarm3d_positions = np.transpose(np.nonzero(np.ones_like(
             binarm3d[:, :, 0]))).reshape(binarm3d.shape[:-1] + (2,))
-        main_process(binarm3d.copy(), binarm3d_positions, 1, CONST)
+        main_process(binarm3d.copy(), binarm3d_positions, 1)
         binarm3d = 255 * \
             ((cv2.warpAffine(binarm3d, rot_mat, (rows, cols))) > 0).astype(np.uint8)
         co.masks.calib_edges = np.pad(np.zeros((
@@ -820,9 +825,4 @@ def main():
         co.meas.find_non_convex_edges_lims(co.masks.calib_edges)
 
 if __name__ == '__main__':
-    with open("config.yaml", 'r') as stream:
-        try:
-            CONST = yaml.load(stream)
-        except yaml.YAMLError as exc:
-            print exc
     main()

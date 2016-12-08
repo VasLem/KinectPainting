@@ -21,11 +21,6 @@ import helping_functs as hf
 import class_objects as co
 
 PROCESS = None
-with open("config.yaml", 'r') as stream:
-    try:
-        CONST = yaml.load(stream)
-    except yaml.YAMLError as exc:
-        print exc
 
 
 
@@ -45,7 +40,7 @@ def signal_handler(sig, frame):
     '''
     print '\nGot SIGINT'
     print 'Exiting...'
-    if CONST['stream'] == 'live':
+    if co.CONST['stream'] == 'live':
         PROCESS.stop()
     else:
         os.killpg(PROCESS.pid, signal.SIGINT)
@@ -72,8 +67,7 @@ def improve_final_mask():
 def frame_process():
     '''main function for frame processing'''
     co.masks.final_mask, co.contours.arm_contour, \
-        co.contours.sorted_contours, _ = moda.find_moving_object(
-            CONST)
+        co.contours.sorted_contours, _ = moda.find_moving_object()
     if isinstance(co.masks.final_mask, str):
         print co.masks.final_mask
         return co.masks.final_mask
@@ -92,7 +86,7 @@ def frame_process():
         co.contours.arm_contour).squeeze().astype(int)
     #start2 = time.time()
     # co.points.wristpoints, co.contours.hand = pda.detect_wrist(
-    #    CONST)
+    #    co.CONST)
     # end2=time.time()
     if isinstance(co.points.wristpoints, str):
         print co.points.wristpoints
@@ -103,7 +97,7 @@ def frame_process():
     convexity_defects.hand = cv2.convexityDefects(co.contours.hand, hulls.hand)'''
     co.points.x_hand, co.points.y_hand, co.meas.w_hand, co.meas.h_hand = cv2.boundingRect(
         co.contours.hand)
-    ''' CONST.gauss_win_size = 7
+    ''' co.CONST.gauss_win_size = 7
     sigma= 3
     Rg = range(-(gauss_win_size - 1) / 2, (gauss_win_size - 1) / 2 + 1)
     Y, X = np.meshgrid(Rg, Rg)
@@ -147,8 +141,8 @@ def frame_process():
 
 def initialise_global_vars():
     '''Initialise some of the global class objects'''
-    co.models.noise_model = moda.init_noise_model(CONST)
-    co.masks.calib_edges = cv2.imread(CONST['cal_edges_path'], -1)
+    co.models.noise_model = moda.init_noise_model()
+    co.masks.calib_edges = cv2.imread(co.CONST['cal_edges_path'], -1)
     co.masks.calib_edges[co.masks.calib_edges<np.max(co.masks.calib_edges)]=0
     co.counters.aver_count = 0
     co.data.depth_im = co.data.initial_im_set[:, :, 0]
@@ -157,7 +151,7 @@ def initialise_global_vars():
                      co.meas.min1] = np.max(co.data.depth_im)
     co.meas.min2 = np.min(co.data.depth_im[co.data.depth_im > 0])
     co.meas.least_resolution = co.meas.min2 - co.meas.min1
-    co.thres.depth_thres = co.meas.least_resolution * CONST['depth_thres']
+    co.thres.depth_thres = co.meas.least_resolution * co.CONST['depth_thres']
     co.meas.imy, co.meas.imx = co.data.depth_im.shape
     return co.counters, co.data, co.masks, co.meas, co.models, co.thres
 
@@ -170,21 +164,21 @@ class Kinect(object):
         self.initial_im_set_list = []
         self.vars = self.initial_im_set_list
         global PROCESS
-        print 'Detection method is set to:', CONST['detection_method']
-        if CONST['detection_method'] == 'segmentation':
+        print 'Detection method is set to:', co.CONST['detection_method']
+        if co.CONST['detection_method'] == 'segmentation':
             print 'Segmentation Data file is: ' +\
-                CONST['segmentation_data'] + '.pkl'
+                co.CONST['segmentation_data'] + '.pkl'
             co.segclass.exists_previous_segmentation = os.path.isfile(
-                CONST['segmentation_data'] + '.pkl')
+                co.CONST['segmentation_data'] + '.pkl')
             if co.segclass.exists_previous_segmentation:
                 print 'Existing previous background segmentation'
                 print 'Loading from memory...'
                 (co.segclass, co.meas) = pickle.load(
-                    open(CONST['segmentation_data'] + '.pkl', 'rb'))
+                    open(co.CONST['segmentation_data'] + '.pkl', 'rb'))
                 co.segclass.exists_previous_segmentation = True
                 print 'Loaded previous setup'
-        print 'Streaming is set to:', CONST['stream']
-        if CONST['stream'] == 'live':
+        print 'Streaming is set to:', co.CONST['stream']
+        if co.CONST['stream'] == 'live':
             print 'Initialising Kinect Stream...'
             node = roslaunch.core.Node("kinect2_bridge", "kinect2_bridge")
             # rospy.set_param('fps_limit',10)
@@ -193,11 +187,11 @@ class Kinect(object):
             PROCESS = launch.launch(node)
             if PROCESS.is_alive():
                 print 'Starting subscribers to Kinect..'
-        elif CONST['stream'] == 'recorded':
-            print 'Starting streaming of rosbag file:', CONST['bag_path']
+        elif co.CONST['stream'] == 'recorded':
+            print 'Starting streaming of rosbag file:', co.CONST['bag_path']
             PROCESS = subprocess.Popen(
                 'rosbag play -l -q ' +
-                CONST['bag_path'],
+                co.CONST['bag_path'],
                 stdin=subprocess.PIPE, shell=True,
                 preexec_fn=os.setsid)
             signal.signal(signal.SIGTSTP, rosbag_handler)
@@ -226,9 +220,9 @@ class Kinect(object):
                 (co.meas.imy + 2) * (co.meas.imx + 2))
             co.data.depth3d = np.tile(
                 co.data.depth_im[:, :, None], (1, 1, 3))
-        if co.counters.im_number <= CONST['calib_secs'] * CONST['framerate'] - 1:
+        if co.counters.im_number <= co.CONST['calib_secs'] * co.CONST['framerate'] - 1:
             self.initial_im_set_list.append(co.data.depth_im)
-        elif co.counters.im_number == CONST['calib_secs'] * CONST['framerate']:
+        elif co.counters.im_number == co.CONST['calib_secs'] * co.CONST['framerate']:
             co.data.initial_im_set = np.rollaxis(
                 np.array(self.initial_im_set_list), 0, 3)
             co.counters, co.data, co.masks, \
@@ -248,8 +242,8 @@ class Kinect(object):
                 print 'SUCCESS'
 
         co.counters.im_number += 1
-        if CONST['results'] == 'display':
-            co.im_results.show_results('stdout', CONST['framerate'])
+        if co.CONST['results'] == 'display':
+            co.im_results.show_results('stdout', co.CONST['framerate'])
         return
 
     def detection_with_segmentation(self):
@@ -265,15 +259,15 @@ class Kinect(object):
             co.meas.imy, co.meas.imx = co.data.depth_im.shape
             co.meas.nprange = np.arange((co.meas.imy + 2) * (co.meas.imx + 2))
             co.segclass.all_objects_im = np.zeros_like(co.data.depth_im)
-        if co.counters.im_number < CONST['framerate'
-                                        ] * CONST['calib_secs']:
+        if co.counters.im_number < co.CONST['framerate'
+                                        ] * co.CONST['calib_secs']:
             self.initial_im_set_list.append(co.data.depth_im)
         elif co.counters.im_number ==\
-                CONST['framerate'] * CONST['calib_secs']:
+                co.CONST['framerate'] * co.CONST['calib_secs']:
             co.data.initial_im_set = np.rollaxis(
                 np.array(self.initial_im_set_list), 0, 3)
             moda.extract_background_values()
-        objects_mask = moda.detection_by_scene_segmentation(CONST)
+        objects_mask = moda.detection_by_scene_segmentation()
 
         '''
         try:
@@ -294,18 +288,18 @@ class Kinect(object):
                 depth, desired_encoding="passthrough")
             co.data.color_im = self.bridge.imgmsg_to_cv2(
                 color, desired_encoding="passthrough")
-            co.data.depth_im = (co.data.depth_im) / float(CONST['max_depth'])
+            co.data.depth_im = (co.data.depth_im) / float(co.CONST['max_depth'])
 
         except CvBridgeError as err:
             print err
 
         if co.flags.exists_lim_calib_image:
-            co.noise_proc.remove_noise(CONST)
-            if CONST['detection_method'] == 'segmentation':
+            co.noise_proc.remove_noise()
+            if co.CONST['detection_method'] == 'segmentation':
                 self.detection_with_segmentation()
             else:
                 self.detection_with_noise_model()
-            if CONST['save'] == 'y':
+            if co.CONST['save'] == 'y':
                 if co.counters.save_im_num > co.lims.max_im_num_to_save - 1:
                     co.data.depth[co.counters.save_im_num %
                                   co.lims.max_im_num_to_save] = co.data.depth_im
@@ -313,13 +307,13 @@ class Kinect(object):
                     co.data.depth.append(co.data.depth_im)
                 co.counters.save_im_num += 1
 
-            if CONST['results'] == 'display':
+            if co.CONST['results'] == 'display':
                 co.im_results.show_results(
                     'ros', [self.image_pub, self.bridge])
         else:
-            if co.counters.im_number <= 10 * CONST['framerate'] - 1:
+            if co.counters.im_number <= 10 * co.CONST['framerate'] - 1:
                 self.initial_im_set_list.append(co.data.depth_im)
-            elif co.counters.im_number == 10 * CONST['framerate']:
+            elif co.counters.im_number == 10 * co.CONST['framerate']:
                 co.data.initial_im_set = np.rollaxis(
                     np.array(self.initial_im_set_list), 0, 3)
                 co.masks.tmp = np.zeros(
@@ -342,23 +336,23 @@ class Kinect(object):
                     co.contours.frame_index, 255, -1)
                 cv2.imshow('Calibration_Edges', co.masks.calib_edges)
                 cv2.waitKey(0)
-                cv2.imwrite(CONST['cal_edges_path'], co.masks.calib_edges)
-                cv2.imwrite(CONST['cal_frame_path'], co.masks.calib_frame)
+                cv2.imwrite(co.CONST['cal_edges_path'], co.masks.calib_edges)
+                cv2.imwrite(co.CONST['cal_frame_path'], co.masks.calib_frame)
                 sys.exit()
             co.counters.im_number += 1
 
 
 def main():
     """Main Function"""
-    co.lims.max_im_num_to_save = CONST['max_depth_im_num_to_save']
-    co.thres.lap_thres = CONST['lap_thres']
-    co.flags.read = CONST['read']
-    if not os.path.isfile(CONST['cal_edges_path']):
+    co.lims.max_im_num_to_save = co.CONST['max_depth_im_num_to_save']
+    co.thres.lap_thres = co.CONST['lap_thres']
+    co.flags.read = co.CONST['read']
+    if not os.path.isfile(co.CONST['cal_edges_path']):
         co.flags.exists_lim_calib_image = 0
     else:
         co.flags.exists_lim_calib_image = 1
-        co.masks.calib_frame = cv2.imread(CONST['cal_frame_path'], 0)
-        co.masks.calib_edges = cv2.imread(CONST['cal_edges_path'], 0)
+        co.masks.calib_frame = cv2.imread(co.CONST['cal_frame_path'], 0)
+        co.masks.calib_edges = cv2.imread(co.CONST['cal_edges_path'], 0)
         co.masks.calib_frame[
             co.masks.calib_frame<0.9*np.max(co.masks.calib_frame)]=0
         co.masks.calib_edges[
@@ -368,13 +362,13 @@ def main():
         cv2.dilate(co.masks.calib_edges,np.ones((3,3),np.uint8),cv2.CV_8U)
         '''
     if co.flags.read == 'd':
-        co.paths.depth = CONST['path_depth']
-        # path_color=CONST['path_color']
+        co.paths.depth = co.CONST['path_depth']
+        # path_color=co.CONST['path_color']
         co.data.depth = hf.im_load(co.paths.depth, 'Depth')
         #data_color=hf.im_load(path_color, 'Color')
     if co.flags.read == 'f':
-        co.data.depth = np.load(CONST['save_depth'] + '.npy')
-        # data_color=np.load(CONST['save_color']+'.npy')
+        co.data.depth = np.load(co.CONST['save_depth'] + '.npy')
+        # data_color=np.load(co.CONST['save_color']+'.npy')
     elif co.flags.read == 'k':
         Kinect()
         rospy.init_node('kinect_stream', anonymous=True)
@@ -385,24 +379,24 @@ def main():
                 'program to exit'
         rospy.spin()
         print "Shutting down"
-        if CONST['stream'] == 'live':
+        if co.CONST['stream'] == 'live':
             PROCESS.stop()
         else:
             # PROCESS.terminate()
             os.killpg(PROCESS.pid, signal.SIGINT)
-    co.flags.save = CONST['save']
+    co.flags.save = co.CONST['save']
     if co.flags.save == 'y':
-        np.save(CONST['save_depth'], co.data.depth)
-        #np.save(CONST['save_color'], data_color)
+        np.save(co.CONST['save_depth'], co.data.depth)
+        #np.save(co.CONST['save_color'], data_color)
     if co.flags.read != 'k':
         co.lims.init_n = 9
-        # n=2*CONST['framerate']
+        # n=2*co.CONST['framerate']
         co.data.initial_im_set = co.data.depth[:, :, :co.lims.init_n]
         co.counters, co.data, co.masks, co.meas, co.models, co.thres = initialise_global_vars()
         for count in range(co.lims.init_n, np.array(co.data.depth).shape[2]):
             co.data.depth_im = np.array(co.data.depth)[:, :, count]
             frame_process()
-            cv2.waitKey(1000 / CONST['framerate'])
+            cv2.waitKey(1000 / co.CONST['framerate'])
 
 
 if __name__ == '__main__':

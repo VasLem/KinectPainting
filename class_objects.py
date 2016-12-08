@@ -3,7 +3,8 @@ import cv2
 from math import pi
 import time
 from cv_bridge import CvBridge, CvBridgeError
-
+import yaml
+from __init__ import *
 
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
@@ -203,6 +204,8 @@ class Measure(object):
         self.all_positions = np.zeros(1)
         self.background = np.zeros(1)
         self.found_objects_mask = np.zeros(0)
+        self.hand_patch=None
+        self.hand_patch_pos=None
 
     def find_non_convex_edges_lims(self, edges_mask, edge_tolerance=10):
         '''
@@ -276,11 +279,11 @@ class Model(object):
 
 class NoiseRemoval:
 
-    def remove_noise(self, constants):
+    def remove_noise(self):
         # All noisy pixels are either white or black. We must remove this shit.
         time1 = time.clock()
-        data.depth_im *= data.depth_im < constants['noise_thres']
-        data.depth_im /= constants['noise_thres']
+        data.depth_im *= data.depth_im < CONST['noise_thres']
+        data.depth_im /= CONST['noise_thres']
         time2 = time.clock()
 
 
@@ -605,15 +608,15 @@ class Segmentation(object):
                 np.sum(self.proximity_table
                        == count, axis=0)
 
-    def find_objects(self, constants):
+    def find_objects(self):
         time1 = time.clock()
         check_atoms = []
         # nz_objects.center at the beginning of center list so following is
         # valid
         for count1, vec in\
                 enumerate(self.nz_objects.center_displacement):
-            if (abs(vec[0]) > constants['min_displacement'] or abs(vec[1]) >
-                    constants['min_displacement']):
+            if (abs(vec[0]) > CONST['min_displacement'] or abs(vec[1]) >
+                    CONST['min_displacement']):
                 if np.linalg.norm(vec) > 0:
                     check_atoms.append(count1)
         sliced_proximity = list(self.proximity_table[:, check_atoms].T)
@@ -661,7 +664,7 @@ class Segmentation(object):
                         neighborhood_xs, neighborhood_ys]
                     vals = ((np.abs(valid_values.astype(float)
                                     - vals.astype(float))).astype(np.uint8) >
-                            constants['depth_tolerance']) * (vals > 0)
+                            CONST['depth_tolerance']) * (vals > 0)
                 else:  # nz_objects here
                     locs = self.nz_objects.locs[
                         :self.nz_objects.pixsize[neighbor],
@@ -673,7 +676,7 @@ class Segmentation(object):
                         :self.nz_objects.pixsize[neighbor]]
                     vals = (np.abs(last_vals -
                                    init_vals) >
-                            constants['depth_tolerance']) * (last_vals > 0)
+                            CONST['depth_tolerance']) * (last_vals > 0)
                     neighborhood_xs = np.real(locs).astype(int)
                     neighborhood_ys = np.imag(locs).astype(int)
 
@@ -741,7 +744,11 @@ class Threshold(object):
     def __init__(self):
         self.lap_thres = 0
         self.depth_thres = 0
-
+with open(CONST_LOC+"/config.yaml", 'r') as stream:
+    try:
+        CONST = yaml.load(stream)
+    except yaml.YAMLError as exc:
+        print exc
 # pylint: disable=C0103
 contours = Contour()
 counters = Counter()

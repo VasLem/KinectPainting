@@ -1,4 +1,3 @@
-import yaml
 import numpy as np
 import math
 import cv2
@@ -90,12 +89,12 @@ def compute_contour_indices(winsize):
                                                    + 1) *
                                                   (winsize - 1) / 4)).tolist()
 
-def find_largest_line_segments(constants):
+def find_largest_line_segments():
     '''Find largest line segments with some angle tolerance specified by
     cutoff_angle_ratio and after that join them'''
     perform_initial_grouping()
-    compute_contour_indices(constants['interp_window'])
-    angle_thres = math.pi / constants['cutoff_angle_ratio']
+    compute_contour_indices(co.CONST['interp_window'])
+    angle_thres = math.pi / co.CONST['cutoff_angle_ratio']
     line_window_size = 1
     segment = []
     # The co.interpolated co.contours.arm_contour is transversed multiple times, in
@@ -162,7 +161,7 @@ def find_largest_line_segments(constants):
         final_segments, key=lambda segment: segment[0])
 
 
-def detect_wrist(constants):
+def detect_wrist():
     '''Detect wrist points'''
     # Find hand entry co.points into image (corners)
     contour_corners, corn_ind = detect_corners()
@@ -178,7 +177,7 @@ def detect_wrist(constants):
     co.contours.hand_centered_contour = co.contours.hand_centered_contour[
         corn_ind[1]:corn_ind[0] + 1]
     # Interpolate contour so as to get polygonal approximation
-    winsize = constants['interp_window']
+    winsize = co.CONST['interp_window']
     co.interpolated.points = interpolate(
         co.contours.hand_centered_contour, winsize)
     if co.interpolated.points.shape[0] <= 1:
@@ -188,7 +187,7 @@ def detect_wrist(constants):
     if len(co.meas.interpolated_contour_angles) == 0:
         print co.interpolated.points
         print "check helping_functs for errors in compute_angles"
-    find_largest_line_segments(constants)
+    find_largest_line_segments()
 
     # Print found segments result.
     interpolated_contour_im = 255 * np.ones((co.meas.imy, co.meas.imx))
@@ -209,11 +208,11 @@ def detect_wrist(constants):
     approved_segments = []
     wearing_par1 = 1
     lengths = []
-    wearing_rate = constants['wearing_dist_rate']
-    lam_weight = constants['lambda_power_weight']
-    len_rat_weight = constants['length_ratio_power_weight']
-    max_length_weight = constants['length_power_weight']
-    check_segments_num = constants['num_of_checked_segments']
+    wearing_rate = co.CONST['wearing_dist_rate']
+    lam_weight = co.CONST['lambda_power_weight']
+    len_rat_weight = co.CONST['length_ratio_power_weight']
+    max_length_weight = co.CONST['length_power_weight']
+    check_segments_num = co.CONST['num_of_checked_segments']
     for count1, segment1 in enumerate(co.contours.final_segments[0:check_segments_num - 1]):
         wearing_par2 = 1
         st1_ind, en1_ind, _, _ = segment1
@@ -272,7 +271,7 @@ def detect_wrist(constants):
             else:
              cv2.line(im_tmp_result, tuple(st2), tuple(en2), [1, 0, 0], 2)
             cv2.imshow('im_tmp_result', im_tmp_result)
-            cv2.waitKey(1000/constants['framerate'])
+            cv2.waitKey(1000/co.CONST['framerate'])
             '''
             wearing_par2 += -wearing_rate
             count2 = count2 - 1

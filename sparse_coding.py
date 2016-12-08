@@ -7,7 +7,7 @@ from numpy import sum as npsum
 from numpy import abs as npabs
 import scipy.optimize as optimize
 from scipy.optimize import fmin_tnc
-
+import class_objects as co
 
 class FeatureSignSearch(object):
 
@@ -24,6 +24,9 @@ class FeatureSignSearch(object):
         self.prev_err = 0
         self.curr_error = 0
         self.allow_big_vals=False
+        self.des_dim=100
+        self.dist_sigma=0.1
+        self.dist_beta=0.005
 
     def flush_variables(self):
         self.active_set = None
@@ -59,13 +62,23 @@ class FeatureSignSearch(object):
         res = (square_term + gamma * dot(theta.T, vecs))
         return res
 
-    def feature_sign_search_algorithm(self, inp_features, des_dim,
-                                      dist_sigma=1, dist_beta=1,
-                                      init_bmat=None,acondtol=1e-3,
-                                      display_error=0):
+    def feature_sign_search_algorithm(self,
+                                      inp_features,
+                                      des_dim=0,
+                                      dist_sigma=0,
+                                      dist_beta=0,
+                                      init_bmat=None,
+                                      acondtol=1e-3,
+                                      display_error=False):
         '''
         Returns sparse features representation
         '''
+        if des_dim==0:
+            des_dim=self.des_dim
+        if dist_sigma==0:
+            dist_sigma=self.dist_sigma
+        if dist_beta==0:
+            dist_beta=self.dist_beta
         self.inp_features = inp_features.copy()
         feat_dim = inp_features.shape[0]
         # Step 1
@@ -73,8 +86,7 @@ class FeatureSignSearch(object):
         self.prev_err = np.linalg.norm(self.inp_features)
         btb = dot(self.bmat.T, self.bmat)
         btf = dot(self.bmat.T, self.inp_features)
-        gamma=min(0.0001,np.max(-2*btf)/10)
-        #gamma = 2 * dist_sigma**2 * dist_beta
+        gamma=min([2*self.dist_sigma**2*self.dist_beta,co.CONST['max_gamma'],np.max(-2*btf)/10])
         # Set max iterations
         step2 = 1
         singularity_met=False
@@ -334,20 +346,24 @@ def main():
         lena_sparse = FeatureSignSearch()
         wolves_sparse = FeatureSignSearch()
         if count>1:
-            lena_sparse.bmat=bmat
-            wolves_sparse.bmat=bmat
+            init_bmat=bmat.copy()
+        else:
+            init_bmat=None
         lena_sparse.max_iter=500
         wolves_sparse.max_iter=500
         inp_features1 = test.ravel()[:, None]
         inp_features2 = test2.ravel()[:, None]
-        des_dim = 2 * inp_features1.shape[0]
-        dist_sigma = 0.01
-        dist_beta = 0.01
+        lena_sparse.des_dim = 2 * inp_features1.shape[0]
+        lena_sparse.dist_sigma = 0.01
+        lena_sparse.dist_beta = 0.01
         lena_error = lena_sparse.feature_sign_search_algorithm(
-            inp_features1, des_dim, dist_sigma, dist_beta,display_error=False)
-        wolves_sparse.bmat=lena_sparse.bmat.copy()
+            inp_features1, init_bmat=init_bmat, display_error=False)
+        wolves_sparse.des_dim = 2 * inp_features1.shape[0]
+        wolves_sparse.dist_sigma = 0.01
+        wolves_sparse.dist_beta = 0.01
         wolves_error = wolves_sparse.feature_sign_search_algorithm(
-            inp_features2, des_dim, dist_sigma, dist_beta,display_error=False)
+            inp_features2, init_bmat=lena_sparse.bmat.copy(),
+            display_error=False)
         if count==0:
             print 'Sparse features initialisation'
             print '\tLena:Previous Error:', lena_sparse.prev_err

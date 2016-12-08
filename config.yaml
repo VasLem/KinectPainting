@@ -58,6 +58,11 @@ length_ratio_power_weight: 1
 length_power_weight: 1.5
 num_of_checked_segments: 10
 lambda_bound: 0.3
+
+
+#Variables for feature extraction
+min_frame_count_diff: 5
+max_gamma: 0.0001
 #Show results and where (display,file,no)
 results: display
 
