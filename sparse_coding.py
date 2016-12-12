@@ -10,7 +10,7 @@ from scipy.optimize import fmin_tnc
 import class_objects as co
 
 
-class FeatureSignSearch(object):
+class SparseCoding(object):
 
     def __init__(self):
         self.bmat = None
@@ -35,14 +35,16 @@ class FeatureSignSearch(object):
         Empty variables
         '''
         self.active_set = None
+        self.theta = None
         self.inp_features = None
         self.out_features = None
 
-    def initialise_vars(self, feat_dim, des_dim, init_bmat=None):
+    def initialize(self, feat_dim, des_dim,
+                   init_bmat=None, flush_variables=False):
         '''
         Initialises B dictionary and s
         '''
-        if self.bmat is None:
+        if (self.bmat is None) or flush_variables:
             if init_bmat is not None:
                 if init_bmat.shape[0] == feat_dim and init_bmat.shape[1] == des_dim:
                     self.bmat = init_bmat.copy()
@@ -58,7 +60,7 @@ class FeatureSignSearch(object):
                 sigm = np.sqrt(npsum(self.bmat * self.bmat, axis=0))
                 sigm[sigm == 0] = 1
                 self.bmat /= sigm
-        if self.out_features is None:
+        if (self.out_features is None) or flush_variables:
             self.out_features = zeros((des_dim, 1))
             self.active_set = zeros((des_dim), bool)
             self.theta = zeros_like(self.out_features)
@@ -93,7 +95,7 @@ class FeatureSignSearch(object):
         self.inp_features = inp_features.copy()
         feat_dim = inp_features.shape[0]
         # Step 1
-        self.initialise_vars(feat_dim, des_dim, init_bmat)
+        self.initialize(feat_dim, des_dim, init_bmat)
         self.prev_err = np.linalg.norm(self.inp_features)
         btb = dot(self.bmat.T, self.bmat)
         btf = dot(self.bmat.T, self.inp_features)
@@ -343,8 +345,8 @@ def main():
     bmat = None
     for count in range(4):
         print 'Iteration', count
-        lena_sparse = FeatureSignSearch()
-        wolves_sparse = FeatureSignSearch()
+        lena_sparse = SparseCoding()
+        wolves_sparse = SparseCoding()
         if count > 1:
             init_bmat = bmat.copy()
         else:
@@ -384,7 +386,7 @@ def main():
         else:
             out_features1 = lena_sparse.out_features.copy()
             out_features2 = wolves_sparse.out_features.copy()
-            dictionary = FeatureSignSearch()
+            dictionary = SparseCoding()
             dictionary.bmat = lena_sparse.bmat.copy()
             dictionary.out_features = concatenate((out_features1,
                                                    out_features2), axis=1)
