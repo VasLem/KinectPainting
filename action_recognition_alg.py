@@ -10,6 +10,10 @@ import cv2
 import class_objects as co
 import sparse_coding as sc
 import hand_segmentation_alg as hsa
+import hist4d as h4d
+from matplotlib import pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.widgets import Button
 import cPickle as pickle
 
 # Kinect Intrinsics
@@ -21,8 +25,10 @@ FLNT = 540.68603515625
 # Senz3d Intrinsics
 PRIM_X = 317.37514566554989
 PRIM_Y = 246.61273826510859
-FLNT = 595.333159044648
+FLNT = 595.333159044648/(30.48/1000.0)
 
+
+logging.basicConfig(format='%(levelname)s:%(message)s')
 
 def checktypes(objects, classes):
     '''
@@ -50,8 +56,11 @@ def grad_angles(patch):
     '''
     Compute gradient angles on image patch for GHOG
     '''
-    gradx, grady = np.gradient(patch)
-    return np.arctan(grady, gradx)  # returns values 0 to pi
+    gradx, grady = np.gradient(patch.astype(float))
+    ang=np.arctan2(grady,gradx)
+    ang[ang<0]=pi+ang[ang<0]
+
+    return ang.ravel()  # returns values 0 to pi
 
 
 def prepare_dexter_im(img):
@@ -59,23 +68,22 @@ def prepare_dexter_im(img):
     Compute masks for images
     '''
     binmask = img < 6000
-    mask = np.zeros_like(img)
-    mask[binmask] = img[binmask]
-    mask = mask / (np.max(mask)).astype(float)
     contours = cv2.findContours(
         (binmask).astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
     contours_area = [cv2.contourArea(contour) for contour in contours]
     hand_contour = contours[np.argmax(contours_area)].squeeze()
-    hand_patch = mask[np.min(hand_contour[:, 1]):np.max(hand_contour[:, 1]),
-                      np.min(hand_contour[:, 0]):np.max(hand_contour[:, 0])]
+    hand_patch = img[np.min(hand_contour[:, 1]):np.max(hand_contour[:, 1]),
+                     np.min(hand_contour[:, 0]):np.max(hand_contour[:, 0])]
+    hand_patch_max=np.max(hand_patch)
+    hand_patch[hand_patch==hand_patch_max]=0
+    img[img==hand_patch_max]=0
     med_filt = np.median(hand_patch[hand_patch != 0])
-    binmask[np.abs(mask - med_filt) > 0.2] = False
-    hand_patch[np.abs(hand_patch - med_filt) > 0.2] = 0
-    hand_patch *= 256
-    hand_patch = hand_patch.astype(np.uint8)
+    thres=np.min(img)+0.1*(np.max(img)-np.min(img))
+    binmask[np.abs(img - med_filt) > thres] = False
+    hand_patch[np.abs(hand_patch - med_filt) > thres] = 0
     hand_patch_pos = np.array(
         [np.min(hand_contour[:, 1]), np.min(hand_contour[:, 0])])
-    return ((256 * mask).astype(np.uint8)) * binmask,\
+    return img * binmask,\
         hand_patch, hand_patch_pos
 
 
@@ -85,30 +93,23 @@ class SpaceHistogram(object):
     '''
 
     def __init__(self):
-        self.binarized_space = []
-        self.bin_size = 0
-
-    def binarize_3d(self):
-        '''
-        Initialize Histrogram for 3DHOF
-        '''
-        b_x = np.linspace(-1.0, 1.0, self.bin_size)
-        b_y = np.linspace(-1.0, 1.0, self.bin_size)
-        b_z = np.linspace(-1.0, 1.0, self.bin_size)
-        self.binarized_space = [b_x, b_y, b_z]
-
-    def binarize_1d(self):
-        '''
-        Initialize Histogram for GHOG
-        '''
-        self.binarized_space = [np.linspace(0.0, pi, self.bin_size)]
+        self.bin_size = None
+        self.range=None
 
     def hist_data(self, sample):
         '''
-        Compute N-D histograms
+        Compute normalized N-D histograms
         '''
-        return np.histogramdd(sample, self.binarized_space, normed=True)[0].ravel()
-
+        logging.debug('hist inp:'+ str(sample.shape))
+        logging.debug('\tmax:'+ str(sample.max()))
+        logging.debug('\tmin:'+str(sample.min()))
+        weights = np.ones(sample.shape[0])/float(sample.shape[0])
+        hist,edges=np.histogramdd(sample, self.bin_size,range=self.range,
+                                  weights=weights)
+        logging.debug('hist outp:' + str(hist.shape))
+        logging.debug('\tmax:'+str(hist.max()))
+        logging.debug('\tmin:'+str(hist.min()))
+        return hist,edges
 
 class Action(object):
     '''
@@ -186,10 +187,10 @@ class Actions(object):
             del self.actions[act_num]
 
     def add_action(self, dictionaries=None,
-                   features_extract=None,
                    depthdata=None,
                    masksdata=None,
-                   use_dexter=True):
+                   use_dexter=True,
+                   visualize_=False):
         '''
         features_extract= FeatureExtraction Class
         dictionaries= SparseDictionaries Class
@@ -197,7 +198,9 @@ class Actions(object):
         masksdata=>Only used when use_dexter is False=>
             (Directory with hand masks) OR (list of hand masks)
         use_dexter= True if Dexter 1 TOF Dataset is used
+        visualize= True to visualize features extracted from frames
         '''
+        features_extract = FeatureExtraction(visualize_=visualize_)
         checktypes([dictionaries, features_extract], [
             SparseDictionaries, FeatureExtraction])
         if depthdata is None:
@@ -229,6 +232,8 @@ class Actions(object):
             features = features_extract.extract_features()
             # Save action to actions object
             if features is not None:
+                if visualize_:
+                    features_extract.visualize() 
                 if len(dictionaries.dicts) == 0:
                     self.actions[-1].add_features(features=features)
                 else:
@@ -239,6 +244,7 @@ class Actions(object):
 
                     self.actions[-1].add_features(features=features,
                                                   sparse_features=sparse_features)
+                
         return
 
     def update_sparse_features(self, dicts,
@@ -413,13 +419,15 @@ class FeatureExtraction(object):
     Features computation class
     '''
 
-    def __init__(self):
+    def __init__(self,visualize_=False):
         self.features = np.zeros(0)
         self.prev_projection = np.zeros(0)
         self.curr_projection = np.zeros(0)
         self.roi = np.zeros(0)
         self.prev_patch = None
         self.curr_patch = None
+        self.prev_roi_patch = None
+        self.curr_roi_patch = None
         self.prev_patch_pos = None
         self.curr_patch_pos = None
         self.prev_count = 0
@@ -428,21 +436,42 @@ class FeatureExtraction(object):
         self.curr_depth_im = np.zeros(0)
         self.hofhist = SpaceHistogram()
         self.hoghist = SpaceHistogram()
+        self.fig=None
+        self.hof_features=None
+        self.hog_features=None
+        self.hof_plots=None
+        self.hog_plot=None
+        if visualize_:
+            self.view=FeatureVisualization()
+    def visualize(self):
+        self.view.plot_hof(self.hof_features)
+        self.view.plot_hog(self.hog_features)
+        self.view.plot_3d_projection(self.roi,
+                               self.prev_roi_patch,
+                               self.curr_roi_patch)
+        self.view.plot_2d_patches(self.prev_roi_patch,
+                                  self.curr_roi_patch)
+        self.view.draw()
+    
+
 
     def compute_scene_flow(self, prev_depth_im, curr_depth_im):
         '''
         Computes scene flow for 3DHOF
         '''
-        prev_hand_patch = prev_depth_im[self.roi[0, 0]:self.roi[0, 1],
+        self.prev_roi_patch = prev_depth_im[self.roi[0, 0]:self.roi[0, 1],
                                         self.roi[1, 0]:self.roi[1, 1]]
-        curr_hand_patch = curr_depth_im[self.roi[0, 0]:self.roi[0, 1],
+        self.curr_roi_patch = curr_depth_im[self.roi[0, 0]:self.roi[0, 1],
                                         self.roi[1, 0]:self.roi[1, 1]]
-        nonzero_mask = prev_hand_patch + curr_hand_patch
-        yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8)) -
-                     np.array([[PRIM_Y, PRIM_X]]))
-        prev_z_coords = prev_hand_patch[nonzero_mask > 0][:, None] / 255.0
-        curr_z_coords = curr_hand_patch[nonzero_mask > 0][:, None] / 255.0
-        dz_coords = curr_z_coords - prev_z_coords
+        nonzero_mask = (self.prev_roi_patch + self.curr_roi_patch)>0
+        yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8)).astype(float) -
+                     np.array([[PRIM_Y-self.roi[0,0], 
+                                PRIM_X-self.roi[1,0]]]))
+        prev_z_coords = self.prev_roi_patch[nonzero_mask][:,
+                                                          None].astype(float)
+        curr_z_coords = self.curr_roi_patch[nonzero_mask][:,
+                                                          None].astype(float)
+        dz_coords = (curr_z_coords - prev_z_coords).astype(float)
         yx_coords_in_space = yx_coords * dz_coords / FLNT
         return np.concatenate((yx_coords_in_space,
                                dz_coords), axis=1)
@@ -463,14 +492,14 @@ class FeatureExtraction(object):
         '''
         Compute 3DHOF features
         '''
-        if len(self.hofhist.binarized_space) == 0:
-            self.hofhist.bin_size = 4
-            self.hofhist.binarize_3d()
+        if self.hofhist.bin_size is None:
+            self.hofhist.bin_size = 6
+            #self.hofhist.range = [[-1,1],[-1,1],[-1,1]]
         disp = self.compute_scene_flow(prev_depth_im, curr_depth_im)
         disp_norm = np.sqrt((disp[:, 0] * disp[:, 0] + disp[:, 1] *
                              disp[:, 1] + disp[:, 2] * disp[:, 2]))[:, None]
-        disp_norm[disp_norm == 0] = 1
-        disp /= disp_norm
+        disp_norm[disp_norm==0]=1
+        disp /= disp_norm.astype(float)
         return self.hofhist.hist_data(disp)
 
     def ghog(self, depth_im):
@@ -479,11 +508,10 @@ class FeatureExtraction(object):
         '''
         im_patch = depth_im[self.roi[0, 0]:self.roi[0, 1],
                             self.roi[1, 0]:self.roi[1, 1]]
-        if len(self.hoghist.binarized_space) == 0:
+        if self.hoghist.range is None:
             self.hoghist.bin_size = 9
-            self.hoghist.binarize_1d()
-        return self.hoghist.hist_data(grad_angles(im_patch).ravel())
-
+            self.hoghist.range=[[0,pi]]
+        return self.hoghist.hist_data(grad_angles(im_patch))
     def extract_features(self):
         '''
         Returns 3DHOF and GHOG
@@ -493,19 +521,19 @@ class FeatureExtraction(object):
             return None
         self.find_roi(self.prev_patch, self.curr_patch,
                       self.prev_patch_pos, self.curr_patch_pos)
-        hof_features = self.hof3d(
+        self.hof_features = self.hof3d(
             self.prev_depth_im, self.curr_depth_im)
-        hog_features = self.ghog(self.curr_depth_im)
-        return hof_features, hog_features
+        self.hog_features = self.ghog(self.curr_depth_im)
+        return self.hof_features[0].ravel(), self.hog_features[0].ravel()
 
-    def update(self, armmask_uint8, count, hand_patch,
+    def update(self, masked_im, count, hand_patch,
                hand_patch_pos):
         '''
         Update frames
         '''
         (self.prev_depth_im,
          self.curr_depth_im) = (self.curr_depth_im,
-                                armmask_uint8)
+                                masked_im)
         (self.curr_count,
          self.prev_count) = (count,
                              self.curr_count)
@@ -516,28 +544,135 @@ class FeatureExtraction(object):
          self.curr_patch_pos) = (self.curr_patch_pos,
                                  hand_patch_pos)
 
+class Callback(object):
+    def unpause(self):
+        global pause
+        pause ^= True
 
+class FeatureVisualization(object):
+    def __init__(self):
+        import matplotlib.pyplot as plt
+        plt.ion()
+        self.fig=plt.figure()
+        gs=gridspec.GridSpec(120,100)
+        self.patches3d_plot=self.fig.add_subplot(gs[:50,60:100],projection='3d')
+        self.patches2d_plot=self.fig.add_subplot(gs[:50,:50])
+        self.hist4d=h4d.Hist4D()
+        self.hof_plots=(self.fig.add_subplot(gs[60:100-5,:45],projection='3d'),
+                        self.fig.add_subplot(gs[60:100-5,45:50]),
+                        self.fig.add_subplot(gs[100-4:100-2,:50]),
+                        self.fig.add_subplot(gs[100-2:100,:50]))
+        self.pause_key=Button(self.fig.add_subplot(gs[110:120,25:75]),'Next')
+        self.pause_key.on_clicked(self.unpause)
+        self.hog_plot=self.fig.add_subplot(gs[70:100,70:100])
+        plt.show()
+    def plot_hog(self,hog_features):
+            hog_hist,hog_bins=hog_features
+            width = 0.7 * (hog_bins[0][1] - hog_bins[0][0])
+            center = (hog_bins[0][:-1] + hog_bins[0][1:]) / 2
+            self.hog_plot.clear()
+            self.hog_plot.bar(center, hog_hist, align='center', width=width)
+    def plot_hof(self,hof_features):
+            self.hist4d.draw(hof_features[0],hof_features[1],fig=self.fig,all_axes=self.hof_plots)
+    
+    def plot_3d_projection(self, roi, prev_roi_patch, curr_roi_patch):
+        self.patches3d_plot.clear()
+        nonzero_mask = (prev_roi_patch + curr_roi_patch)>0
+        yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8)).astype(float) -
+                     np.array([[PRIM_Y-roi[0,0], 
+                                PRIM_X-roi[1,0]]]))
+        prev_z_coords = prev_roi_patch[nonzero_mask][:,
+                                                          None].astype(float)
+        curr_z_coords = curr_roi_patch[nonzero_mask][:,
+                                                          None].astype(float)
+        dz_coords = (curr_z_coords - prev_z_coords).astype(float)
+        yx_coords_in_space = yx_coords * dz_coords / FLNT
+        prev_yx_proj = yx_coords * prev_z_coords/ (FLNT)
+        curr_yx_proj = yx_coords * curr_z_coords/ (FLNT)
+        prev_yx_proj=prev_yx_proj[prev_z_coords.ravel()!=0]
+        curr_yx_proj=curr_yx_proj[curr_z_coords.ravel()!=0]
+        self.patches3d_plot.scatter(prev_yx_proj[:,1],prev_yx_proj[:,0],
+                                    prev_z_coords[prev_z_coords!=0],
+                                    zdir='z',s=4,c='r',depthshade=False,alpha=0.5)
+        self.patches3d_plot.scatter(curr_yx_proj[:,1],curr_yx_proj[:,0],
+                                    curr_z_coords[curr_z_coords!=0],
+                                    zdir='z',s=4,c='g',depthshade=False,alpha=0.5)
+        '''
+        zprevmin,zprevmax=self.patches3d_plot.get_zlim()
+        yprevmin,yprevmax=self.patches3d_plot.get_ylim()
+        xprevmin,xprevmax=self.patches3d_plot.get_xlim()
+        minlim=min(xprevmin,yprevmin,zprevmin)
+        maxlim=max(xprevmax,yprevmax,zprevmax)
+        self.patches3d_plot.set_zlim([minlim,maxlim])
+        self.patches3d_plot.set_xlim([minlim,maxlim])
+        self.patches3d_plot.set_ylim([minlim,maxlim])
+        '''
+    def plot_3d_patches(self,roi,prev_roi_patch,curr_roi_patch):
+            self.patches3d_plot.clear()
+            x_range =np.arange(roi[0,0],roi[0,1])
+            y_range =np.arange(roi[1,0],roi[1,1])
+            xmesh,ymesh=np.meshgrid(y_range,x_range)
+            xmesh=xmesh.ravel()
+            ymesh=ymesh.ravel()
+            curr_vals=curr_roi_patch.ravel()
+            self.patches3d_plot.scatter(xmesh[curr_vals>0],
+                                      ymesh[curr_vals>0],
+                                      zs=curr_vals[curr_vals>0],
+                                      zdir='z', 
+                                      s=4,
+                                      c='r',
+                                      depthshade=False,
+                                      alpha=0.5)
+            prev_vals=prev_roi_patch.ravel()                          
+            self.patches3d_plot.scatter(xmesh[prev_vals>0],
+                                      ymesh[prev_vals>0],
+                                      zs=prev_vals[prev_vals>0],
+                                      zdir='z', 
+                                      s=4,
+                                      c='g',
+                                      depthshade=False,
+                                      alpha=0.5)
+    def plot_2d_patches(self,prev_roi_patch,curr_roi_patch):
+        self.patches2d_plot.clear()
+        self.patches2d_plot.imshow(prev_roi_patch,cmap='Reds',alpha=0.5)
+        self.patches2d_plot.imshow(curr_roi_patch,cmap='Greens',alpha=0.5)
+    def draw(self):
+            import time
+            self.fig.canvas.draw()
+            try:
+                self.fig.canvas.start_event_loop(30)
+            except:
+                time.sleep(1)
+
+    def unpause(self,val):
+        plt.gcf().canvas.stop_event_loop()
+
+
+#plt.waitforbuttonpress()            
+        
+        
 class ActionRecognition(object):
     '''
     Class to hold everything about action recognition
     '''
 
-    def __init__(self):
-        self.features = FeatureExtraction()
+    def __init__(self,log_lev='WARNING'):
+        
         self.dictionaries = SparseDictionaries()
         self.actions = Actions()
-
+        logging.getLogger().setLevel(log_lev)
     def add_action(self, depthdata=None,
                    masksdata=None,
-                   use_dexter=True):
+                   use_dexter=True,
+                   visualize=False):
         '''
         actions.add_action alias
         '''
         self.actions.add_action(self.dictionaries,
-                                self.features,
                                 depthdata,
                                 masksdata,
-                                use_dexter)
+                                use_dexter,
+                                visualize_=visualize)
 
     def train_sparse_dictionaries(self, act_num=None,
                                   depthdata=None,
@@ -563,9 +698,6 @@ class ActionRecognition(object):
                     iterations, print_info, save_trained, save_path],
                    [int, (list, str, type(None)), (list, str, type(None)), (bool, int),
                     int, (bool, int), (bool, int), (bool, int)])
-        logging.basicConfig(format='%(levelname)s:%(message)s',
-                            level=logging.INFO if print_info else
-                            logging.WARNING)
         if act_num is None and len(self.actions.actions) > 0:
             act_num = 0
         elif len(self.actions.actions) == 0:
@@ -583,7 +715,6 @@ class ActionRecognition(object):
         if depthdata is not None:
             logging.info('Adding action..')
             self.actions.add_action(self.dictionaries,
-                                    self.features,
                                     depthdata,
                                     masksdata,
                                     use_dexter)

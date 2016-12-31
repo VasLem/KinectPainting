@@ -657,7 +657,7 @@ def find_hand(*args):
     # too big, that is thrown away
     same_rad_dists = calculate_chords_lengths(used_polar)
     dist_threshold = ((np.abs(same_rad_dists)
-                       <= co.CONST['dist_tol'] + np.abs(ref_dist)) *
+                       <= co.CONST['dist_tol']*np.abs(ref_dist)) *
                       (np.abs(same_rad_dists) >
                        2 * np.abs(ref_dist) / 3.0))
     if display == 1:

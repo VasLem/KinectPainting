@@ -55,7 +55,7 @@ class Data(object):
         self.initial_im_set = np.zeros(1)
         self.depth_mem = []
         self.reference_uint8_depth_im = np.zeros(1)
-
+        self.depth_raw = None
 
 class ExistenceProbability(object):
     '''
@@ -267,6 +267,9 @@ class Measure(object):
         # Needs filling
         self.convex_edges_lims = []
 
+class Mog2(object):
+    def __init__(self):
+        self.fgbg=None
 
 class Model(object):
     '''variables for modelling nonlinearities'''
@@ -582,6 +585,7 @@ class Segmentation(object):
         self.filled_neighborhoods = []
         self.found_objects = np.zeros(0)
         self.total_obj_num = 0
+        self.fgbg = None
 
     def flush_previous_segmentation(self):
         self.bounding_box = []
@@ -758,6 +762,7 @@ lims = Lim()
 masks = Mask()
 meas = Measure()
 models = Model()
+mog2 = Mog2()
 paths = Path()
 points = Point()
 thres = Threshold()

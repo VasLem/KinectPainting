@@ -9,7 +9,31 @@ import class_objects as co
 import hand_segmentation_alg as hsa
 import action_recognition_alg as ara
 from scipy import ndimage
+import array
+import label_contours
 
+
+
+def detection_by_mog2():
+    if co.mog2.fgbg is None:
+        cv2.ocl.setUseOpenCL(False)
+        co.mog2.fgbg=cv2.createBackgroundSubtractorMOG2(history=500,varThreshold=16,
+                                                        detectShadows=False)
+        co.mog2.fgbg.setNMixtures(2)
+        co.mog2.fgbg.setBackgroundRatio(0.3)
+    found_objects_mask = co.mog2.fgbg.apply((co.data.depth_raw))
+    found_objects_mask[co.data.depth_raw==0]=0
+    found_objects_mask=cv2.morphologyEx(found_objects_mask.copy(),cv2.MORPH_OPEN,
+                                        np.ones((9,9),np.uint8))
+    _,contours,_=cv2.findContours(found_objects_mask.copy(),cv2.CHAIN_APPROX_SIMPLE,
+                                  cv2.RETR_LIST)
+    time1=time.time()
+    
+    labels,filtered_image,_min,_max=label_contours.label(co.data.depth_raw.astype(float),contours,
+                                         med_filt=True,dil_size=51, er_size=7)
+    co.im_results.images.append((labels>0).astype(float))
+    co.im_results.images.append(found_objects_mask)
+    co.im_results.images.append(filtered_image)
 
 def detection_by_scene_segmentation():
     '''Detection of moving object by using Distortion field of centers of mass
@@ -33,6 +57,7 @@ def detection_by_scene_segmentation():
                 co.segclass.needs_segmentation = 0
             else:
                 print 'Segmentation is needed'
+
     if co.segclass.needs_segmentation and co.counters.im_number >= 1:
         if co.counters.im_number == (co.CONST['framerate'] *
                                      co.CONST['calib_secs'] - 1):
@@ -82,13 +107,6 @@ def detection_by_scene_segmentation():
             co.segclass.needs_segmentation = 0
             with open(co.CONST['segmentation_data'] + '.pkl', 'wb') as output:
                 pickle.dump((co.segclass, co.meas), output, -1)
-            '''
-            cv2.imwrite('segments.jpg', co.segclass.segment_values)
-            plt.imshow(co.segclass.nz_objects.image)
-            plt.savefig('nz_partitioned_segments.jpg')
-            plt.imshow(co.segclass.z_objects.image)
-            plt.savefig('z_partitioned_segments.jpg')
-            '''
             print 'Saved segmentation data for future use.'
     elif (not co.segclass.needs_segmentation) and co.counters.im_number >= 2:
         if not co.segclass.initialised_centers:
@@ -137,33 +155,21 @@ def detection_by_scene_segmentation():
                 cv2.MORPH_ELLIPSE, tuple(2 * [10]))
             co.meas.found_objects_mask = cv2.morphologyEx(
                 co.meas.found_objects_mask.astype(np.uint8), cv2.MORPH_OPEN, struct_el)
-
             hand_patch, hand_patch_pos = hsa.main_process(
                 co.meas.found_objects_mask.astype(
                     np.uint8), co.meas.all_positions, 1)
             co.meas.hand_patch=hand_patch
             co.meas.hand_patch_pos=hand_patch_pos
-            if hand_patch.shape[1]:
-                ara.action_recog.update(hand_patch, hand_patch_pos)
-                frame_difference = ara.action_recog.curr_count - ara.action_recog.prev_count
-                if frame_difference < 3 and\
-                        ara.action_recog.prev_patch_pos.shape[0]:
-                    ara.action_recog.extract_features()
             if len(co.im_results.images) == 1:
                 co.im_results.images.append(
                     (255 * co.meas.found_objects_mask).astype(np.uint8))
             co.im_results.images.append(points_on_im)
-            '''
-            elif len(co.im_results.images)==2:
-                co.im_results.images[1][co.im_results.images[1]==0]=(255*points_on_im).astype(np.uint8)[co.im_results.images[1]==0]
-            '''
-            '''
-            if hand_points.shape[1]>1:
-                points_on_im[tuple(hand_points.T)]=[1,0,0]
-            co.im_results.images.append(points_on_im)
-            '''
+            #elif len(co.im_results.images)==2:
+            #    co.im_results.images[1][co.im_results.images[1]==0]=(255*points_on_im).astype(np.uint8)[co.im_results.images[1]==0]
+            #if hand_points.shape[1]>1:
+            #    points_on_im[tuple(hand_points.T)]=[1,0,0]
+            #co.im_results.images.append(points_on_im)
             return 1
-
 
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''

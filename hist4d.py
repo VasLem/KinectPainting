@@ -7,13 +7,46 @@ from matplotlib.widgets import Slider
 import matplotlib.gridspec as gridspec
 import operator
 
+
+class DiscreteSlider(Slider):
+    '''
+    A matplotlib slider widget with discrete steps.
+    '''
+    def __init__(self, *args, **kwargs):
+        """Identical to Slider.__init__, except for the "increment" kwarg.
+        "increment" specifies the step size that the slider will be discritized
+        to."""
+        self.inc = kwargs.pop('increment', 1)
+        Slider.__init__(self, *args, **kwargs)
+
+    def set_val(self, val):
+        discrete_val = int(val / self.inc) * self.inc
+        # We can't just call Slider.set_val(self, discrete_val), because this 
+        # will prevent the slider from updating properly (it will get stuck at
+        # the first step and not "slide"). Instead, we'll keep track of the
+        # the continuous value as self.val and pass in the discrete value to
+        # everything else.
+        xy = self.poly.xy
+        xy[2] = discrete_val, 1
+        xy[3] = discrete_val, 0
+        self.poly.xy = xy
+        self.valtext.set_text(self.valfmt % discrete_val)
+        if self.drawon: 
+            self.ax.figure.canvas.draw()
+        self.val = val
+        if not self.eventson: 
+            return
+        for cid, func in self.observers.iteritems():
+            func(discrete_val)
+
 class Hist4D(object):
     def __init__(self):
         self.fig=None
         self.cubes_info=None
         self.slow=None
         self.shigh=None
-    def draw_cubes(self,_axes, vals, edges, colormap):
+        self.colormap=None
+    def draw_cubes(self,_axes, vals, edges):
         '''
         ax=Axes3D handle
         edges=matrix L+1xM+1xN+1 result of histogramdd
@@ -31,11 +64,6 @@ class Hist4D(object):
         edy = edy[:-1, :-1, :-1].ravel()
         edz = edz[:-1, :-1, :-1].ravel()
         vals = vals.ravel()
-        colormap_scale = colormap.shape[0]
-        tmp = np.arange(colormap_scale-1) / float(colormap_scale - 1)
-        bins = (1 - tmp) * np.min(vals) + tmp * np.max(vals)
-        digitized_vals = np.digitize(vals, bins)
-        valid_vals = colormap[digitized_vals, ...][vals > 0]
         vdraw_cube = np.vectorize(self.draw_cube, excluded='axes')
         cubes_handles = vdraw_cube(_axes, edx[vals>0],
                                    edx_rolled[vals>0],
@@ -43,8 +71,7 @@ class Hist4D(object):
                                    edy_rolled[vals>0],
                                    edz[vals > 0],
                                    edz_rolled[vals > 0],
-                                   valid_vals[:, 0], valid_vals[:, 1],
-                                   valid_vals[:, 2])
+                                   vals[vals>0]/float(np.max(vals)))
         cubes_data = [a for a in zip(vals[vals>0],cubes_handles)]
         self.cubes_info=dict()
         for k, v in cubes_data:
@@ -54,27 +81,32 @@ class Hist4D(object):
         axcolor = 'lightgoldenrodyellow'
         #low_vis = self.fig.add_axes([0.25, 0.1, 0.65, 0.03], axisbg=axcolor)
         #high_vis  = self.fig.add_axes([0.25, 0.15, 0.65, 0.03], axisbg=axcolor)
-        self.slow = Slider(splot1,'low', 0, maxlim, valinit=0)
-        self.shigh = Slider(splot2, 'high', 0 , maxlim, valinit=maxlim)
+        self.slow = Slider(splot1,'low', 0.0, maxlim, valfmt='%0.0f')
+        self.shigh = Slider(splot2, 'high', 0.0 , maxlim, valfmt='%0.0f')
+        
         self.slow.on_changed(self.update)
         self.shigh.on_changed(self.update)
+        self.slow.set_val(0)
+        self.shigh.set_val(maxlim)
     def update(self,val):
         visible = [v for k, v in self.cubes_info.items() if k >
-                   np.floor(self.slow.val) and k<
-                   np.ceil(self.shigh.val)]
+                   self.slow.val and k<=
+                   self.shigh.val]
         invisible = [v for k, v in self.cubes_info.items() if k <=
-                     np.floor(self.slow.val) or k>=
-                     np.ceil(self.shigh.val)]
+                     self.slow.val or k>
+                     self.shigh.val]
+        print len(visible),len(invisible)
         for item in [item for sublist in visible for item in sublist]:
             item.set_alpha(1)
         for item in [item for sublist in invisible for item in sublist]:
             item.set_alpha(0)
+        total=[v for k,v in self.cubes_info.items()]
         self.fig.canvas.draw_idle()
 
     def draw_cube(self,_axes, x1_coord, x2_coord,
                   y1_coord, y2_coord,
                   z1_coord, z2_coord,
-                  colorx, colory, colorz):
+                  color_ind):
         '''
         draw a cube given cube limits and color
         '''
@@ -92,15 +124,15 @@ class Hist4D(object):
         points = np.concatenate((tmp1, tmp2, tmp3), axis=1)
         points = points.T.reshape(6, 4, 3)
         surf = []
-        for count in range(0, 6):
+        for count in range(6):
             surf.append(_axes.plot_surface(points[count, :, 0].reshape(2, 2),
                                           points[count, :, 1].reshape(2, 2),
                                           points[count, :, 2].reshape(2, 2),
-                                          rstride=1,
-                                          cstride=1,
-                                          color=[colorx, colory, colorz],
+                                          color=self.colormap(float(color_ind)),
                                           linewidth=0,
-                                          antialiased=False))
+                                          alpha=0,
+                                          antialiased=True,
+                                          shade=False))
         return surf
 
     def array2cmap(self,X):
@@ -116,52 +148,90 @@ class Hist4D(object):
         cdict = {'red': rd, 'green': gr, 'blue': bl}
         return colors.LinearSegmentedColormap('my_colormap', cdict, N)
 
-    def draw_colorbar(self,_axes,colormap,minval,maxval):
+    def draw_colorbar(self,_axes,unique_vals,cax):
         xmin, xmax = _axes.get_xlim()
         ymin, ymax = _axes.get_ylim()
         zmin, zmax = _axes.get_zlim()
-        invis=_axes.scatter(np.arange(minval,maxval+1),
-                           np.arange(minval,maxval+1),
-                           c=np.arange(minval,maxval+1),
-                           cmap=self.array2cmap(colormap),alpha=1)
+        invis=_axes.scatter(unique_vals,
+                           unique_vals,
+                           c=np.arange(unique_vals.size),
+                           cmap=self.colormap,alpha=1)
         _axes.set_xlim([xmin,xmax])
         _axes.set_ylim([ymin,ymax])
         _axes.set_zlim([zmin,zmax])
-        self.fig.colorbar(invis)
+        cbar=self.fig.colorbar(invis,ax=_axes,cax=cax)
+        cbar.set_ticks(np.linspace(0,np.size(unique_vals),5))
+        cbar.set_ticklabels(np.around(np.linspace(0,np.max(unique_vals),5),2))
+
         invis.set_alpha(0)
     def create_brightness_colormap(self,principal_rgb_color, scale_size):
         '''
         Create brightness colormap based on one principal RGB color
         '''
-        norm=plt.Normalize()
         if np.any(principal_rgb_color > 1):
             raise Exception('principal_rgb_color values should  be in range [0,1]')
-        from matplotlib import colors
         hsv_color = colors.rgb_to_hsv(principal_rgb_color)
         hsv_colormap = np.concatenate((np.tile(hsv_color[:-1][None, :], (scale_size, 1))[:],
-                                       np.arange(0.5, 1, 1 / float(2 * scale_size))[:, None]),
+                                       np.linspace(0, 1, scale_size)[:, None]),
                                       axis=1)
-        return colors.hsv_to_rgb(hsv_colormap)
+        self.colormap=self.array2cmap(colors.hsv_to_rgb(hsv_colormap))
 
-    def draw_cubes_plot(self,fig,colormap,hist,edges):
-        self.fig=fig
-        gs = gridspec.GridSpec(50, 50)
-        _axes = self.fig.add_subplot(gs[:-5,:],projection='3d')
-        self.draw_cubes(_axes, hist, edges, colormap)
-        self.draw_colorbar(_axes,colormap,np.min(hist),np.max(hist))
-        ax1=self.fig.add_subplot(gs[-4:-2,:])
-        ax2=self.fig.add_subplot(gs[-2:,:])
+    def draw(self,hist,edges,
+             fig=None,gs=None,subplot=None,
+             color=np.array([1,0,0]),all_axes=None):
+        '''
+        fig=figure handle
+        gs= contiguous slice (or whole) of gridspec to host plot
+        hist,edges=histogramdd output
+
+        '''
+        if fig is not None:
+            self.fig=fig
+        else:
+            self.fig=plt.figure()
+
+        if gs is None:
+            gs = gridspec.GridSpec(50, 50)
+        if all_axes is None:
+            _axes = self.fig.add_subplot(gs[:-5,:45],projection='3d')
+            cax=self.fig.add_subplot(gs[:-5,45:])
+            ax1=self.fig.add_subplot(gs[-4:-2,:])
+            ax2=self.fig.add_subplot(gs[-2:,:])
+        else:
+            _axes,cax,ax1,ax2=all_axes
+            _axes.clear()
+            cax.clear()
+            ax1.clear()
+            ax2.clear()
+        unique_hist=np.unique(hist)
+        colormap = self.create_brightness_colormap(color,
+                                                 np.size(unique_hist))
+        
+        
+        self.draw_cubes(_axes, hist, edges)
+        
+        self.draw_colorbar(_axes,unique_hist,cax)
+        _axes.set_xlim((edges[0].min(),edges[0].max()))
+        _axes.set_ylim((edges[1].min(),edges[1].max()))
+        _axes.set_zlim((edges[2].min(),edges[2].max()))
+        self.fig.patch.set_facecolor('white')
+        _axes.w_xaxis.set_pane_color((0.8, 0.8, 0.8, 1.0))
+        _axes.w_yaxis.set_pane_color((0.8, 0.8, 0.8, 1.0))
+        _axes.w_zaxis.set_pane_color((0.8, 0.8, 0.8, 1.0))
         self.set_sliders(ax1, ax2)
+        return _axes,ax1,ax2
+
+
+
 def main():
     '''
     example caller function
     '''
-    hist4d=Hist4D()
-    colormap = hist4d.create_brightness_colormap(np.array([1,0,0]), 256)
     data = np.random.randn(100, 3)
     hist, edges = np.histogramdd(data, bins=(5, 8, 4))
     fig = plt.figure()
-    hist4d.draw_cubes_plot(fig,colormap,hist,edges)
+    hist4d=Hist4D()
+    hist4d.draw(hist,edges,fig)
     plt.show()
 
 if __name__ == '__main__':

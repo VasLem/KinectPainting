@@ -7,16 +7,16 @@ noise_thres: 0.35
 #read=d/f/k; read from data/file/kinect
 read: k
 #if read from kinect, live or recorded
-stream: recorded
+stream: live
 #if recorded stream, the .bag path
-bag_path: /media/vassilis/Data/KinectData/rosbag_files/data.bag
+bag_path: /media/vassilis/Thesis/Datasets/Personal Farm/rosbag_files/data.bag
 #save=y/n
 save: n
 #directories to load images/test data
-path_depth: /media/vassilis/Data/KinectData/Moving Object/Depth
-path_color: /media/vassilis/Data/KinectData/Moving Object/Color
+path_depth: /media/vassilis/Thesis/Datasets/Personal Farm/Moving Object/Depth
+path_color: /media/vassilis/Thesis/Datasets/Personal Farm/Moving Object/Color
 #directories to load train data
-train_path: /media/vassilis/Data/hand_dataset
+train_path: /media/vassilis/Thesis/Datasets/Personal Farm/hand_dataset
 #pathname of calibrated image eges
 cal_edges_path: Calibration_Edges.jpg
 cal_frame_path: Calibration_Frame.jpg
@@ -25,8 +25,8 @@ save_depth: Depth
 save_color: Color
 #save parameters
 max_depth_im_num_to_save: 200
-# Choose object detection method ( segmentation or noise_model )
-detection_method: segmentation
+# Choose object detection method ( segmentation or noise_model or mog2)
+detection_method: mog2
 # Variables necessary for object detection by using background noise model
 max_contours_num: 3
 calib_secs: 1
@@ -49,7 +49,7 @@ des_dim: 300
 angle_resolution: 0.01
 abnormality_tol: 1 #1
 angle_tol: 0.01 #0.1
-dist_tol: 2 #2
+dist_tol: 1.1
 
 #Variables necessary for approximate wrist detection
 interp_window: 7

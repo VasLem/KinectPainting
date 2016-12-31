@@ -197,7 +197,6 @@ class Kinect(object):
             signal.signal(signal.SIGTSTP, rosbag_handler)
         signal.signal(signal.SIGINT, signal_handler)
         self.image_pub = rospy.Publisher("results_topic", Image, queue_size=1)
-
         self.depth_sub = mfilters.Subscriber(
             "/kinect2/qhd/image_depth_rect", Image)
         self.color_sub = mfilters.Subscriber(
@@ -280,6 +279,11 @@ class Kinect(object):
         co.counters.im_number += 1
         return
 
+    def detection_with_mog2(self):
+        co.data.depth3d = np.tile(co.data.depth_im[:, :, None], (1, 1, 3))
+        moda.detection_by_mog2()
+        co.counters.im_number+=1
+
     def callback(self, depth, color):
         '''callback function'''
         co.im_results.images = []
@@ -288,6 +292,8 @@ class Kinect(object):
                 depth, desired_encoding="passthrough")
             co.data.color_im = self.bridge.imgmsg_to_cv2(
                 color, desired_encoding="passthrough")
+            co.data.depth_raw= co.data.depth_im.copy()
+            co.data.depth_raw *= co.data.depth_raw < co.CONST['max_depth']*co.CONST['noise_thres']
             co.data.depth_im = (co.data.depth_im) / float(co.CONST['max_depth'])
 
         except CvBridgeError as err:
@@ -295,10 +301,17 @@ class Kinect(object):
 
         if co.flags.exists_lim_calib_image:
             co.noise_proc.remove_noise()
+            choices = {'segmentation': self.detection_with_segmentation, 
+                       'noise model': self.detection_with_noise_model,
+                       'mog2': self.detection_with_mog2}
+            choices.get(co.CONST['detection_method'], 'default')()
+            '''
             if co.CONST['detection_method'] == 'segmentation':
                 self.detection_with_segmentation()
-            else:
+            elif co.CONST['detection_method'] == 'noise model':
                 self.detection_with_noise_model()
+            elif co.CONST['detectino_method
+            '''
             if co.CONST['save'] == 'y':
                 if co.counters.save_im_num > co.lims.max_im_num_to_save - 1:
                     co.data.depth[co.counters.save_im_num %
