@@ -72,6 +72,12 @@ but the procedure will have to be repeated. Installing CUDA will make everything
 4. **Some Python libraries** might be required. As I did not hold record of this requirement, 
 some troubleshooting is needed. One can run `python init_code.py` . If any module error is raised, then he should should `pip install` the selected module and, if he wants, he can name it in the issues page of the repository, so that I can add it in this section.
 
+	Currently I am using wxPython for the GUI needed for data mining and rosbag editing. To install wxPython the following is needed:
+		
+		sudo apt-get install libwebkit-dev		 
+		sudo pip install --upgrade --trusted-host wxpython.org --pre -f http://wxpython.org/Phoenix/snapshot-builds/ wxPython_Phoenix 
+		
+
 5. **Kinect 2 Libraries** are required, although this will change in upcoming releases, so that to remove this requirement and make it optional. Actually, any depth device with a software that can publish to ROS can be used in this project, so there is no reason to demand those specific libraries to start with.
 
 	To install them, visit https://github.com/code-iai/iai_kinect2 and follow the installation instructions, skipping ROS installation.

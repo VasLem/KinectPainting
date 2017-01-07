@@ -26,7 +26,7 @@ class SparseCoding(object):
         self.prev_err = 0
         self.curr_error = 0
         self.allow_big_vals = False
-        self.des_dim = 100
+        self.des_dim = co.CONST['des_dim']
         self.dist_sigma = 0.1
         self.dist_beta = 0.005
         self.theta = None
@@ -43,30 +43,31 @@ class SparseCoding(object):
         self.inp_features = None
         self.out_features = None
 
-    def initialize(self, feat_dim, des_dim,
+    def initialize(self, feat_dim,
                    init_bmat=None, flush_variables=False):
         '''
         Initialises B dictionary and s
         '''
         if (self.bmat is None) or flush_variables:
             if init_bmat is not None:
-                if init_bmat.shape[0] == feat_dim and init_bmat.shape[1] == des_dim:
+                if (init_bmat.shape[0] == feat_dim and 
+                    init_bmat.shape[1] == self.des_dim):
                     self.bmat = init_bmat.copy()
                 else:
                     raise Exception('Wrong input of initial B matrix, the dimensions' +
                                     ' should be ' + str(feat_dim) + 'x' +
-                                    str(des_dim) + ', not ' +
+                                    str(self.des_dim) + ', not ' +
                                     str(init_bmat.shape[0]) + 'x' +
                                     str(init_bmat.shape[1]))
             else:
-                self.bmat = random.random((feat_dim, des_dim)) - 0.5
+                self.bmat = random.random((feat_dim, self.des_dim)) - 0.5
                 self.bmat -= mean(self.bmat, axis=1)[:, None]
                 sigm = np.sqrt(npsum(self.bmat * self.bmat, axis=0))
                 sigm[sigm == 0] = 1
                 self.bmat /= sigm
         if (self.out_features is None) or flush_variables:
-            self.out_features = zeros((des_dim, 1))
-            self.active_set = zeros((des_dim), bool)
+            self.out_features = zeros((self.des_dim, 1))
+            self.active_set = zeros((self.des_dim), bool)
             self.theta = zeros_like(self.out_features)
 
     def object_val_calc(self, bmat, ksi, gamma, theta, vecs):
@@ -74,13 +75,12 @@ class SparseCoding(object):
         Calculate objective function value
         '''
         _bs_ = np.dot(bmat, vecs)
-        square_term = npsum((ksi - _bs_)**2, axis=0)
-        res = (square_term + gamma * dot(theta.T, vecs))
+        square_term = 0.5* npsum((ksi - _bs_)**2, axis=0)
+        res = (square_term + gamma * dot(theta.T, vecs)).ravel()
         return res
 
     def feature_sign_search_algorithm(self,
                                       inp_features=None,
-                                      des_dim=0,
                                       dist_sigma=0,
                                       dist_beta=0,
                                       init_bmat=None,
@@ -90,8 +90,6 @@ class SparseCoding(object):
         '''
         Returns sparse features representation
         '''
-        if des_dim == 0:
-            des_dim = self.des_dim
         if dist_sigma == 0:
             dist_sigma = self.dist_sigma
         if dist_beta == 0:
@@ -99,7 +97,7 @@ class SparseCoding(object):
         self.inp_features = inp_features.copy()
         feat_dim = inp_features.shape[0]
         # Step 1
-        self.initialize(feat_dim, des_dim, init_bmat)
+        self.initialize(feat_dim, init_bmat)
         self.prev_err = np.linalg.norm(self.inp_features)
         btb = dot(self.bmat.T, self.bmat)
         btf = dot(self.bmat.T, self.inp_features)
@@ -187,16 +185,16 @@ class SparseCoding(object):
             if np.abs(objval) - np.abs(prev_objval) > 100 and not\
                     self.allow_big_vals and not count == 0:
                 if self.prev_out_feats is not None:
-                    logging.warning('Current Objective Function value: ' +
+                    logging.debug('Current Objective Function value: ' +
                                     str(np.abs(objval)))
-                    logging.warning('Previous Objective Function value: ' +
+                    logging.debug('Previous Objective Function value: ' +
                                     str(np.abs(prev_objval)))
-                    logging.warning('Problem with big values of inv(B^T*B)' +
+                    logging.debug('Problem with big values of inv(B^T*B)' +
                                     ',you might want to increase atol' +
                                     ' or set flag allow_big_vals to true' +
                                     ' (this might cause' +
                                     ' problems)')
-                    logging.warning('Reverting to previous iteration result ' +
+                    logging.debug('Reverting to previous iteration result ' +
                                     'and exiting loop..')
                     self.out_features=self.prev_out_feats
                     break

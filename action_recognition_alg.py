@@ -100,15 +100,9 @@ class SpaceHistogram(object):
         '''
         Compute normalized N-D histograms
         '''
-        logging.debug('hist inp:'+ str(sample.shape))
-        logging.debug('\tmax:'+ str(sample.max()))
-        logging.debug('\tmin:'+str(sample.min()))
         weights = np.ones(sample.shape[0])/float(sample.shape[0])
         hist,edges=np.histogramdd(sample, self.bin_size,range=self.range,
                                   weights=weights)
-        logging.debug('hist outp:' + str(hist.shape))
-        logging.debug('\tmax:'+str(hist.max()))
-        logging.debug('\tmin:'+str(hist.min()))
         return hist,edges
 
 class Action(object):
@@ -248,7 +242,7 @@ class Actions(object):
         return
 
     def update_sparse_features(self, dicts,
-                               act_num='all', ret_sparse=True):
+                               act_num='all', ret_sparse=False):
         '''
         Update sparse features for all Actions or a single one, specified by
         act_num.
@@ -340,13 +334,12 @@ class SparseDictionaries(object):
             self.dicts.append(None)
         self.initialized = True
 
-    def add_dict(self, actions=None, feat_dim=0, des_dim=0,
+    def add_dict(self, actions=None, feat_dim=0,
                  act_num=0, feat_num=0):
         '''
         actions=Actions class
         feat_num=Position where dict will be put
         feat_dim=Current features dimension
-        des_dim=Desired features dimension
         In case feat_dim is not set:
             actions is a necessary variable
             act_num=0: action postion inside actions.actions list
@@ -359,11 +352,10 @@ class SparseDictionaries(object):
         if feat_num > len(self.inv_dicts):
             raise Exception('feat_num is more than total dictionaries ' +
                             'length. Check initialize stage')
-        if des_dim == 0:
-            des_dim = co.CONST['des_dim']
         if feat_num == -1:
-            warnings.warn('feat_num should be set when feat_dim is not, ' +
-                          'else dictionary for feature 0 will be ovewritten')
+            logging.warning('feat_num argument in add_dict should'+
+                            ' be set when feat_dim is not, ' +
+                            'else dictionary for feature 0 will be ovewritten')
             feat_num = 0
         if feat_dim == 0:
             checktypes([actions], [Actions])
@@ -371,9 +363,9 @@ class SparseDictionaries(object):
                 raise Exception('Actions should have at least ' +
                                 'one entry, or set feat_dim')
             self.inv_dicts[feat_num].initialize(actions.actions[act_num].
-                                                features[feat_num].shape[0], des_dim)
+                                                features[feat_num].shape[0])
         else:
-            self.inv_dicts[feat_num].initialize(feat_dim, des_dim)
+            self.inv_dicts[feat_num].initialize(feat_dim)
 
     def flush(self, dict_num='all'):
         '''
@@ -386,20 +378,16 @@ class SparseDictionaries(object):
             iter_quant = [self.inv_dicts[dict_num]]
             iter_range = [dict_num]
         feat_dims = [] * len(iter_quant)
-        des_dims = [] * len(iter_quant)
         for count, inv_dict in enumerate(iter_quant):
             feat_dims[count] = None
-            des_dims[count] = None
             try:
-                (feat_dim, des_dim) = inv_dict.bmat.shape
+                feat_dim = inv_dict.bmat.shape[0]
                 feat_dims[count] = feat_dim
-                des_dims[count] = des_dim
             except AttributeError:
                 feat_dims[count] = None
-                des_dims[count] = None
         for count in iter_range:
             if feat_dims[count] != None:
-                self.inv_dicts[count].initialize(feat_dims[count], des_dims[count],
+                self.inv_dicts[count].initialize(feat_dims[count],
                                                  flush_variables=True)
     def save(self, save_path=None):
         '''
@@ -493,7 +481,7 @@ class FeatureExtraction(object):
         Compute 3DHOF features
         '''
         if self.hofhist.bin_size is None:
-            self.hofhist.bin_size = 6
+            self.hofhist.bin_size = co.CONST['3DHOF_bin_size']
             #self.hofhist.range = [[-1,1],[-1,1],[-1,1]]
         disp = self.compute_scene_flow(prev_depth_im, curr_depth_im)
         disp_norm = np.sqrt((disp[:, 0] * disp[:, 0] + disp[:, 1] *
@@ -509,7 +497,7 @@ class FeatureExtraction(object):
         im_patch = depth_im[self.roi[0, 0]:self.roi[0, 1],
                             self.roi[1, 0]:self.roi[1, 1]]
         if self.hoghist.range is None:
-            self.hoghist.bin_size = 9
+            self.hoghist.bin_size = co.CONST['GHOG_bin_size']
             self.hoghist.range=[[0,pi]]
         return self.hoghist.hist_data(grad_angles(im_patch))
     def extract_features(self):
@@ -648,7 +636,6 @@ class FeatureVisualization(object):
         plt.gcf().canvas.stop_event_loop()
 
 
-#plt.waitforbuttonpress()            
         
         
 class ActionRecognition(object):
@@ -656,10 +643,10 @@ class ActionRecognition(object):
     Class to hold everything about action recognition
     '''
 
-    def __init__(self,log_lev='WARNING'):
-        
+    def __init__(self,log_lev='INFO'):
         self.dictionaries = SparseDictionaries()
         self.actions = Actions()
+        self.log_lev = log_lev
         logging.getLogger().setLevel(log_lev)
     def add_action(self, depthdata=None,
                    masksdata=None,
@@ -722,8 +709,7 @@ class ActionRecognition(object):
         self.dictionaries.initialize(feat_num)
         logging.info('Creating dictionaries..')
         for count in range(feat_num):
-            self.dictionaries.add_dict(self.actions, feat_num=count,
-                                       des_dim=100)
+            self.dictionaries.add_dict(self.actions, feat_num=count)
         frames_num = self.actions.\
                      actions[act_num].features[0].shape[1]
         logging.info('Frames number: '+str(frames_num))
@@ -733,10 +719,10 @@ class ActionRecognition(object):
             self.actions.actions[act_num].flush_sparse_features()
             logging.info('Running Feature Sign Search Algorithm..')
             for img_count in range(frames_num):
+                logging.debug('Frame '+str(img_count)+' is being edited')
                 sparse_features = []
                 for feat_count in range(feat_num):
-
-                    coding = sc.SparseCoding()
+                    coding = sc.SparseCoding(log_lev=self.log_lev)
                     coding.feature_sign_search_algorithm(
                         inp_features=np.atleast_2d(
                             self.actions.actions[

@@ -44,11 +44,16 @@ min_displacement: 2
 depth_tolerance: 20 #Too high, needs fixing
 
 #Variables necessary for sparse coding
-des_dim: 300
+des_dim: 256
+
+#Variables for action recognition
+3DHOF_bin_size: 5
+GHOG_bin_size: 64
+
 #Variables for hand segmentation
 angle_resolution: 0.01
-abnormality_tol: 1 #1
-angle_tol: 0.01 #0.1
+abnormality_tol: 1
+angle_tol: 0.01
 dist_tol: 1.1
 
 #Variables necessary for approximate wrist detection

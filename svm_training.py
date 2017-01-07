@@ -4,7 +4,7 @@ import class_objects as co
 from action_recognition_alg import *
 import os.path
 import cPickle as pickle
-import logging, coloredlogs
+import logging
 from sklearn.svm import LinearSVC
 from sklearn.multiclass import OneVsRestClassifier
 from matplotlib import pyplot as plt
@@ -30,7 +30,6 @@ for _,arg in enumerate(sys.argv[1:]):
         elif count==2:
             reset=True if arg=='True' else False
     count=count+1
-coloredlogs.install()
 logging.basicConfig(format='%(levelname)s:%(message)s')
 logging.getLogger().setLevel(log_lev)
 
@@ -59,6 +58,7 @@ except (IOError,EOFError) as e:
             for action in actions:
                 sparse_features_lists.append(action.sparse_features)
     except (EOFError,IOError) as e:
+#FARMING FEATURES STAGE
         for action in actions:
             action_recog.add_action(action,visualize=visualize)
         logging.info('Training dictionaries..')
@@ -69,10 +69,13 @@ except (IOError,EOFError) as e:
             with open(path,'r') as inp:
                 dicts=pickle.load(inp)
         except (EOFError,IOError) as e:
+#DICTIONARIES TRAINING STAGE
             dicts=action_recog.train_sparse_dictionaries(act_num=0,
                                                          print_info=True)
         logging.info('Making sparse features')
-        sparse_features_lists = action_recog.actions.update_sparse_features(dicts)
+        sparse_features_lists = (action_recog.actions.
+                                 update_sparse_features(dicts,
+                                                       ret_sparse=True))
         action_recog.actions.save()
     #sparse_features_lists is a list of lists of sparse features per action
     #To train i-th svm we get sparse_features_lists[i]
@@ -85,6 +88,7 @@ except (IOError,EOFError) as e:
             logging.info('Loading existent trained SVM classifier')
             unified_classifier, svms_1_v_all_traindata,svm_classes=pickle.load(inp)
     except (EOFError,IOError) as e:
+#TRAINING SVM CLASSIFIER STAGE
         logging.info('Preparing svm traindata')
         svm_initial_training_data=[]
         for sparse_features in sparse_features_lists:
@@ -139,42 +143,33 @@ except (IOError,EOFError) as e:
         pickle.dump((scores,svm_classes),outp)
 
 
-box_filter_shape = 20
+box_filter_shape = 30
 box_filter = np.ones(box_filter_shape)/float(box_filter_shape)
-mean_filter_shape = 50
+mean_filter_shape = 300
 mean_filter=np.ones(mean_filter_shape)/float(mean_filter_shape)
 filtered_scores = np.pad(np.apply_along_axis(np.convolve, 0, scores,box_filter, mode='valid'),
                          ((box_filter_shape/2, box_filter_shape/2),(0, 0)),'edge')
-filtered_scores = (filtered_scores
-                   -np.min(filtered_scores,axis=0))/(np.max(filtered_scores,
-                                                            axis=0)-
-                                                     np.min(filtered_scores,
-                                                            axis=0)).astype(float)
-
-'''
-scores_std = np.std(scores,axis=1)
-scores_std_mean = np.pad(np.convolve(scores_std,mean_filter,
-                                mode='valid'),(mean_filter_shape/2,mean_filter_shape/2),'edge')
-'''
-#filtered_scores=filtered_scores[:,:-2]
 filtered_scores_std = np.std(filtered_scores,axis=1)
 filtered_scores_std_mean = np.pad(np.convolve(filtered_scores_std,
                                               mean_filter,mode='valid'),
                                   (mean_filter_shape/2-1,mean_filter_shape/2),'edge')
-
-'''
-plt.figure(1)
-plt.plot(scores_std,color='r',label='STD')
-plt.plot(scores_std_mean,color='g',label='STD Mean')
-plt.legend()
-plt.title('Scores Statistics')
-plt.xlabel('Frames')
-'''
+mean_diff=filtered_scores_std_mean-filtered_scores_std
+positive = mean_diff > 0
+zero_crossings = np.where(np.bitwise_xor(positive[1:], positive[:-1]))[0]
+interesting_crossings = np.concatenate((np.array([0]),
+                                        zero_crossings[::2],
+                                        np.array([mean_diff.size])),axis=0)
+identified_classes=[]
+for cross1,cross2 in zip(interesting_crossings[:-1],interesting_crossings[1:]):
+    clas=np.median(scores[cross1:cross2,:],axis=0).argmax()
+    identified_classes.append(clas*np.ones(cross2-cross1))
+identified_classes = np.concatenate(tuple(identified_classes),axis=0)
 
 plt.figure(2)
 plt.plot(filtered_scores_std,color='r',label='STD')
 plt.plot(filtered_scores_std_mean,color='g',label='STD Mean')
-plt.plot((svm_classes)*np.max(filtered_scores_std)/float(np.max(svm_classes)),label='Classes')
+plt.plot((svm_classes)*np.max(filtered_scores_std)/float(np.max(svm_classes)),
+         label='Ground Truth')
 plt.legend()
 plt.title('Filtered Scores Statistics')
 plt.xlabel('Frames')
@@ -186,21 +181,21 @@ for count,score in enumerate(filtered_scores.T):
 plt.legend()
 plt.title('Filtered Scores')
 plt.xlabel('Frames')
-'''
 plt.figure(4)
-for count,score in enumerate(filtered_scores.T):
-    plt.plot((score-np.min(score))/(np.max(score)-np.min(score)),
-             label=action_names[count])
+plt.plot((mean_diff-np.min(mean_diff))/float(np.max(mean_diff)-np.min(mean_diff)),
+         label='Filtered scores normalized mean difference')
+plt.plot(svm_classes/float(np.max(svm_classes)),label='Ground Truth')
 plt.legend()
-plt.title('Normalized Filtered Scores')
+plt.figure(5)
+plt.plot(svm_classes,label='Ground Truth')
+plt.plot(identified_classes,label='Identified Classes')
 plt.xlabel('Frames')
+plt.ylim((svm_classes.min()-1,svm_classes.max()+1))
+plt.title('Result')
+plt.legend()
 plt.show()
-'''
-plt.figure(4)
-quant=filtered_scores_std_mean-filtered_scores_std
-plt.plot(quant)
-plt.plot((svm_classes-np.min(quant))/float(np.max(quant)-np.min(quant)),label='Classes')
-plt.show()
+
+
 
 
 
