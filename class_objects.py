@@ -5,6 +5,9 @@ import time
 from cv_bridge import CvBridge, CvBridgeError
 import yaml
 from __init__ import *
+import logging
+logging.basicConfig(format='%(levelname)s:%(message)s')
+logging.getLogger().setLevel('INFO')
 
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
@@ -39,6 +42,36 @@ class Counter(object):
         self.save_im_num = 0
         self.outlier_time = 0
 
+class CountHandHitMisses(object):
+    '''
+    class to hold hand hit-misses statistics
+    '''
+    def __init__(self):
+        self.no_obj = 0
+        self.found = 0
+        self.no_entry = 0
+        self.in_im_corn = 0
+        self.rchd_mlims = 0
+        self.no_cocirc = 0
+        self.no_abnorm = 0
+        self.rchd_abnorm = 0
+
+    def reset(self):
+        self.no_obj = 0
+        self.found = 0
+        self.no_entry = 0
+        self.in_im_corn = 0
+        self.rchd_mlims = 0
+        self.no_cocirc = 0
+        self.no_abnorm = 0
+        self.rchd_abnorm = 0
+
+    def print_stats(self):
+        members = [attr for attr in dir(self) if not
+                   callable(getattr(self,attr))
+                   and not attr.startswith("__")]
+        for member in members:
+            print member,':',getattr(self,member)
 
 class Data(object):
     '''variables necessary for input and output'''
@@ -56,6 +89,143 @@ class Data(object):
         self.depth_mem = []
         self.reference_uint8_depth_im = np.zeros(1)
         self.depth_raw = None
+
+class Edges(object):
+    def __init__(self):
+        self.calib_edges = None
+        self.calib_frame = None
+        self.exists_lim_calib_image = False
+        self.edges_positions_indices = None
+        self.edges_positions = None
+        self.nonconvex_edges_lims = None
+    def construct_calib_edges(self, im_set=None, convex=0,
+                              frame_path=None, edges_path=None,
+                              whole_im=False,
+                              img=None,
+                              write=False):
+        if not whole_im:
+            im_set = np.array(im_set)
+            tmp = np.zeros(im_set.shape[1:], dtype=np.uint8)
+            tmp[np.sum(im_set, axis=0) > 0] = 255
+        else:
+            if img is None:
+                raise Exception('img argument must be given')
+            tmp = np.ones(img.shape, dtype=np.uint8)
+        _, frame_candidates, _ = cv2.findContours(
+            tmp, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+        frame_index = np.argmax(
+            np.array([cv2.arcLength(contour, 1) for contour in
+                      frame_candidates]))
+        self.calib_edges = np.zeros(
+            tmp.shape, dtype=np.uint8)
+        self.calib_frame = np.zeros(
+            tmp.shape, dtype=np.uint8)
+        cv2.drawContours(
+            self.calib_edges, frame_candidates,
+            frame_index, 255, 1)
+        cv2.drawContours(
+            self.calib_frame, frame_candidates,
+            frame_index, 255, -1)
+        if edges_path is None:
+            edges_path = CONST['cal_edges_path']
+        if frame_path is None:
+            frame_path = CONST['cal_edges_path']
+        if write:
+            cv2.imwrite(CONST['cal_edges_path'], self.calib_edges)
+            cv2.imwrite(CONST['cal_frame_path'], self.calib_frame)
+
+    def load_calib_data(self, convex=0, edges_path=None, frame_path=None,
+                        whole_im = False, img=None):
+        if whole_im:
+            if img is None:
+                raise Exception('img argument must be given')
+            self.construct_calib_edges(img=img, whole_im=True, write=False)
+        else:
+            if (frame_path is None)^(edges_path is None):
+                if frame_path is None:
+                    logging.error('Missing frame_path input, but edges_path is'+
+                                  ' given')
+                else:
+                    logging.error('Missing edges_path input, but frame_path is'+
+                                  ' given')
+            if edges_path is None:
+                edges_path=CONST['cal_edges_path']
+                frame_path=CONST['cal_frame_path']
+            if not os.path.isfile(edges_path):
+                self.exists_lim_calib_image = 0
+            else:
+                self.exists_lim_calib_image = 1
+                self.calib_frame = cv2.imread(frame_path, 0)
+                self.calib_edges = cv2.imread(frame_path, 0)
+                self.calib_frame[
+                    self.calib_frame<0.9*np.max(self.calib_frame)]=0
+                self.calib_edges[
+                    self.calib_edges<0.9*np.max(self.calib_edges)]=0
+        if not convex:
+            self.find_non_convex_edges_lims()
+        else:
+            self.find_convex_edges_lims()
+        return edges_path, frame_path
+    def find_non_convex_edges_lims(self, edge_tolerance=10):
+        '''
+        Find non convex symmetrical edges minimum orthogonal lims with some tolerance
+        Inputs: positions,edges mask[,edges tolerance=10]
+        '''
+        self.edges_positions_indices = np.nonzero(cv2.dilate(
+            self.calib_edges, np.ones((3, 3), np.uint8), cv2.CV_8U) > 0)
+        self.edges_positions = np.transpose(
+            np.array(self.edges_positions_indices))
+        lr_positions = self.edges_positions[
+            np.abs(self.edges_positions[:, 0] - self.calib_edges.shape[0] / 2.0) < 1, :]
+        tb_positions = self.edges_positions[
+            np.abs(self.edges_positions[:, 1] - self.calib_edges.shape[1] / 2.0) < 1, :]
+        self.nonconvex_edges_lims = np.array(
+            [np.min(lr_positions[:, 1]) + edge_tolerance,
+             np.min(tb_positions[:, 0]) + edge_tolerance,
+             np.max(lr_positions[:, 1]) - edge_tolerance,
+             np.max(tb_positions[:, 0]) - edge_tolerance])
+
+    def find_convex_edges_lims(self, positions=None):
+        '''
+        Find convex edges minimum orthogonal lims
+        '''
+        def calculate_cart_dists(cart_points, cart_point=[]):
+            '''
+            Input either numpy array either 2*2 list
+            Second optional argument is a point
+            '''
+            if cart_point == []:
+
+                try:
+                    return np.sqrt(
+                        (cart_points[1:, 0] - cart_points[:-1, 0]) *
+                        (cart_points[1:, 0] - cart_points[:-1, 0]) +
+                        (cart_points[1:, 1] - cart_points[:-1, 1]) *
+                        (cart_points[1:, 1] - cart_points[:-1, 1]))
+                except (TypeError, AttributeError):
+                    return np.sqrt((cart_points[0][0] - cart_points[1][0])**2 +
+                                   (cart_points[0][1] - cart_points[1][1])**2)
+
+            else:
+                return np.sqrt(
+                    (cart_points[:, 0] - cart_point[0]) *
+                    (cart_points[:, 0] - cart_point[0]) +
+                    (cart_points[:, 1] - cart_point[1]) *
+                    (cart_points[:, 1] - cart_point[1]))
+        calib_positions = positions[self.calib_edges > 0, :]
+        calib_dists = calculate_cart_dists(
+            calib_positions,
+            np.array([0, 0]))
+
+        upper_left = calib_positions[np.argmin(calib_dists), :]
+        calib_dists2 = calculate_cart_dists(
+            calib_positions,
+            np.array([self.calib_edges.shape[0],
+                      self.calib_edges.shape[1]]))
+        lower_right = calib_positions[np.argmin(calib_dists2), :]
+        # Needs filling
+        self.convex_edges_lims = []
+
 
 class ExistenceProbability(object):
     '''
@@ -86,8 +256,8 @@ class ExistenceProbability(object):
             self.init_val = 1
             # self.distance_mask = np.pad(
             # np.ones(tuple(np.array(data.depth_im.shape) - 2)), 1, 'constant')
-            sums = np.sum(masks.calib_frame[
-                :, 1:masks.calib_frame.shape[1] / 2], axis=0) > 0
+            sums = np.sum(edges.calib_frame[
+                :, 1:edges.calib_frame.shape[1] / 2], axis=0) > 0
             self.framex1 = np.where(np.diff(sums))[0] + self.max_distancex
             self.framex2 = meas.imx - self.framex1
             self.framey1 = self.max_distancey
@@ -112,14 +282,6 @@ class ExistenceProbability(object):
         im_results.images.append(im_res)
         '''
 
-
-class Flag(object):
-    '''necessary flags for program flow'''
-
-    def __init__(self):
-        self.exists_lim_calib_image = 0
-        self.read = ''
-        self.save = ''
 
 
 class Hull(object):
@@ -163,9 +325,68 @@ class Mask(object):
         self.background = None
         self.final_mask = None
         self.color_mask = None
-        self.calib_edges = None
-        self.calib_frame = np.zeros(0)
+        self.memory = None
+        self.anamneses = None
+        self.bounds = None
 
+class Memory(object):
+    '''
+    class to keep memory
+    '''
+    def __init__(self):
+        self.memory = None
+        self.image = None
+        self.bounds = None
+    def live(self, anamnesis, importance=1):
+        '''
+        add anamnesis to memory
+        '''
+        if not isinstance(anamnesis[0,0],bool):
+            anamnesis= anamnesis>0
+        if self.image is None:
+            self.image = np.zeros_like(anamnesis)
+        self.image -= CONST['memory_fade'] * self.image
+        self.image[self.image < 0] = 0
+        self.image += CONST['memory_power'] * anamnesis * importance
+        self.memory = self.image > CONST['memory_strength']
+    def erase(self):
+        '''
+        erase memory
+        '''
+        self.memory = None
+        self.image = None
+
+    def remember(self, find_bounds=False):
+        '''
+        remember as many anamneses as possible
+        '''
+        self.anamneses = np.fliplr(cv2.findNonZero(self.memory).squeeze())
+        if find_bounds:
+            xmin, ymin, xlen, ylen = cv2.boundingRect(self.anamneses)
+            self.bounds = np.array([xmin,xmin+xlen],[ymin,ymin+ylen])
+        return self.anamneses, self.bounds
+
+
+class CamShift(object):
+    def __init__(self):
+        self.track_window = None
+        self.track_box = None
+    def calculate(self, frame, mask):
+        '''
+        frame and mask are 2d arrays
+        '''
+        hist = cv2.calcHist( [frame], [0], mask, [CONST['max_count']], [0, 1] )
+        cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+        hist = hist.reshape(-1)
+        if self.track_window and self.track_window[2] > 0 and self.track_window[3] > 0:
+            self.selection = None
+            prob = cv2.calcBackProject([frame], [0], hist, [0, 1],
+                                       1).squeeze()
+            prob = prob*mask
+            term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+                         CONST['max_count'],
+                         CONST['par_eps'])
+            self.track_box, self.track_window = cv2.CamShift(prob, self.track_window, term_crit)
 
 class Measure(object):
     '''variables from measurements'''
@@ -201,71 +422,29 @@ class Measure(object):
         # valid_values hold the last seen nonzero value of an image pixel
         # during initialisation
         self.valid_values = np.zeros(1)
-        self.all_positions = np.zeros(1)
+        #changed all_positions to cart_positions
+        self.cart_positions = None
+        self.polar_positions = None
         self.background = np.zeros(1)
         self.found_objects_mask = np.zeros(0)
         self.hand_patch=None
         self.hand_patch_pos=None
 
-    def find_non_convex_edges_lims(self, edges_mask, edge_tolerance=10):
-        '''
-        Find non convex symmetrical edges minimum orthogonal lims with some tolerance
-        Inputs: positions,edges mask[,edges tolerance=10]
-        '''
-        self.edges_positions_indices = np.nonzero(cv2.dilate(
-            edges_mask, np.ones((3, 3), np.uint8), cv2.CV_8U) > 0)
-        self.edges_positions = np.transpose(
-            np.array(self.edges_positions_indices))
-        lr_positions = self.edges_positions[
-            np.abs(self.edges_positions[:, 0] - edges_mask.shape[0] / 2.0) < 1, :]
-        tb_positions = self.edges_positions[
-            np.abs(self.edges_positions[:, 1] - edges_mask.shape[1] / 2.0) < 1, :]
-        self.nonconvex_edges_lims = np.array(
-            [np.min(lr_positions[:, 1]) + edge_tolerance,
-             np.min(tb_positions[:, 0]) + edge_tolerance,
-             np.max(lr_positions[:, 1]) - edge_tolerance,
-             np.max(tb_positions[:, 0]) - edge_tolerance])
-
-    def find_convex_edges_lims(self, positions, edges_mask):
-        '''
-        Find convex edges minimum orthogonal lims
-        '''
-        def calculate_cart_dists(cart_points, cart_point=[]):
-            '''
-            Input either numpy array either 2*2 list
-            Second optional argument is a point
-            '''
-            if cart_point == []:
-
-                try:
-                    return np.sqrt(
-                        (cart_points[1:, 0] - cart_points[:-1, 0]) *
-                        (cart_points[1:, 0] - cart_points[:-1, 0]) +
-                        (cart_points[1:, 1] - cart_points[:-1, 1]) *
-                        (cart_points[1:, 1] - cart_points[:-1, 1]))
-                except (TypeError, AttributeError):
-                    return np.sqrt((cart_points[0][0] - cart_points[1][0])**2 +
-                                   (cart_points[0][1] - cart_points[1][1])**2)
-
-            else:
-                return np.sqrt(
-                    (cart_points[:, 0] - cart_point[0]) *
-                    (cart_points[:, 0] - cart_point[0]) +
-                    (cart_points[:, 1] - cart_point[1]) *
-                    (cart_points[:, 1] - cart_point[1]))
-        calib_positions = positions[edges_mask > 0, :]
-        calib_dists = calculate_cart_dists(
-            calib_positions,
-            np.array([0, 0]))
-
-        upper_left = calib_positions[np.argmin(calib_dists), :]
-        calib_dists2 = calculate_cart_dists(
-            calib_positions,
-            np.array([edges_mask.shape[0],
-                      edges_mask.shape[1]]))
-        lower_right = calib_positions[np.argmin(calib_dists2), :]
-        # Needs filling
-        self.convex_edges_lims = []
+    def construct_positions(self, img, polar=False):
+        self.cart_positions = np.transpose(np.nonzero(np.ones_like(
+            img))).reshape(img.shape + (2,))
+        if polar:
+            cmplx_positions = (self.cart_positions[:, :, 0] * 1j +
+                                    self.cart_positions[:, :, 1])
+            ang = np.angle(cmplx_positions)
+            ang[ang < -pi] += 2 * pi
+            ang[ang > pi] -= 2 * pi
+            self.polar_positions = np.concatenate(
+                (np.absolute(cmplx_positions)[:,None], ang[:, None]),
+                 axis=2)
+            return self.cart_positions,self. polar_positions
+        else:
+            return self.cart_positions
 
 class Mog2(object):
     def __init__(self):
@@ -282,12 +461,12 @@ class Model(object):
 
 class NoiseRemoval:
 
-    def remove_noise(self):
-        # All noisy pixels are either white or black. We must remove this shit.
-        time1 = time.clock()
-        data.depth_im *= data.depth_im < CONST['noise_thres']
-        data.depth_im /= CONST['noise_thres']
-        time2 = time.clock()
+    def remove_noise(self, thresh=None, norm=True):
+        if thresh is None:
+            thresh = CONST['noise_thres']
+        data.depth_im *= data.depth_im < thresh
+        if norm:
+            data.depth_im = data.depth_im / float(thresh)
 
 
 class Path(object):
@@ -748,6 +927,7 @@ class Threshold(object):
     def __init__(self):
         self.lap_thres = 0
         self.depth_thres = 0
+
 with open(CONST_LOC+"/config.yaml", 'r') as stream:
     try:
         CONST = yaml.load(stream)
@@ -756,8 +936,9 @@ with open(CONST_LOC+"/config.yaml", 'r') as stream:
 # pylint: disable=C0103
 contours = Contour()
 counters = Counter()
+chhm = CountHandHitMisses()
 data = Data()
-flags = Flag()
+edges = Edges()
 lims = Lim()
 masks = Mask()
 meas = Measure()

@@ -86,6 +86,18 @@ def prepare_dexter_im(img):
     return img * binmask,\
         hand_patch, hand_patch_pos
 
+def prepare_im(img):
+    contours = cv2.findContours(
+        (img).astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
+    contours_area = [cv2.contourArea(contour) for contour in contours]
+    hand_contour = contours[np.argmax(contours_area)].squeeze()
+    hand_patch = img[np.min(hand_contour[:, 1]):np.max(hand_contour[:, 1]),
+                     np.min(hand_contour[:, 0]):np.max(hand_contour[:, 0])]
+    hand_patch_pos = np.array(
+        [np.min(hand_contour[:, 1]), np.min(hand_contour[:, 0])])
+    return img,\
+        hand_patch, hand_patch_pos
+
 
 class SpaceHistogram(object):
     '''
@@ -167,6 +179,7 @@ class Actions(object):
 
     def __init__(self):
         self.actions = []
+        self.testing = Action()
         self.save_path = (os.getcwd() +
                           os.sep+'saved_actions.pkl')
 
@@ -180,11 +193,15 @@ class Actions(object):
         else:
             del self.actions[act_num]
 
+
+
     def add_action(self, dictionaries=None,
                    depthdata=None,
+                   masks_needed=True,
                    masksdata=None,
-                   use_dexter=True,
-                   visualize_=False):
+                   use_dexter=False,
+                   visualize_=False,
+                   for_testing = False):
         '''
         features_extract= FeatureExtraction Class
         dictionaries= SparseDictionaries Class
@@ -193,6 +210,8 @@ class Actions(object):
             (Directory with hand masks) OR (list of hand masks)
         use_dexter= True if Dexter 1 TOF Dataset is used
         visualize= True to visualize features extracted from frames
+        for_testing = True if input data is testing data and features are
+                      returned as (3DHOF,GHOG)
         '''
         features_extract = FeatureExtraction(visualize_=visualize_)
         checktypes([dictionaries, features_extract], [
@@ -201,45 +220,55 @@ class Actions(object):
             raise Exception("Depth data frames are at least  needed")
         self.actions.append(Action())
         if not use_dexter:
-            if isinstance(masksdata, str):
-                masks = [cv2.imread(filename, 0) for filename
-                         in glob.glob(masksdata + '/*.png')]
+            if masks_needed:
+                if masksdata is None:
+                    raise Exception('masksdata must be given if '+
+                                    'masks_needed')
+                if isinstance(masksdata, str):
+                    masks = [cv2.imread(filename, 0) for filename
+                             in glob.glob(masksdata + '/*.png')]
+                else:
+                    masks = masksdata[:]
             else:
-                masks = masksdata[:]
+                masks = None
         if isinstance(depthdata, str):
             imgs = [cv2.imread(filename, -1) for filename
                     in glob.glob(depthdata + '/*.png')]
         else:
             imgs = depthdata[:]
         for img_count, img in enumerate(imgs):
-            if use_dexter:
-                mask, hand_patch, hand_patch_pos = prepare_dexter_im(
-                    img)
-            else:
-                hand_patch, hand_patch_pos = hsa.main_process(masks[img_count])
-                if hand_patch.shape[1] == 0:
-                    warnings.warn('Problem with frame'+str(img_count))
-                    hsa.main_process(masks[img_count], display=1)
-                mask = img * (masks[img_count] > 0)
-            features_extract.update(mask, img_count, hand_patch, hand_patch_pos)
+            features_extract.update(img, img_count, use_dexter, 
+                                    masks_needed, masks)
             # Extract Features
             features = features_extract.extract_features()
             # Save action to actions object
             if features is not None:
                 if visualize_:
-                    features_extract.visualize() 
-                if len(dictionaries.dicts) == 0:
-                    self.actions[-1].add_features(features=features)
-                else:
-                    sparse_features = []
-                    for feat_num, feature in enumerate(features):
-                        sparse_features.append(np.dot(dictionaries.inv_dicts[feat_num],
-                                                      feature))
-
-                    self.actions[-1].add_features(features=features,
+                    features_extract.visualize()
+                if for_testing:
+                    if len(dictionaries.dicts) == 0:
+                        self.testing.add_features(features=features)
+                    else:
+                        sparse_features = []
+                        for feat_num, feature in enumerate(features):
+                            sparse_features.append(np.dot(dictionaries.dicts[feat_num],
+                                                          feature))
+                        self.testing.add_features(features=features,
                                                   sparse_features=sparse_features)
+                        return sparse_features
+                else:
+                    if len(dictionaries.dicts) == 0:
+                        self.actions[-1].add_features(features=features)
+                    else:
+                        sparse_features = []
+                        for feat_num, feature in enumerate(features):
+                            sparse_features.append(np.dot(dictionaries.dicts[feat_num],
+                                                          feature))
+
+                        self.actions[-1].add_features(features=features,
+                                                      sparse_features=sparse_features)
                 
-        return
+        return 0
 
     def update_sparse_features(self, dicts,
                                act_num='all', ret_sparse=False):
@@ -514,16 +543,29 @@ class FeatureExtraction(object):
         self.hog_features = self.ghog(self.curr_depth_im)
         return self.hof_features[0].ravel(), self.hog_features[0].ravel()
 
-    def update(self, masked_im, count, hand_patch,
-               hand_patch_pos):
+    def update(self, img, img_count, use_dexter=False, masks_needed=True,
+               masks=None):
         '''
         Update frames
         '''
+
+        if use_dexter:
+            mask, hand_patch, hand_patch_pos = prepare_dexter_im(
+                img)
+        else:
+            if masks_needed:
+                hand_patch, hand_patch_pos = hsa.main_process(masks[img_count])
+                if hand_patch.shape[1] == 0:
+                    warnings.warn('Problem with frame'+str(img_count))
+                    hsa.main_process(masks[img_count], display=1)
+                    mask = img * (masks[img_count] > 0)
+            else:
+                mask,hand_patch,hand_patch_pos = prepare_im(img) 
         (self.prev_depth_im,
          self.curr_depth_im) = (self.curr_depth_im,
-                                masked_im)
+                                mask)
         (self.curr_count,
-         self.prev_count) = (count,
+         self.prev_count) = (img_count,
                              self.curr_count)
         (self.prev_patch,
          self.curr_patch) = (self.curr_patch,
@@ -649,24 +691,29 @@ class ActionRecognition(object):
         self.log_lev = log_lev
         logging.getLogger().setLevel(log_lev)
     def add_action(self, depthdata=None,
+                   masks_needed=True,
                    masksdata=None,
-                   use_dexter=True,
-                   visualize=False):
+                   use_dexter=False,
+                   visualize=False,
+                   for_testing=False):
         '''
         actions.add_action alias
         '''
-        self.actions.add_action(self.dictionaries,
-                                depthdata,
-                                masksdata,
-                                use_dexter,
-                                visualize_=visualize)
+        res=self.actions.add_action(self.dictionaries,
+                                    depthdata,
+                                    masks_needed,
+                                    masksdata,
+                                    use_dexter,
+                                    visualize_=visualize,
+                                    for_testing=for_testing)
+        return res
 
     def train_sparse_dictionaries(self, act_num=None,
                                   depthdata=None,
+                                  masks_needed=True,
                                   masksdata=None,
-                                  use_dexter=True,
+                                  use_dexter=False,
                                   iterations=3,
-                                  print_info=False,
                                   save_trained=True,
                                   save_path=False):
         '''
@@ -676,15 +723,17 @@ class ActionRecognition(object):
             act_num: action number to use for training
             depthdata: path or list of images
             masksdata: path or list of images
+            masks_needed: true if no hand segmentation is done beforehand
+                         and Dexter 1 dataset is not used
             use_dexter: true if Dexter 1 dataset is used
             iterations: training iterations
-            print_info: print training info
             save_trained: save dictionaries after training
         '''
-        checktypes([act_num, depthdata, masksdata, use_dexter,
-                    iterations, print_info, save_trained, save_path],
-                   [int, (list, str, type(None)), (list, str, type(None)), (bool, int),
-                    int, (bool, int), (bool, int), (bool, int)])
+        checktypes([act_num, depthdata, masks_needed, masksdata, use_dexter,
+                    iterations, save_trained, save_path],
+                   [int, (list, str, type(None)), (bool, int),
+                    (list, str, type(None)),
+                    (bool, int), int, (bool, int), (bool, int)])
         if act_num is None and len(self.actions.actions) > 0:
             act_num = 0
         elif len(self.actions.actions) == 0:
@@ -696,13 +745,15 @@ class ActionRecognition(object):
             raise Exception("Path/List of frames depth data is at least needed" +
                             ' because action data is empty')
         elif not use_dexter and masksdata is None:
-            raise Exception("Path/List of frames masks data is at least needed" +
-                            ' because use_dexter flag is set to False')
+            if masks_needed:
+                raise Exception("Path/List of frames masks data is at least needed" +
+                                ' because use_dexter and masks_needed flags are set to False')
 
         if depthdata is not None:
             logging.info('Adding action..')
             self.actions.add_action(self.dictionaries,
                                     depthdata,
+                                    masks_needed,
                                     masksdata,
                                     use_dexter)
         # Train dictionaries

@@ -29,7 +29,7 @@ def get_pid(name):
     Retrieves pid from name
     '''
     return map(int, check_output(["pidof", name]).split())
-
+ 
 def rosbag_handler(sig,frame):
     print 'Toggled ROSbag pause/continue'
     PROCESS.stdin.write(' ')
@@ -142,8 +142,7 @@ def frame_process():
 def initialise_global_vars():
     '''Initialise some of the global class objects'''
     co.models.noise_model = moda.init_noise_model()
-    co.masks.calib_edges = cv2.imread(co.CONST['cal_edges_path'], -1)
-    co.masks.calib_edges[co.masks.calib_edges<np.max(co.masks.calib_edges)]=0
+    co.edges.load_calib_data()
     co.counters.aver_count = 0
     co.data.depth_im = co.data.initial_im_set[:, :, 0]
     co.meas.min1 = np.min(co.data.depth_im[co.data.depth_im > 0])
@@ -299,19 +298,12 @@ class Kinect(object):
         except CvBridgeError as err:
             print err
 
-        if co.flags.exists_lim_calib_image:
+        if co.edges.exists_lim_calib_image:
             co.noise_proc.remove_noise()
-            choices = {'segmentation': self.detection_with_segmentation, 
+            choices = {'segmentation': self.detection_with_segmentation,
                        'noise model': self.detection_with_noise_model,
                        'mog2': self.detection_with_mog2}
             choices.get(co.CONST['detection_method'], 'default')()
-            '''
-            if co.CONST['detection_method'] == 'segmentation':
-                self.detection_with_segmentation()
-            elif co.CONST['detection_method'] == 'noise model':
-                self.detection_with_noise_model()
-            elif co.CONST['detectino_method
-            '''
             if co.CONST['save'] == 'y':
                 if co.counters.save_im_num > co.lims.max_im_num_to_save - 1:
                     co.data.depth[co.counters.save_im_num %
@@ -327,30 +319,10 @@ class Kinect(object):
             if co.counters.im_number <= 10 * co.CONST['framerate'] - 1:
                 self.initial_im_set_list.append(co.data.depth_im)
             elif co.counters.im_number == 10 * co.CONST['framerate']:
-                co.data.initial_im_set = np.rollaxis(
-                    np.array(self.initial_im_set_list), 0, 3)
-                co.masks.tmp = np.zeros(
-                    co.data.initial_im_set[:, :, 0].shape, dtype=np.uint8)
-                co.masks.tmp[np.sum(co.data.initial_im_set, axis=2) > 0] = 255
-                _, co.contours.frame_candidates, _ = cv2.findContours(
-                    co.masks.tmp, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
-                co.contours.frame_index = np.argmax(
-                    np.array([cv2.arcLength(x_coord, 1) for x_coord in
-                              co.contours.frame_candidates]))
-                co.masks.calib_edges = np.zeros(
-                    co.data.initial_im_set[:, :, 0].shape, dtype=np.uint8)
-                co.masks.calib_frame = np.zeros(
-                    co.data.initial_im_set[:, :, 0].shape, dtype=np.uint8)
-                cv2.drawContours(
-                    co.masks.calib_edges, co.contours.frame_candidates,
-                    co.contours.frame_index, 255, 1)
-                cv2.drawContours(
-                    co.masks.calib_frame, co.contours.frame_candidates,
-                    co.contours.frame_index, 255, -1)
-                cv2.imshow('Calibration_Edges', co.masks.calib_edges)
+                co.edges.construct_calib_edges(self.initial_im_set_list,
+                                               write=True)
+                cv2.imshow('Calibration_Edges', co.edges.calib_edges)
                 cv2.waitKey(0)
-                cv2.imwrite(co.CONST['cal_edges_path'], co.masks.calib_edges)
-                cv2.imwrite(co.CONST['cal_frame_path'], co.masks.calib_frame)
                 sys.exit()
             co.counters.im_number += 1
 
@@ -359,33 +331,30 @@ def main():
     """Main Function"""
     co.lims.max_im_num_to_save = co.CONST['max_depth_im_num_to_save']
     co.thres.lap_thres = co.CONST['lap_thres']
-    co.flags.read = co.CONST['read']
-    if not os.path.isfile(co.CONST['cal_edges_path']):
-        co.flags.exists_lim_calib_image = 0
-    else:
-        co.flags.exists_lim_calib_image = 1
-        co.masks.calib_frame = cv2.imread(co.CONST['cal_frame_path'], 0)
-        co.masks.calib_edges = cv2.imread(co.CONST['cal_edges_path'], 0)
-        co.masks.calib_frame[
-            co.masks.calib_frame<0.9*np.max(co.masks.calib_frame)]=0
-        co.masks.calib_edges[
-            co.masks.calib_edges<0.9*np.max(co.masks.calib_edges)]=0
-        '''
-        co.masks.calib_edges =\
-        cv2.dilate(co.masks.calib_edges,np.ones((3,3),np.uint8),cv2.CV_8U)
-        '''
-    if co.flags.read == 'd':
+    edges_path, frame_path = co.edges.load_calib_data()
+    if co.CONST['read'] == 'd':
         co.paths.depth = co.CONST['path_depth']
         # path_color=co.CONST['path_color']
         co.data.depth = hf.im_load(co.paths.depth, 'Depth')
         #data_color=hf.im_load(path_color, 'Color')
-    if co.flags.read == 'f':
-        co.data.depth = np.load(co.CONST['save_depth'] + '.npy')
+    if co.CONST['read'] == 'f':
+        try:
+            co.data.depth = np.load(co.CONST['save_depth'])
+        except (IOError,EOFError):
+            raise Exception('No valid file saved as '+co.CONST['saved_depth'])
+        if not co.edges.exists_lim_calib_image:
+            ans = raw_input('No edges calibration files available, '+
+                  'do you want to proceed without them?(Y,n)')
+            if ans=='N' or ans=='n':
+                exit()
+            else:
+                co.edges.construct_calib_edges(whole_im=True,
+                                               img=co.data.depth[:,:,0])
         # data_color=np.load(co.CONST['save_color']+'.npy')
-    elif co.flags.read == 'k':
+    elif co.CONST['read'] == 'k':
         Kinect()
         rospy.init_node('kinect_stream', anonymous=True)
-        if not co.flags.exists_lim_calib_image:
+        if not co.edges.exists_lim_calib_image:
             print 'No image exists for calibration of frame edges'
             print 'Please move randomly kinect in space' \
                 'for the next 10 seconds (DONT BREAK IT) and wait for' \
@@ -397,11 +366,10 @@ def main():
         else:
             # PROCESS.terminate()
             os.killpg(PROCESS.pid, signal.SIGINT)
-    co.flags.save = co.CONST['save']
-    if co.flags.save == 'y':
+    if co.CONST['save'] == 'y':
         np.save(co.CONST['save_depth'], co.data.depth)
         #np.save(co.CONST['save_color'], data_color)
-    if co.flags.read != 'k':
+    if co.CONST['read'] != 'k':
         co.lims.init_n = 9
         # n=2*co.CONST['framerate']
         co.data.initial_im_set = co.data.depth[:, :, :co.lims.init_n]

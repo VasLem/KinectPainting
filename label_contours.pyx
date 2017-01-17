@@ -38,16 +38,30 @@ def label(np.ndarray[FTYPE_t, ndim=2] img, list contours, bool med_filt=False,
                                                           dtype=U8TYPE)
     cdef np.ndarray[DTYPE_t, ndim=2] xpos = np.zeros((N,img.size),DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=2] ypos = np.zeros((N,img.size),DTYPE)
+    cdef np.ndarray[DTYPE_t, ndim=1] xpos_lims = np.zeros(2,DTYPE)
+    cdef np.ndarray[DTYPE_t, ndim=1] ypos_lims = np.zeros(2,DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=1] count = np.zeros(N,DTYPE)
     cdef int i,j,k,v
+    cdef int lims_expansion = int((dil_size-1)/2*np.sqrt(2))
     for i in range(1,N+1):
         drawContours(labeled, contours, i-1, i, -1)
+        [[j,k]] = np.min(contours[i-1],axis=0)
+        xpos_lims[0]=min(k,xpos_lims[0])
+        ypos_lims[0]=min(j,ypos_lims[0])
+        [[j,k]] = np.max(contours[i-1],axis=0)
+        xpos_lims[1]=max(k,xpos_lims[1])
+        ypos_lims[1]=max(j,ypos_lims[1])
+    xpos_lims[0]-=lims_expansion
+    xpos_lims[1]+=lims_expansion
+    ypos_lims[0]-=lims_expansion
+    ypos_lims[1]+=lims_expansion
     if med_filt:
         diltmp[:,:] = dilate(labeled.copy(), dil_mask)
         ertmp[:,:] = erode(labeled.copy(), er_mask)
         with nogil:
-                for j in range(x_shape):
-                    for k in range(y_shape):
+                for j in range(max(0,xpos_lims[0]),min(x_shape,xpos_lims[1]+1)):
+                    for k in range(max(0,ypos_lims[0]),
+                                   min(y_shape,ypos_lims[1]+1)):
                         if diltmp[j,k]!=0 and (labeled[j,k]!=0 or img[j,k]!=0):
                             v=diltmp[j,k]-1
                             xpos[v,count[v]]=j

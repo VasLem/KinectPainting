@@ -14,27 +14,46 @@ import label_contours
 
 
 
-def detection_by_mog2():
+def detection_by_mog2(display=True, data=None,
+                      gmm_num=co.CONST['gmm_num'],
+                      bg_ratio=co.CONST['bg_ratio'],
+                      var_thres=co.CONST['var_thres'],
+                      history=co.CONST['history']):
     if co.mog2.fgbg is None:
         cv2.ocl.setUseOpenCL(False)
-        co.mog2.fgbg=cv2.createBackgroundSubtractorMOG2(history=500,varThreshold=16,
-                                                        detectShadows=False)
-        co.mog2.fgbg.setNMixtures(2)
-        co.mog2.fgbg.setBackgroundRatio(0.3)
-    found_objects_mask = co.mog2.fgbg.apply((co.data.depth_raw))
-    found_objects_mask[co.data.depth_raw==0]=0
-    found_objects_mask=cv2.morphologyEx(found_objects_mask.copy(),cv2.MORPH_OPEN,
-                                        np.ones((9,9),np.uint8))
-    _,contours,_=cv2.findContours(found_objects_mask.copy(),cv2.CHAIN_APPROX_SIMPLE,
-                                  cv2.RETR_LIST)
-    time1=time.time()
-    
-    labels,filtered_image,_min,_max=label_contours.label(co.data.depth_raw.astype(float),contours,
-                                         med_filt=True,dil_size=51, er_size=7)
-    co.im_results.images.append((labels>0).astype(float))
-    co.im_results.images.append(found_objects_mask)
-    co.im_results.images.append(filtered_image)
+        co.mog2.fgbg = cv2.createBackgroundSubtractorMOG2(history=int(history),
+                                                          varThreshold=var_thres,
+                                                          detectShadows=False)
+        co.mog2.fgbg.setNMixtures(int(gmm_num))
+        co.mog2.fgbg.setBackgroundRatio(bg_ratio)
+    if data is None:
+        data = co.data.depth_im.copy()
+    if isinstance(data[0], float):
+        data = (data / (np.min(np.abs(np.diff(data))))).astype(int)
+        inp = (data *256).astype(np.uint8)
+    else:
+        inp = data.copy()
+    mog2_objects = co.mog2.fgbg.apply(inp)
+    found_objects_mask = cv2.morphologyEx(mog2_objects.copy(), cv2.MORPH_OPEN,
+                                          np.ones((9, 9), np.uint8))
+    _,contours, _ = cv2.findContours(found_objects_mask.copy(), cv2.CHAIN_APPROX_SIMPLE,
+                                      cv2.RETR_LIST)
 
+    labels, filtered_image, _min, _max=label_contours.label(data.astype(float), contours,
+                                                            med_filt=True, dil_size=11,
+                                                            er_size=3)
+    #DEBUGGING
+    co.meas.found_objects_mask = filtered_image
+    return filtered_image
+    '''
+    if display:
+        found_objects_mask[found_objects_mask > 0] = 255
+        found_objects_mask[filtered_image > 0] = 125
+        found_objects_mask = found_objects_mask.astype(np.uint8)
+        co.im_results.images.append(found_objects_mask)
+        co.im_results.images.append((found_objects_mask > 0)*filtered_image)
+    co.meas.found_objects_mask = (filtered_image > 0).astype(np.uint8)
+    '''
 def detection_by_scene_segmentation():
     '''Detection of moving object by using Distortion field of centers of mass
     of background objects'''
@@ -81,7 +100,7 @@ def detection_by_scene_segmentation():
                 objs = np.ones_like(co.data.depth_im) * \
                     (val == co.segclass.segment_values)
                 labeled, nr_objects =\
-                    ndimage.label(objs * co.masks.calib_frame)
+                    ndimage.label(objs * co.edges.calib_frame)
                 lbls = np.arange(1, nr_objects + 1)
                 if val > 0:
                     ndimage.labeled_comprehension(objs, labeled, lbls,
@@ -180,7 +199,6 @@ def extract_background_values():
     valid_values = np.zeros_like(co.meas.background)
     co.meas.all_positions = np.fliplr(cv2.findNonZero(np.ones_like(
         co.meas.background, dtype=np.uint8)).squeeze()).reshape(co.meas.background.shape + (2,))
-    co.meas.find_non_convex_edges_lims(co.masks.calib_edges)
     for count in range(im_num):
         valid_values[
             co.data.initial_im_set[:, :, count] > 0

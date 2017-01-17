@@ -11,7 +11,7 @@ import class_objects as co
 def detect_corners():
     '''function to detects  intersection limits of mask with calib_edges'''
     calib_set = set([tuple(i) for i in np.transpose(
-        np.fliplr(np.nonzero(co.masks.calib_edges))).tolist()])
+        np.fliplr(np.nonzero(co.edges.calib_edges))).tolist()])
     contour_tuple = [tuple(i) for i in co.contours.arm_contour.tolist()]
     contour_dict = dict((k, i) for i, k in enumerate(contour_tuple))
     inter = set(contour_tuple).intersection(calib_set)

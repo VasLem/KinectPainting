@@ -9,17 +9,20 @@ read: k
 #if read from kinect, live or recorded
 stream: live
 #if recorded stream, the .bag path
-bag_path: /media/vassilis/Thesis/Datasets/Personal Farm/rosbag_files/data.bag
+bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/rosbag_files/data.bag
 #save=y/n
 save: n
 #directories to load images/test data
-path_depth: /media/vassilis/Thesis/Datasets/Personal Farm/Moving Object/Depth
-path_color: /media/vassilis/Thesis/Datasets/Personal Farm/Moving Object/Color
+path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
+path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
-train_path: /media/vassilis/Thesis/Datasets/Personal Farm/hand_dataset
+train_path: /media/vassilis/Thesis/Datasets/PersonaFarm/hand_dataset
+actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions
+#rosbag files location
+rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm
 #pathname of calibrated image eges
-cal_edges_path: Calibration_Edges.jpg
-cal_frame_path: Calibration_Frame.jpg
+cal_edges_path: /home/vassilis/Thesis/KinectPainting/Calibration_Edges.jpg
+cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 #files to save images
 save_depth: Depth
 save_color: Color
@@ -42,20 +45,37 @@ segmentation_data: SegmData
 max_objects_size_ratio: 0.04
 min_displacement: 2
 depth_tolerance: 20 #Too high, needs fixing
-
+#Variables for object detection by mog2
+gmm_num : 2
+bg_ratio : 0.2
+var_thres : 20
+history : 200
 #Variables necessary for sparse coding
 des_dim: 256
-
+#the rosbag for training
+train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/all.bag
 #Variables for action recognition
 3DHOF_bin_size: 5
 GHOG_bin_size: 64
-
+STD_small_filt_window: 30
+STD_big_filt_window: 300
+action_separation_thres: 0
 #Variables for hand segmentation
+max_link_number : 6
+max_hsa_contours_num: 5
+min_area: 50
 angle_resolution: 0.01
 abnormality_tol: 1
 angle_tol: 0.01
 dist_tol: 1.1
-
+#Variables to keep memory 
+memory_fade: 0.1
+memory_power: 0.5
+memory_strength: 0.9
+# Variables for camshift
+max_count: 30
+par_eps: 0.5
+hist_resol: 60
 #Variables necessary for approximate wrist detection
 interp_window: 7
 cutoff_angle_ratio: 15
@@ -66,6 +86,8 @@ length_power_weight: 1.5
 num_of_checked_segments: 10
 lambda_bound: 0.3
 
+#Variables for data mining
+free_ram_path: /media/vassilis/Thesis
 
 #Variables for feature extraction
 min_frame_count_diff: 5
