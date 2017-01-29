@@ -18,6 +18,7 @@ path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
 train_path: /media/vassilis/Thesis/Datasets/PersonaFarm/hand_dataset
 actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions
+actions_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
 #rosbag files location
 rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm
 #pathname of calibrated image eges
@@ -46,10 +47,10 @@ max_objects_size_ratio: 0.04
 min_displacement: 2
 depth_tolerance: 20 #Too high, needs fixing
 #Variables for object detection by mog2
-gmm_num : 2
+gmm_num : 10
 bg_ratio : 0.2
 var_thres : 20
-history : 200
+history : 4000
 #Variables necessary for sparse coding
 des_dim: 256
 #the rosbag for training
@@ -68,13 +69,18 @@ angle_resolution: 0.01
 abnormality_tol: 1
 angle_tol: 0.01
 dist_tol: 1.1
+longest_ray_closing_size: 15
+HOG_bin_size : 30
+HOG_max_window_length : 40
+HOG_overlap : 20
 #Variables to keep memory 
-memory_fade: 0.1
+memory_fade_const: 0.05
+memory_fade_exp: 0.2
 memory_power: 0.5
-memory_strength: 0.9
+memory_strength: 0.2
 # Variables for camshift
-max_count: 30
-par_eps: 0.5
+max_count: 80
+par_eps: 300
 hist_resol: 60
 #Variables necessary for approximate wrist detection
 interp_window: 7

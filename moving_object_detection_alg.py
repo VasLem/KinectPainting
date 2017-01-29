@@ -11,49 +11,72 @@ import action_recognition_alg as ara
 from scipy import ndimage
 import array
 import label_contours
+import logging
+logging.getLogger()
 
 
+class Mog2(object):
 
-def detection_by_mog2(display=True, data=None,
-                      gmm_num=co.CONST['gmm_num'],
-                      bg_ratio=co.CONST['bg_ratio'],
-                      var_thres=co.CONST['var_thres'],
-                      history=co.CONST['history']):
-    if co.mog2.fgbg is None:
+    def __init__(self):
+        self.fgbg = None
+        self.frame_count = 0
+
+    def initialize(self,
+                   gmm_num=co.CONST['gmm_num'],
+                   bg_ratio=co.CONST['bg_ratio'],
+                   var_thres=co.CONST['var_thres'],
+                   history=co.CONST['history']):
         cv2.ocl.setUseOpenCL(False)
-        co.mog2.fgbg = cv2.createBackgroundSubtractorMOG2(history=int(history),
-                                                          varThreshold=var_thres,
-                                                          detectShadows=False)
-        co.mog2.fgbg.setNMixtures(int(gmm_num))
-        co.mog2.fgbg.setBackgroundRatio(bg_ratio)
-    if data is None:
-        data = co.data.depth_im.copy()
-    if isinstance(data[0], float):
-        data = (data / (np.min(np.abs(np.diff(data))))).astype(int)
-        inp = (data *256).astype(np.uint8)
-    else:
-        inp = data.copy()
-    mog2_objects = co.mog2.fgbg.apply(inp)
-    found_objects_mask = cv2.morphologyEx(mog2_objects.copy(), cv2.MORPH_OPEN,
-                                          np.ones((9, 9), np.uint8))
-    _,contours, _ = cv2.findContours(found_objects_mask.copy(), cv2.CHAIN_APPROX_SIMPLE,
-                                      cv2.RETR_LIST)
+        self.fgbg = cv2.createBackgroundSubtractorMOG2(history=int(history),
+                                                       varThreshold=var_thres,
+                                                       detectShadows=True)
+        # self.fgbg.setNMixtures(int(gmm_num))
+        self.fgbg.setBackgroundRatio(bg_ratio)
+        self.fgbg.setComplexityReductionThreshold(0.9)
 
-    labels, filtered_image, _min, _max=label_contours.label(data.astype(float), contours,
-                                                            med_filt=True, dil_size=11,
-                                                            er_size=3)
-    #DEBUGGING
-    co.meas.found_objects_mask = filtered_image
-    return filtered_image
-    '''
-    if display:
-        found_objects_mask[found_objects_mask > 0] = 255
-        found_objects_mask[filtered_image > 0] = 125
-        found_objects_mask = found_objects_mask.astype(np.uint8)
-        co.im_results.images.append(found_objects_mask)
-        co.im_results.images.append((found_objects_mask > 0)*filtered_image)
-    co.meas.found_objects_mask = (filtered_image > 0).astype(np.uint8)
-    '''
+    def run(self, display=True, data=None,
+            gmm_num=co.CONST['gmm_num'],
+            bg_ratio=co.CONST['bg_ratio'],
+            var_thres=co.CONST['var_thres'],
+            history=co.CONST['history']):
+        self.frame_count += 1
+        if self.fgbg is None:
+            self.initialize(gmm_num, bg_ratio, var_thres, history)
+        if data is None:
+            logging.warning('MOG2: Reading data from co.data.depth_im')
+            data = co.data.depth_im.copy()
+        self.fgbg.setHistory(int(history))
+        inp = data.copy()
+        mog2_objects = self.fgbg.apply(inp, 0.8)
+        '''
+        found_objects_mask = cv2.morphologyEx(mog2_objects.copy(), cv2.MORPH_OPEN,
+                                              np.ones((9, 9), np.uint8))
+        _, contours, _ = cv2.findContours(found_objects_mask.copy(), cv2.CHAIN_APPROX_SIMPLE,
+                                          cv2.RETR_LIST)
+
+        labels, filtered_image, _min, _max = label_contours.label(data.astype(float), contours,
+                                                                  med_filt=True, dil_size=11,
+                                                                  er_size=3)
+        co.meas.found_objects_mask = ((filtered_image *
+                                       mog2_objects) > 0).astype(np.uint8)
+        return co.meas.found_objects_mask
+        '''
+        return mog2_objects
+
+    def reset(self):
+        self.fgbg = None
+        self.frame_count = 0
+        '''
+        if display:
+            found_objects_mask[found_objects_mask > 0] = 255
+            found_objects_mask[filtered_image > 0] = 125
+            found_objects_mask = found_objects_mask.astype(np.uint8)
+            co.im_results.images.append(found_objects_mask)
+            co.im_results.images.append((found_objects_mask > 0)*filtered_image)
+        co.meas.found_objects_mask = (filtered_image > 0).astype(np.uint8)
+        '''
+
+
 def detection_by_scene_segmentation():
     '''Detection of moving object by using Distortion field of centers of mass
     of background objects'''
@@ -177,18 +200,19 @@ def detection_by_scene_segmentation():
             hand_patch, hand_patch_pos = hsa.main_process(
                 co.meas.found_objects_mask.astype(
                     np.uint8), co.meas.all_positions, 1)
-            co.meas.hand_patch=hand_patch
-            co.meas.hand_patch_pos=hand_patch_pos
+            co.meas.hand_patch = hand_patch
+            co.meas.hand_patch_pos = hand_patch_pos
             if len(co.im_results.images) == 1:
                 co.im_results.images.append(
                     (255 * co.meas.found_objects_mask).astype(np.uint8))
             co.im_results.images.append(points_on_im)
-            #elif len(co.im_results.images)==2:
+            # elif len(co.im_results.images)==2:
             #    co.im_results.images[1][co.im_results.images[1]==0]=(255*points_on_im).astype(np.uint8)[co.im_results.images[1]==0]
-            #if hand_points.shape[1]>1:
+            # if hand_points.shape[1]>1:
             #    points_on_im[tuple(hand_points.T)]=[1,0,0]
-            #co.im_results.images.append(points_on_im)
+            # co.im_results.images.append(points_on_im)
             return 1
+
 
 def extract_background_values():
     '''function to extract initial background values from initial_im_set'''

@@ -9,8 +9,111 @@ import logging
 logging.basicConfig(format='%(levelname)s:%(message)s')
 logging.getLogger().setLevel('INFO')
 
+
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
+
+
+class CircularOperations(object):
+    '''
+    Holds operations on positions in circular lists
+    '''
+
+    def diff(self, pos1, pos2, leng, no_intersections=False):
+        '''
+        Returns the smallest distances between
+        two positions vectors inside a circular 1d list
+        of length leng
+        '''
+        if no_intersections and pos2.size == 2:
+            # some strolls are forbidden
+            argmindiffs = np.zeros_like(pos1)
+            mindiffs = np.zeros_like(pos1)
+            pos_i = np.min(pos2)
+            pos_j = np.max(pos2)
+            check = pos1 >= pos_j
+            tmp = np.concatenate(
+                ((leng - pos1[check] + pos_i)[:, None],
+                 (-pos_j + pos1[check])[:, None]), axis=1)
+
+            argmindiffs[check > 0] = np.argmin(tmp, axis=1)
+            mindiffs[check > 0] = np.min(tmp, axis=1)
+            check = pos1 <= pos_i
+            tmp = np.concatenate(
+                ((pos_i - pos1[check])[:, None],
+                 (leng - pos_j + pos1[check])[:, None]), axis=1)
+            argmindiffs[check > 0] = np.argmin(tmp, axis=1)
+            check = (pos1 <= pos_j) * (pos1 >= pos_i)
+            tmp = np.concatenate(
+                ((-pos_i + pos1[check])[:, None],
+                 (pos_j - pos1[check])[:, None]), axis=1)
+            argmindiffs[check > 0] = np.argmin(tmp, axis=1)
+            return argmindiffs[mindiffs.argmin()]
+        pos1 = pos1[:, None]
+        pos2 = pos2[None, :]
+        return np.min(np.concatenate((
+            np.abs(pos1 - pos2)[:, None],
+            np.abs((leng - pos2) + pos1)[:, None],
+            np.abs((leng - pos1) + pos2)[:, None]),
+            axis=2), axis=2)
+
+    def find_min_dist_direction(self, pos1, pos2, leng, filter_len=None):
+        '''
+        find pos1 to pos2 minimum distance direction
+        '''
+        to_count = -1
+        if filter_len is not None:
+            mask = np.zeros(leng)
+            mask[min(pos1, pos2):max(pos1, pos2) + 1] = 1
+            if np.sum(mask * leng) > 0:
+                to_count = 0
+            else:
+                to_count = 1
+        dists = np.array([np.abs(pos1 - pos2),
+                          np.abs(leng - pos2 + pos1),
+                          np.abs(leng - pos1 + pos2)])
+        if to_count == 1:
+            res = np.sign(pos2 - pos1)
+            return res, dists[0]
+        if to_count == 0:
+            dists[0] = 1000000000
+        choose = np.argmin(dists)
+        if choose == 0:
+            res = np.sign(pos2 - pos1)
+            if res == 0:
+                res = 1
+        elif choose == 1:
+            res = -1
+        else:
+            res = 1
+        return res, np.min(dists)
+
+    def filter(self, pos1, pos2, length, direction):
+        '''
+        output: filter_mask of size length with filter_mask[pos1--direction-->pos2]=1, elsewhere 0
+        '''
+        filter_mask = np.zeros(length)
+        if pos2 >= pos1 and direction == 1:
+            filter_mask[pos1: pos2 + 1] = 1
+        elif pos2 >= pos1 and direction == -1:
+            filter_mask[: pos1 + 1] = 1
+            filter_mask[pos2:] = 1
+        elif pos1 > pos2 and direction == 1:
+            filter_mask[: pos2 + 1] = 1
+            filter_mask[pos1:] = 1
+        elif pos1 > pos2 and direction == -1:
+            filter_mask[pos2: pos1 + 1] = 1
+        return filter_mask
+
+    def find_single_direction_dist(self, pos1, pos2, length, direction):
+        if pos2 >= pos1 and direction == 1:
+            return pos2 - pos1
+        elif pos2 >= pos1 and direction == -1:
+            return length - pos2 + pos1
+        elif pos1 > pos2 and direction == 1:
+            return length - pos1 + pos2
+        elif pos1 > pos2 and direction == -1:
+            return pos1 - pos2
 
 
 class ConvexityDefect(object):
@@ -42,10 +145,12 @@ class Counter(object):
         self.save_im_num = 0
         self.outlier_time = 0
 
+
 class CountHandHitMisses(object):
     '''
     class to hold hand hit-misses statistics
     '''
+
     def __init__(self):
         self.no_obj = 0
         self.found = 0
@@ -68,10 +173,11 @@ class CountHandHitMisses(object):
 
     def print_stats(self):
         members = [attr for attr in dir(self) if not
-                   callable(getattr(self,attr))
+                   callable(getattr(self, attr))
                    and not attr.startswith("__")]
         for member in members:
-            print member,':',getattr(self,member)
+            print member, ':', getattr(self, member)
+
 
 class Data(object):
     '''variables necessary for input and output'''
@@ -90,7 +196,9 @@ class Data(object):
         self.reference_uint8_depth_im = np.zeros(1)
         self.depth_raw = None
 
+
 class Edges(object):
+
     def __init__(self):
         self.calib_edges = None
         self.calib_frame = None
@@ -98,6 +206,8 @@ class Edges(object):
         self.edges_positions_indices = None
         self.edges_positions = None
         self.nonconvex_edges_lims = None
+        self.exist = False
+
     def construct_calib_edges(self, im_set=None, convex=0,
                               frame_path=None, edges_path=None,
                               whole_im=False,
@@ -135,22 +245,23 @@ class Edges(object):
             cv2.imwrite(CONST['cal_frame_path'], self.calib_frame)
 
     def load_calib_data(self, convex=0, edges_path=None, frame_path=None,
-                        whole_im = False, img=None):
+                        whole_im=False, img=None):
         if whole_im:
             if img is None:
                 raise Exception('img argument must be given')
-            self.construct_calib_edges(img=img, whole_im=True, write=False)
+            self.construct_calib_edges(
+                img=img, whole_im=True, write=False)
         else:
-            if (frame_path is None)^(edges_path is None):
+            if (frame_path is None) ^ (edges_path is None):
                 if frame_path is None:
-                    logging.error('Missing frame_path input, but edges_path is'+
+                    logging.error('Missing frame_path input, but edges_path is' +
                                   ' given')
                 else:
-                    logging.error('Missing edges_path input, but frame_path is'+
+                    logging.error('Missing edges_path input, but frame_path is' +
                                   ' given')
             if edges_path is None:
-                edges_path=CONST['cal_edges_path']
-                frame_path=CONST['cal_frame_path']
+                edges_path = CONST['cal_edges_path']
+                frame_path = CONST['cal_frame_path']
             if not os.path.isfile(edges_path):
                 self.exists_lim_calib_image = 0
             else:
@@ -158,14 +269,16 @@ class Edges(object):
                 self.calib_frame = cv2.imread(frame_path, 0)
                 self.calib_edges = cv2.imread(frame_path, 0)
                 self.calib_frame[
-                    self.calib_frame<0.9*np.max(self.calib_frame)]=0
+                    self.calib_frame < 0.9 * np.max(self.calib_frame)] = 0
                 self.calib_edges[
-                    self.calib_edges<0.9*np.max(self.calib_edges)]=0
+                    self.calib_edges < 0.9 * np.max(self.calib_edges)] = 0
         if not convex:
             self.find_non_convex_edges_lims()
         else:
             self.find_convex_edges_lims()
+        self.exist = True
         return edges_path, frame_path
+
     def find_non_convex_edges_lims(self, edge_tolerance=10):
         '''
         Find non convex symmetrical edges minimum orthogonal lims with some tolerance
@@ -198,10 +311,10 @@ class Edges(object):
 
                 try:
                     return np.sqrt(
-                        (cart_points[1:, 0] - cart_points[:-1, 0]) *
-                        (cart_points[1:, 0] - cart_points[:-1, 0]) +
-                        (cart_points[1:, 1] - cart_points[:-1, 1]) *
-                        (cart_points[1:, 1] - cart_points[:-1, 1]))
+                        (cart_points[1:, 0] - cart_points[: -1, 0]) *
+                        (cart_points[1:, 0] - cart_points[: -1, 0]) +
+                        (cart_points[1:, 1] - cart_points[: -1, 1]) *
+                        (cart_points[1:, 1] - cart_points[: -1, 1]))
                 except (TypeError, AttributeError):
                     return np.sqrt((cart_points[0][0] - cart_points[1][0])**2 +
                                    (cart_points[0][1] - cart_points[1][1])**2)
@@ -231,6 +344,7 @@ class ExistenceProbability(object):
     '''
     Class to find activated cells
     '''
+
     def __init__(self):
         self.init_val = 0
         self.distance = np.zeros(0)
@@ -257,7 +371,7 @@ class ExistenceProbability(object):
             # self.distance_mask = np.pad(
             # np.ones(tuple(np.array(data.depth_im.shape) - 2)), 1, 'constant')
             sums = np.sum(edges.calib_frame[
-                :, 1:edges.calib_frame.shape[1] / 2], axis=0) > 0
+                          :, 1: edges.calib_frame.shape[1] / 2], axis=0) > 0
             self.framex1 = np.where(np.diff(sums))[0] + self.max_distancex
             self.framex2 = meas.imx - self.framex1
             self.framey1 = self.max_distancey
@@ -272,7 +386,7 @@ class ExistenceProbability(object):
             new_arrivals += neighborhood
         self.wearing_mat[new_arrivals + self.always_checked] = self.wearing_par
         self.can_exist = np.where(
-            self.wearing_mat[:segclass.nz_objects.count] > 0)[0]
+            self.wearing_mat[: segclass.nz_objects.count] > 0)[0]
 
         self.wearing_mat -= 1
         '''
@@ -281,7 +395,6 @@ class ExistenceProbability(object):
             im_res[segclass.objects.image == val] = 255
         im_results.images.append(im_res)
         '''
-
 
 
 class Hull(object):
@@ -329,26 +442,32 @@ class Mask(object):
         self.anamneses = None
         self.bounds = None
 
+
 class Memory(object):
     '''
     class to keep memory
     '''
+
     def __init__(self):
         self.memory = None
         self.image = None
         self.bounds = None
+        self.bounds_mask = None
+
     def live(self, anamnesis, importance=1):
         '''
         add anamnesis to memory
         '''
-        if not isinstance(anamnesis[0,0],bool):
-            anamnesis= anamnesis>0
+        if not type(anamnesis[0, 0]) == np.bool_:
+            anamnesis = anamnesis > 0
         if self.image is None:
-            self.image = np.zeros_like(anamnesis)
-        self.image -= CONST['memory_fade'] * self.image
+            self.image = np.zeros(anamnesis.shape)
+        else:
+            self.image *= (1 - CONST['memory_fade_exp'])
+        self.image += (CONST['memory_power'] * anamnesis * importance -
+                       CONST['memory_fade_const'])
         self.image[self.image < 0] = 0
-        self.image += CONST['memory_power'] * anamnesis * importance
-        self.memory = self.image > CONST['memory_strength']
+
     def erase(self):
         '''
         erase memory
@@ -360,33 +479,71 @@ class Memory(object):
         '''
         remember as many anamneses as possible
         '''
-        self.anamneses = np.fliplr(cv2.findNonZero(self.memory).squeeze())
+        if self.image is None:
+            return None, None, None, None
+        self.memory = self.image > CONST['memory_strength']
+        if np.sum(self.memory) == 0:
+            return None, None, None, None
         if find_bounds:
-            xmin, ymin, xlen, ylen = cv2.boundingRect(self.anamneses)
-            self.bounds = np.array([xmin,xmin+xlen],[ymin,ymin+ylen])
-        return self.anamneses, self.bounds
+            self.anamneses = np.atleast_2d(cv2.findNonZero(self.memory.
+                                                           astype(np.uint8)).squeeze())
+            x, y, w, h = cv2.boundingRect(self.anamneses)
+            self.bounds_mask = np.zeros_like(self.image, np.uint8)
+            cv2.rectangle(self.bounds_mask, (x, y), (x + w, y + h), 1, -1)
+            self.bounds = (x, y, w, h)
+            return self.memory, self.anamneses, self.bounds, self.bounds_mask
+        return self.memory, None, None, None
+
+# class BackProjectionFilter(object):
 
 
 class CamShift(object):
+    '''
+    Implementation of camshift algorithm for depth images
+    '''
+
     def __init__(self):
         self.track_window = None
-        self.track_box = None
-    def calculate(self, frame, mask):
+        self.rect = None
+
+    def calculate(self, frame, mask1, mask2=None):
         '''
         frame and mask are 2d arrays
         '''
-        hist = cv2.calcHist( [frame], [0], mask, [CONST['max_count']], [0, 1] )
+        _min = np.min(frame[frame != 0])
+        inp = ((frame.copy() - _min) /
+               float(np.max(frame) - _min)).astype(np.float32)
+        inp[inp < 0] = 0
+        hist = cv2.calcHist([inp], [0],
+                            (mask1 > 0).astype(np.uint8),
+                            [1000],
+                            [0, 1])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
         hist = hist.reshape(-1)
         if self.track_window and self.track_window[2] > 0 and self.track_window[3] > 0:
-            self.selection = None
-            prob = cv2.calcBackProject([frame], [0], hist, [0, 1],
-                                       1).squeeze()
-            prob = prob*mask
-            term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+            if mask2 is None:
+                mask2 = np.ones(frame.shape)
+            prob_tmp = cv2.calcBackProject([inp[mask2 > 0]], [0], hist, [0, 1],
+                                           1).squeeze()
+            prob = np.zeros(frame.shape)
+            prob[mask2 > 0] = prob_tmp
+            '''
+            term_crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
                          CONST['max_count'],
                          CONST['par_eps'])
-            self.track_box, self.track_window = cv2.CamShift(prob, self.track_window, term_crit)
+            self.rect, self.track_window = cv2.CamShift(prob,
+                                                             self.track_window,
+                                                             term_crit)
+            '''
+        return prob
+
+    def reset(self):
+        '''
+        reset algorithm
+        '''
+        self.track_window = None
+        self.rect = None
+
 
 class Measure(object):
     '''variables from measurements'''
@@ -422,33 +579,30 @@ class Measure(object):
         # valid_values hold the last seen nonzero value of an image pixel
         # during initialisation
         self.valid_values = np.zeros(1)
-        #changed all_positions to cart_positions
+        # changed all_positions to cart_positions
         self.cart_positions = None
         self.polar_positions = None
         self.background = np.zeros(1)
         self.found_objects_mask = np.zeros(0)
-        self.hand_patch=None
-        self.hand_patch_pos=None
+        self.hand_patch = None
+        self.hand_patch_pos = None
 
     def construct_positions(self, img, polar=False):
         self.cart_positions = np.transpose(np.nonzero(np.ones_like(
             img))).reshape(img.shape + (2,))
         if polar:
             cmplx_positions = (self.cart_positions[:, :, 0] * 1j +
-                                    self.cart_positions[:, :, 1])
+                               self.cart_positions[:, :, 1])
             ang = np.angle(cmplx_positions)
             ang[ang < -pi] += 2 * pi
             ang[ang > pi] -= 2 * pi
             self.polar_positions = np.concatenate(
-                (np.absolute(cmplx_positions)[:,None], ang[:, None]),
-                 axis=2)
-            return self.cart_positions,self. polar_positions
+                (np.absolute(cmplx_positions)[..., None], ang[..., None]),
+                axis=2)
+            return self.cart_positions, self. polar_positions
         else:
             return self.cart_positions
 
-class Mog2(object):
-    def __init__(self):
-        self.fgbg=None
 
 class Model(object):
     '''variables for modelling nonlinearities'''
@@ -459,14 +613,22 @@ class Model(object):
         self.var = None
 
 
-class NoiseRemoval:
+class NoiseRemoval(object):
 
-    def remove_noise(self, thresh=None, norm=True):
+    def remove_noise(self, thresh=None, norm=True, img=None, in_place=False):
+        if img is None:
+            img = data.depth_im
+        elif id(img) == id(data.depth_im):
+            in_place = True
         if thresh is None:
             thresh = CONST['noise_thres']
-        data.depth_im *= data.depth_im < thresh
+        mask = img < thresh
+        img = img * mask
         if norm:
-            data.depth_im = data.depth_im / float(thresh)
+            img = img / float(thresh)
+        if in_place:
+            data.depth_im = img
+        return img
 
 
 class Path(object):
@@ -486,6 +648,99 @@ class Point(object):
         self.x_hand = 0
         self.y_hand = 0
         self.wristpoints = None
+
+# pylint:disable=no-self-use
+
+
+class PolarOperations(object):
+    '''
+    Class to hold all used  operations on polar coordinates
+    '''
+
+    def find_cocircular_points(self, polar_points, radius, resolution=np.sqrt(2) / 2.0):
+        '''
+        Find cocircular points given radius and suggested resolution
+        '''
+        return polar_points[np.abs(polar_points[:, 0] - radius) <= resolution, :]
+
+    def change_origin(self, old_polar, old_ref_angle, old_ref_point, new_ref_point):
+        '''Caution: old_polar is changed'''
+        old_polar[:, 1] += old_ref_angle
+        complex_diff = (new_ref_point[0] - old_ref_point[0]) * \
+            1j + new_ref_point[1] - old_ref_point[1]
+        polar_diff = [np.absolute(complex_diff), np.angle(complex_diff)]
+        _radius = np.sqrt(polar_diff[0]**2 + old_polar[:, 0] * old_polar[:, 0] - 2 *
+                          polar_diff[0] * old_polar[:, 0] * np.cos(old_polar[:, 1] - polar_diff[1]))
+        _sin = old_polar[:, 0] * np.sin(old_polar[:, 1]) - \
+            polar_diff[0] * np.sin(polar_diff[1])
+        _cos = old_polar[:, 0] * np.cos(old_polar[:, 1]) - \
+            polar_diff[0] * np.cos(polar_diff[1])
+        _angle = np.arctan2(_sin, _cos)
+        return np.concatenate((_radius[:, None], _angle[:, None]), axis=1)
+
+    def polar_to_cart(self, polar, center, ref_angle):
+        '''
+        Polar coordinates to cartesians,
+        given center and reference angle
+        '''
+        return np.concatenate(
+            ((polar[:, 0] * np.sin(ref_angle + polar[:, 1]) +
+              center[0])[:, None].astype(int),
+             (polar[:, 0] * np.cos(ref_angle + polar[:, 1]) +
+              center[1])[:, None].astype(int)), axis=1)
+
+    def mod_correct(self, polar):
+        '''
+        Correct polar points, subjects to
+        modular (-pi,pi). polar is changed.
+        '''
+        polar[polar[:, 1] > pi, 1] -= 2 * pi
+        polar[polar[:, 1] < -pi, 1] += 2 * pi
+
+    def fix_angle(self, angle):
+        '''
+        Same with mod_correct, for single angles
+        '''
+        if angle < -pi:
+            angle += 2 * pi
+        elif angle > pi:
+            angle -= 2 * pi
+        return angle
+
+    def mod_between_vals(self, angles, min_bound, max_bound):
+        '''
+        Find angles between bounds, using modular (-pi,pi) logic
+        '''
+        if max_bound == min_bound:
+            return np.zeros((0))
+        res = self.mod_diff(max_bound, min_bound, 1)[1]
+        if res == 0:
+            return (angles <= max_bound) * (angles >= min_bound)
+        else:
+            return ((angles >= max_bound) * (angles <= pi)
+                    + (angles >= -pi) * (angles <= min_bound))
+
+    def mod_diff(self, angles1, angles2, ret_argmin=0):
+        '''
+        Angle substraction using modulo in (-pi,pi)
+        '''
+        sgn = -1 + 2 * (angles1 > angles2)
+        if len(angles1.shape) == 0:
+
+            diff1 = np.abs(angles1 - angles2)
+            diff2 = 2 * pi - diff1
+            if ret_argmin:
+                return sgn * min([diff1, diff2]), np.argmin([diff1, diff2])
+            else:
+                return sgn * min([diff1, diff2])
+        diff = np.empty((2, angles1.shape[0]))
+        diff[0, :] = np.abs(angles1 - angles2)
+        diff[1, :] = 2 * pi - diff[0, :]
+        if ret_argmin:
+            return sgn * np.min(diff, axis=0), np.argmin(diff, axis=0)
+        else:
+            return sgn * np.min(diff, axis=0)
+# pylint:enable=no-self-use
 
 
 class Result(object):
@@ -515,10 +770,10 @@ class Result(object):
         yaxis = (len(self.images) - 1) / self.maxdim + 1
         xaxis = min(self.maxdim, len(self.images))
         if not isrgb:
-            montage = 255 * \
+            montage = 255 *\
                 np.ones((imy * yaxis, imx * xaxis), dtype=np.uint8)
         elif isrgb:
-            montage = 255 * \
+            montage = 255 *\
                 np.ones((imy * yaxis, imx * xaxis, 3), dtype=np.uint8)
         x_init = 0
         for count, image in enumerate(sorted_images):
@@ -531,11 +786,11 @@ class Result(object):
                 if len(image.shape) == 2:
                     image = np.tile(image[:, :, None], (1, 1, 3))
             if not isrgb:
-                montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
-                        * imy, x_init:x_init + image.shape[1]] = image
+                montage[(count / self.maxdim) * imy: (count / self.maxdim + 1)
+                        * imy, x_init: x_init + image.shape[1]] = image
             else:
-                montage[(count / self.maxdim) * imy:(count / self.maxdim + 1)
-                        * imy, x_init:x_init + image.shape[1], :] = image
+                montage[(count / self.maxdim) * imy: (count / self.maxdim + 1)
+                        * imy, x_init: x_init + image.shape[1], :] = image
             if (count + 1) % self.maxdim == 0:
                 x_init = 0
             else:
@@ -740,8 +995,7 @@ class SceneObjects():
             if first_time:
 
                 self.initial_vals[
-                    count, :self.pixsize[count]] = \
-                    data.uint8_depth_im[xcoords, ycoords]
+                    count, :self.pixsize[count]] = data.uint8_depth_im[xcoords, ycoords]
         if first_time:
             self.initial_center = self.center.copy()
 
@@ -787,9 +1041,8 @@ class Segmentation(object):
                                                 self.total_obj_num), dtype=int)
 
         for count in range(self.total_obj_num):
-            self.neighborhood_existence[count, :] =\
-                np.sum(self.proximity_table
-                       == count, axis=0)
+            self.neighborhood_existence[count, :] = np.sum(self.proximity_table
+                                                           == count, axis=0)
 
     def find_objects(self):
         time1 = time.clock()
@@ -907,7 +1160,7 @@ class Segmentation(object):
 
         complex_inters = np.array(
             [[complex(point[0], point[1]) for point in inters]])
-        #euclid_dists = np.abs(np.transpose(complex_inters) - complex_inters)
+        # euclid_dists = np.abs(np.transpose(complex_inters) - complex_inters)
         if inters:
             desired_center = np.median(np.array(inters), axis=0)
             real_center_ind = np.argmin(
@@ -928,12 +1181,13 @@ class Threshold(object):
         self.lap_thres = 0
         self.depth_thres = 0
 
-with open(CONST_LOC+"/config.yaml", 'r') as stream:
+with open(CONST_LOC + "/config.yaml", 'r') as stream:
     try:
         CONST = yaml.load(stream)
     except yaml.YAMLError as exc:
         print exc
 # pylint: disable=C0103
+circ_oper = CircularOperations()
 contours = Contour()
 counters = Counter()
 chhm = CountHandHitMisses()
@@ -943,9 +1197,9 @@ lims = Lim()
 masks = Mask()
 meas = Measure()
 models = Model()
-mog2 = Mog2()
 paths = Path()
 points = Point()
+pol_oper = PolarOperations()  # depends on Measure class
 thres = Threshold()
 im_results = Result()
 segclass = Segmentation()
