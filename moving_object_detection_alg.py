@@ -12,7 +12,6 @@ from scipy import ndimage
 import array
 import label_contours
 import logging
-logging.getLogger()
 
 
 class Mog2(object):

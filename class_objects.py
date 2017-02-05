@@ -6,8 +6,6 @@ from cv_bridge import CvBridge, CvBridgeError
 import yaml
 from __init__ import *
 import logging
-logging.basicConfig(format='%(levelname)s:%(message)s')
-logging.getLogger().setLevel('INFO')
 
 
 def find_nonzero(arr):

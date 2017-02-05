@@ -17,16 +17,17 @@ path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
 path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
 train_path: /media/vassilis/Thesis/Datasets/PersonaFarm/hand_dataset
-actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions
-actions_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
+actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
 #rosbag files location
-rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm
+rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions
 #pathname of calibrated image eges
 cal_edges_path: /home/vassilis/Thesis/KinectPainting/Calibration_Edges.jpg
 cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 #files to save images
 save_depth: Depth
 save_color: Color
+actions_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
+rosbag_res_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
 #save parameters
 max_depth_im_num_to_save: 200
 # Choose object detection method ( segmentation or noise_model or mog2)
@@ -59,7 +60,7 @@ train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/all
 3DHOF_bin_size: 5
 GHOG_bin_size: 64
 STD_small_filt_window: 30
-STD_big_filt_window: 300
+STD_big_filt_window: 120
 action_separation_thres: 0
 #Variables for hand segmentation
 max_link_number : 6

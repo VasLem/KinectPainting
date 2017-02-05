@@ -1,0 +1,10 @@
+Load csv: 'Load a valid .csv file and fill Actions List. First column includes the action name. Second column has frames starting index. Third column has frames ending index'
+Save csv: 'Save the created list to a csv file'
+Load bag: 'Load the pathname of the input rosbag file'
+Process bag: 'Extract frames from the rosbag file and save them to a structure in memory. Further processing is done after loading the file'
+Play: 'Play selected stream'
+Stop: 'Stop selected stream'
+Add: 'Add action to list'
+Remove: 'Remove selected action from list'
+Save actions: 'By reading actions list, parse the frames and extract the respective processed frames to a directory structure'
+

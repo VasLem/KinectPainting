@@ -38,8 +38,6 @@ The direction is at 0-th joint towards the center of the image and
 at n-th joint defined by previous directions.
 '''
 import logging
-logging.basicConfig(
-    format='%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s')
 from math import pi
 import os
 # import time
@@ -933,6 +931,8 @@ class FindArmSkeleton(object):
 
 def main():
     '''Main Caller Function'''
+    logging.basicConfig(
+        format='%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s')
     if not os.path.exists('arm_example.png'):
         urllib.urlretrieve("https://www.packtpub.com/\
                            sites/default/files/Article-Images/B04521_02_04.png",
