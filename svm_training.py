@@ -328,7 +328,8 @@ class SVM(object):
             if not isinstance(data, basestring):
                 ground_truth = np.zeros(len(data))
             else:
-                ground_truth = np.zeros(length + 1)
+                ground_truth = np.zeros(max([int(filter(str.isdigit,filename)) for
+                                                 filename in files])-1)
             ground_truth[:] = np.NaN
             all_bounds = [map(list, zip(*ground_truth_init[key])) for key in
                           ground_truth_init.keys()]
@@ -384,7 +385,9 @@ class SVM(object):
             inp = np.atleast_2d(data).T
         else:
             inp = data
-        return np.apply_along_axis(self.masked_mean, 0, data, win_size)
+        return np.apply_along_axis(self.masked_mean,
+                                   0, data, win_size)[(win_size-1)/2:
+                                                      -(win_size+1)/2+1]
 
     def run_testing(self, data=None, online=True, against_training=False,
                     scores_filter_shape=20,
@@ -601,8 +604,7 @@ class SVM(object):
 
         self.high_filtered_scores_std = self.upgr_filter(self.filtered_scores_std,
                                                          std_big_filter_shape)
-
-        positive = np.zeros_like(self.scores.shape[0])
+        positive = np.zeros(self.scores.shape[0])
         positive[:] = None
         positive[fmask] = ((self.high_filtered_scores_std -
                             self.less_filtered_scores_std)[fmask] > 0).astype(int)
@@ -851,19 +853,20 @@ def main():
     # testing against training data
     svm.run_training(test_against_training=True)
     svm.run_testing(online=False, against_training=True)
-    '''
+
     # testing with other offline data
     '''
     svm.run_testing(co.CONST['rosbag_res_save_path'], online=False, load=True,
                     like_paper=True)
-    svm.visualize_scores('Results as paper proposes')
-    '''
+    svm.visualize_scores('Offline Testing')
     '''
     svm.run_testing(co.CONST['rosbag_res_save_path'], online=False, load=True,
                     like_paper=False)
     svm.visualize_scores('Results with simple approach')
     '''
+    '''
     fake_online_testing(svm)
     svm.visualize_scores('Fake Online Testing')
+    '''
 if __name__ == '__main__':
     main()
