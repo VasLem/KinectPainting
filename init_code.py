@@ -1,6 +1,7 @@
 '''Run this script first'''
 import subprocess
 from subprocess import check_output
+import logging
 import signal
 import sys
 import time
@@ -31,15 +32,15 @@ def get_pid(name):
     return map(int, check_output(["pidof", name]).split())
  
 def rosbag_handler(sig,frame):
-    print 'Toggled ROSbag pause/continue'
+    LOG.info('Toggled ROSbag pause/continue')
     PROCESS.stdin.write(' ')
 
 def signal_handler(sig, frame):
     '''
     Signal handler for CTRL-C interrupt (SIGINT)
     '''
-    print '\nGot SIGINT'
-    print 'Exiting...'
+    LOG.info('\nGot SIGINT')
+    LOG.info('Exiting...')
     if co.CONST['stream'] == 'live':
         PROCESS.stop()
     else:
@@ -159,35 +160,36 @@ class Kinect(object):
     '''Kinect Processing Class'''
 
     def __init__(self):
+        self.mog2 = None
         co.meas.nprange = np.arange((co.meas.imy + 2) * (co.meas.imx + 2))
         self.initial_im_set_list = []
         self.vars = self.initial_im_set_list
         global PROCESS
-        print 'Detection method is set to:', co.CONST['detection_method']
+        LOG.info('Detection method is set to: '+ co.CONST['detection_method'])
         if co.CONST['detection_method'] == 'segmentation':
-            print 'Segmentation Data file is: ' +\
-                co.CONST['segmentation_data'] + '.pkl'
+            LOG.info('Segmentation Data file is: ' +
+                     co.CONST['segmentation_data'] + '.pkl')
             co.segclass.exists_previous_segmentation = os.path.isfile(
                 co.CONST['segmentation_data'] + '.pkl')
             if co.segclass.exists_previous_segmentation:
-                print 'Existing previous background segmentation'
-                print 'Loading from memory...'
+                LOG.info('Existing previous background segmentation')
+                LOG.info('Loading from memory...')
                 (co.segclass, co.meas) = pickle.load(
                     open(co.CONST['segmentation_data'] + '.pkl', 'rb'))
                 co.segclass.exists_previous_segmentation = True
-                print 'Loaded previous setup'
-        print 'Streaming is set to:', co.CONST['stream']
+                LOG.info('Loaded previous setup')
+        LOG.info('Streaming is set to: '+ co.CONST['stream'])
         if co.CONST['stream'] == 'live':
-            print 'Initialising Kinect Stream...'
+            LOG.info('Initialising Kinect Stream...')
             node = roslaunch.core.Node("kinect2_bridge", "kinect2_bridge")
             # rospy.set_param('fps_limit',10)
             launch = roslaunch.scriptapi.ROSLaunch()
             launch.start()
             PROCESS = launch.launch(node)
             if PROCESS.is_alive():
-                print 'Starting subscribers to Kinect..'
+                LOG.info('Starting subscribers to Kinect..')
         elif co.CONST['stream'] == 'recorded':
-            print 'Starting streaming of rosbag file:', co.CONST['bag_path']
+            LOG.info('Starting streaming of rosbag file: '+ co.CONST['bag_path'])
             PROCESS = subprocess.Popen(
                 'rosbag play -l -q ' +
                 co.CONST['bag_path'],
@@ -237,7 +239,7 @@ class Kinect(object):
             co.counters.save_im_num += 1
             result = frame_process()
             if not isinstance(result, str):
-                print 'SUCCESS'
+                LOG.info('SUCCESS')
 
         co.counters.im_number += 1
         if co.CONST['results'] == 'display':
@@ -279,8 +281,10 @@ class Kinect(object):
         return
 
     def detection_with_mog2(self):
-        co.data.depth3d = np.tile(co.data.depth_im[:, :, None], (1, 1, 3))
-        moda.detection_by_mog2()
+        if self.mog2 is None:
+            self.mog2 = moda.Mog2()
+            self.mog2.initialize()
+        self.mog2.run(data= co.data.depth_im)
         co.counters.im_number+=1
 
     def callback(self, depth, color):
@@ -355,10 +359,10 @@ def main():
         Kinect()
         rospy.init_node('kinect_stream', anonymous=True)
         if not co.edges.exists_lim_calib_image:
-            print 'No image exists for calibration of frame edges'
-            print 'Please move randomly kinect in space' \
-                'for the next 10 seconds (DONT BREAK IT) and wait for' \
-                'program to exit'
+            LOG.info('No image exists for calibration of frame edges')
+            LOG.info('Please move randomly kinect in space' \
+                     'for the next 10 seconds (DONT BREAK IT) and wait for' \
+                     'program to exit')
         rospy.spin()
         print "Shutting down"
         if co.CONST['stream'] == 'live':
@@ -379,6 +383,11 @@ def main():
             frame_process()
             cv2.waitKey(1000 / co.CONST['framerate'])
 
-
+LOG = logging.getLogger(__name__)
 if __name__ == '__main__':
+    ch = logging.StreamHandler()
+    ch.setLevel('INFO')
+    ch.setFormatter(logging.Formatter(
+        '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+    LOG.addHandler(ch)
     main()

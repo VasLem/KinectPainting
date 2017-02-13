@@ -1,4 +1,4 @@
-import warnings
+import warnings, sys
 import logging
 import numpy as np
 from numpy import array, argmax, argmin, concatenate, diag, isclose
@@ -10,10 +10,17 @@ from numpy import abs as npabs
 from scipy.optimize import fmin_tnc
 import class_objects as co
 
+LOG = logging.getLogger('__name__')
+CH = logging.StreamHandler(sys.stderr)
+CH.setFormatter(logging.Formatter(
+    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+LOG.handlers=[]
+LOG.addHandler(CH)
+LOG.setLevel(logging.INFO)
 
 class SparseCoding(object):
 
-    def __init__(self,log_lev='INFO'):
+    def __init__(self,log_lev='INFO', des_dim=None):
         self.bmat = None
         self.active_set = None
         self.inp_features = None
@@ -26,13 +33,13 @@ class SparseCoding(object):
         self.prev_err = 0
         self.curr_error = 0
         self.allow_big_vals = False
-        self.des_dim = co.CONST['des_dim']
+        self.des_dim = des_dim
+        if des_dim is None:
+            self.des_dim = co.CONST['des_dim']
         self.dist_sigma = 0.1
         self.dist_beta = 0.005
         self.theta = None
         self.prev_out_feats=None
-        logging.basicConfig(format='%(levelname)s:%(message)s')
-        logging.getLogger().setLevel(log_lev)
 
     def flush_variables(self):
         '''
@@ -185,28 +192,28 @@ class SparseCoding(object):
             if np.abs(objval) - np.abs(prev_objval) > 100 and not\
                     self.allow_big_vals and not count == 0:
                 if self.prev_out_feats is not None:
-                    logging.debug('Current Objective Function value: ' +
+                    LOG.debug('Current Objective Function value: ' +
                                     str(np.abs(objval)))
-                    logging.debug('Previous Objective Function value: ' +
+                    LOG.debug('Previous Objective Function value: ' +
                                     str(np.abs(prev_objval)))
-                    logging.debug('Problem with big values of inv(B^T*B)' +
+                    LOG.debug('Problem with big values of inv(B^T*B)' +
                                     ',you might want to increase atol' +
                                     ' or set flag allow_big_vals to true' +
                                     ' (this might cause' +
                                     ' problems)')
-                    logging.debug('Reverting to previous iteration result ' +
+                    LOG.debug('Reverting to previous iteration result ' +
                                     'and exiting loop..')
                     self.out_features=self.prev_out_feats
                     break
                 else:
-                    logging.error('Current Objective Function value: ' +
+                    LOG.error('Current Objective Function value: ' +
                                     str(np.abs(objval)))
-                    logging.error('Previous Objective Function value: ' +
+                    LOG.error('Previous Objective Function value: ' +
                                     str(np.abs(prev_objval)))
-                    logging.error('Problem with big values of inv(B^T*B),increase atol' +
+                    LOG.error('Problem with big values of inv(B^T*B),increase atol' +
                                     ' or set flag allow_big_vals to true (this might cause' +
                                     ' serious convergence problems)')
-                    logging.error('Exiting as algorithm has not produced any'
+                    LOG.error('Exiting as algorithm has not produced any'
                                   + ' output results.')
                     exit()
             prev_objval = objval
@@ -216,13 +223,13 @@ class SparseCoding(object):
                 z_coeff = self.out_features == 0
                 cond_b = npabs(new_qp_der_outfeati * z_coeff) <= gamma
                 if npsum(cond_b) == new_qp_der_outfeati.shape[0]:
-                    logging.debug('Reconstrunction error after '+
+                    LOG.debug('Reconstrunction error after '+
                                   'output vector correction: 0')
                     final_error = np.linalg.norm(
                         self.inp_features -
                         dot(self.bmat, self.out_features))
                     if display_error:
-                        logging.debug('Final Error'+ str(final_error))
+                        LOG.debug('Final Error'+ str(final_error))
                     return final_error, singularity_met
                 else:
                     # go to step 2
@@ -231,12 +238,12 @@ class SparseCoding(object):
                 # go to step 3
                 step2 = 0
             if count % 100 == 0:
-                logging.debug('\t Epoch:'+ str(count))
-                logging.debug('\t\t Intermediate Error='+
+                LOG.debug('\t Epoch:'+ str(count))
+                LOG.debug('\t\t Intermediate Error='+
                               str(np.linalg.norm(
                     self.inp_features - dot(self.bmat,
                     self.out_features))))
-        logging.debug('Algorithm did not converge'+
+        LOG.debug('Algorithm did not converge'+
                       ' in the given iterations with' +
                       ' error '+ str(np.linalg.norm(
                 self.inp_features - dot(self.bmat,
@@ -257,9 +264,9 @@ class SparseCoding(object):
         try:
             interm_result = inv(dot(_s_, _s_.T) + diag(lbd))
         except np.linalg.linalg.LinAlgError:
-            logging.warning('Singularity met while computing Lagrange Dual')
-            logging.debug('\t sum(lbds)= '+str(npsum(lbd)))
-            logging.debug('\t trace(dot(_s_,_s_.T))=' + 
+            LOG.warning('Singularity met while computing Lagrange Dual')
+            LOG.debug('\t sum(lbds)= '+str(npsum(lbd)))
+            LOG.debug('\t trace(dot(_s_,_s_.T))=' + 
                           str(trace(dot(_s_, _s_.T))))
             interm_result = inv(dot(_s_, _s_.T) +
                                 diag(lbd) +
@@ -278,10 +285,10 @@ class SparseCoding(object):
             interm_result = dot(dot(ksi, _s_.T),
                                 inv(dot(_s_, _s_.T) + diag(lbds)))
         except np.linalg.linalg.LinAlgError:
-            logging.warning('Singularity met while computing ' +
+            LOG.warning('Singularity met while computing ' +
                             'Lagrange Dual Gradient')
-            logging.debug('\t sum(lbds)= '+str(npsum(lbds)))
-            logging.debug('\t trace(dot(_s_,_s_.T))= ' +
+            LOG.debug('\t sum(lbds)= '+str(npsum(lbds)))
+            LOG.debug('\t trace(dot(_s_,_s_.T))= ' +
                           str(trace(dot(_s_, _s_.T))))
             interm_result = dot(dot(ksi, _s_.T),
                                 inv(dot(_s_, _s_.T) +
@@ -304,10 +311,10 @@ class SparseCoding(object):
         try:
             interm_result0 = inv(dot(_s_, _s_.T) + diag(lbds))
         except np.linalg.linalg.LinAlgError:
-            logging.warning('Singularity met while computing' +
+            LOG.warning('Singularity met while computing' +
                             'Lagrange Dual Hessian')
-            logging.debug('\t sum(lbds)= '+str(npsum(lbds)))
-            logging.debug('\t trace(dot(_s_,_s_.T))= ' +
+            LOG.debug('\t sum(lbds)= '+str(npsum(lbds)))
+            LOG.debug('\t trace(dot(_s_,_s_.T))= ' +
                           str(trace(dot(_s_, _s_.T))))
             interm_result0 = inv(
                 dot(_s_, _s_.T) + diag(lbds) + np.eye(lbds.shape[0]))
@@ -320,7 +327,7 @@ class SparseCoding(object):
         '''
         prev_err_mat = self.inp_features - dot(self.bmat, self.out_features)
         self.prev_err = np.linalg.norm(prev_err_mat)
-        logging.debug('Reconstruction error before dictionary training: '+
+        LOG.debug('Reconstruction error before dictionary training: '+
                       str(self.prev_err))
 
         fmin_tnc(self.lagrange_dual,
@@ -338,14 +345,14 @@ class SparseCoding(object):
                        inv(dot(self.out_features,
                                self.out_features.T) + diag(self.res_lbd)))
         except np.linalg.linalg.LinAlgError:
-            logging.warning('Singularity met while training dictionary')
+            LOG.warning('Singularity met while training dictionary')
             bmat = dot(dot(self.inp_features, self.out_features.T),
                        inv(dot(self.out_features,
                                self.out_features.T) +
                            diag(self.res_lbd) +
                            0.01 * self.basis_constraint *
                            np.eye(self.res_lbd.shape[0])))
-        logging.debug('Reconstruction error after dictionary correction: '+
+        LOG.debug('Reconstruction error after dictionary correction: '+
                       str(np.linalg.norm(self.inp_features-
                                          dot(self.bmat,
                                              self.out_features))))

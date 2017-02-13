@@ -15,20 +15,25 @@ from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.widgets import Button
 import cPickle as pickle
-
+import time
+LOG = logging.getLogger('__name__')
+CH = logging.StreamHandler(sys.stderr)
+CH.setFormatter(logging.Formatter(
+    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+LOG.handlers=[]
+LOG.addHandler(CH)
+LOG.setLevel(logging.INFO)
 # Kinect Intrinsics
-'''
 PRIM_X = 479.75
 PRIM_Y = 269.75
 FLNT = 540.68603515625
-'''
 # Senz3d Intrinsics
+'''
 PRIM_X = 317.37514566554989
 PRIM_Y = 246.61273826510859
 FLNT = 595.333159044648 / (30.48 / 1000.0)
+'''
 
-
-logging.basicConfig(format='%(levelname)s:%(message)s')
 
 
 def checktypes(objects, classes):
@@ -52,16 +57,6 @@ def find_nonzero(arr):
     '''
     return np.fliplr(cv2.findNonZero(arr).squeeze())
 
-
-def grad_angles(patch):
-    '''
-    Compute gradient angles on image patch for GHOG
-    '''
-    gradx, grady = np.gradient(patch.astype(float))
-    ang = np.arctan2(grady, gradx)
-    ang[ang < 0] = pi + ang[ang < 0]
-
-    return ang.ravel()  # returns values 0 to pi
 
 
 def prepare_dexter_im(img):
@@ -98,7 +93,7 @@ def prepare_im(img):
     hand_patch_pos = np.array(
         [np.min(hand_contour[:, 1]), np.min(hand_contour[:, 0])])
     return img,\
-        hand_patch, hand_patch_pos
+        hand_patch, hand_patch_pos, contours[np.argmax(contours_area)]
 
 
 class SpaceHistogram(object):
@@ -114,10 +109,8 @@ class SpaceHistogram(object):
         '''
         Compute normalized N-D histograms
         '''
-        weights = np.ones(sample.shape[0]) / float(sample.shape[0])
-        hist, edges = np.histogramdd(sample, self.bin_size, range=self.range,
-                                     weights=weights)
-        return hist, edges
+        hist, edges = np.histogramdd(sample, self.bin_size, range=self.range)
+        return hist
 
 
 class Action(object):
@@ -130,6 +123,7 @@ class Action(object):
         self.sparse_features = None
         self.sync = []
         self.samples_indices = None
+        self.angles = None
 
     def add_features(self, features=None, sparse_features=None):
         '''
@@ -137,22 +131,22 @@ class Action(object):
         '''
         if features is not None:
             if self.features is None:
-                self.features = [np.atleast_2d(feature).T for feature in
+                self.features = [np.atleast_2d(feature.ravel()).T for feature in
                                  features]
             else:
                 for count, feature in enumerate(features):
                     self.features[count] = np.concatenate((self.features[count],
-                                                           np.atleast_2d(feature).T),
+                                                           np.atleast_2d(feature.ravel()).T),
                                                           axis=1)
 
         if sparse_features is not None:
             if self.sparse_features is None:
-                self.sparse_features = [np.atleast_2d(feature).T for feature in
+                self.sparse_features = [np.atleast_2d(feature.ravel()).T for feature in
                                         sparse_features]
             else:
                 for count, feature in enumerate(sparse_features):
                     self.sparse_features[count] = np.concatenate((self.sparse_features[count],
-                                                                  np.atleast_2d(feature).T),
+                                                                  np.atleast_2d(feature.ravel()).T),
                                                                  axis=1)
 
     def update_sparse_features(self, dictionaries):
@@ -187,6 +181,7 @@ class Actions(object):
         self.testing = Action()
         self.save_path = (os.getcwd() +
                           os.sep + 'saved_actions.pkl')
+        self.features_extract = None
 
     def remove_action(self, act_num):
         '''
@@ -204,7 +199,11 @@ class Actions(object):
                    masksdata=None,
                    use_dexter=False,
                    visualize_=False,
-                   for_testing=False):
+                   for_testing=False,
+                   isderotated=True,
+                   isstatic=False,
+                   max_act_samples=None,
+                   feature_params=None):
         '''
         features_extract= FeatureExtraction Class
         dictionaries= SparseDictionaries Class
@@ -216,8 +215,8 @@ class Actions(object):
         for_testing = True if input data is testing data and features are
                       returned as (3DHOF,GHOG)
         '''
-        features_extract = FeatureExtraction(visualize_=visualize_)
-        checktypes([dictionaries, features_extract], [
+        self.features_extract = FeatureExtraction(visualize_=visualize_)
+        checktypes([dictionaries, self.features_extract], [
             SparseDictionaries, FeatureExtraction])
         if depthdata is None:
             raise Exception("Depth data frames are at least  needed")
@@ -242,9 +241,12 @@ class Actions(object):
         if isinstance(depthdata, str):
             files = []
             samples_indices = []
+            angles = []
+            centers = []
+            action.sync = []
             if os.path.isdir(os.path.join(depthdata, '0')):
                 for root, dirs, filenames in os.walk(depthdata):
-                    for filename in filenames:
+                    for filename in sorted(filenames):
                         if filename.endswith('.png'):
                             fil = os.path.join(root, filename)
                             par_folder = os.path.normpath(fil).split(
@@ -252,29 +254,53 @@ class Actions(object):
                             try:
                                 ind = int(par_folder)
                                 files.append(fil)
+                                action.sync.append(int(filter(
+                                    str.isdigit, fil)))
                                 samples_indices.append(ind)
                             except ValueError:
                                 pass
+                        elif filename.endswith('angles.txt'):
+                            fil = os.path.join(root, filename)
+                            with open(fil, 'r') as inpf:
+                                angles += map(float, inpf)
+                        elif filename.endswith('centers.txt'):
+                            fil = os.path.join(root, filename)
+                            with open(fil, 'r') as inpf:
+                                for line in inpf:
+                                    center = [
+                                        float(num) for num
+                                        in line.split(' ')]
+                                    centers += [center]
                 action.samples_indices = np.array(samples_indices)
+                action.angles = angles
             else:
-                files = glob.glob(os.path.join(depthdata,'*.png'))
-                action.samples_indices = np.zeros(len(files))
+                LOG.error('depthtdata must have numbered'+
+                              ' subdirectories, to denote the'+
+                              ' different samples')
+                raise NotImplementedError
             imgs = [cv2.imread(filename, -1) for filename
                     in files]
-            action.sync = [int(filter(str.isdigit,
-                                                os.path.basename(filename)))
-                                     for filename in files]
         else:
             imgs = depthdata[:]
+        if not isderotated:
+            imgs = [co.pol_oper.derotate(imgs[count],
+                                         angles[count],
+                                         centers[count])
+                    for count in range(len(imgs))]
+        feat_count=0
         for img_count, img in enumerate(imgs):
-            features_extract.update(img, img_count, use_dexter,
+            #DEBUGGING
+            #cv2.imshow('test',(img%255).astype(np.uint8))
+            #cv2.waitKey(10)
+            self.features_extract.update(img, img_count, use_dexter,
                                     masks_needed, masks)
             # Extract Features
-            features = features_extract.extract_features()
+            features = self.features_extract.extract_features(isstatic=isstatic,
+                                                         params=feature_params)
             # Save action to actions object
             if features is not None:
                 if visualize_:
-                    features_extract.visualize()
+                    self.features_extract.visualize()
                 if len(dictionaries.dicts) == 0:
                     action.add_features(features=features)
                 else:
@@ -282,12 +308,17 @@ class Actions(object):
                     for feat_num, feature in enumerate(features):
                         sparse_features.append(np.dot(dictionaries.dicts[feat_num],
                                                       feature))
-
                     action.add_features(features=features,
                                                   sparse_features=sparse_features)
+                feat_count+=1
+                if max_act_samples is not None:
+                    if feat_count==max_act_samples:
+                        break
         if for_testing:
-            return self.testing.sparse_features
-
+            if len(dictionaries.dicts) != 0:
+                return self.testing.sparse_features, self.testing.sync
+            else:
+                return self.testing.features, self.testing.sync
         return 0
 
     def update_sparse_features(self, dicts,
@@ -321,7 +352,7 @@ class Actions(object):
         else:
             actions_path = save_path
 
-        logging.info('Saving actions to ' + actions_path)
+        LOG.info('Saving actions to ' + actions_path)
         with open(actions_path, 'wb') as output:
             pickle.dump(self.actions, output, -1)
 
@@ -331,12 +362,13 @@ class SparseDictionaries(object):
     Class to hold sparse coding dictionaries
     '''
 
-    def __init__(self):
+    def __init__(self, des_dim=None):
         self.inv_dicts = []
         self.dicts = []
         self.initialized = True
         self.save_path = (os.getcwd() +
                           os.sep + 'saved_dictionaries.pkl')
+        self.des_dim = des_dim
 
     def train(self, actions, feat_num, act_num=0, bmat=None,
               final_iter=False, ret_errors=False, train_max_im_num=-1):
@@ -381,7 +413,7 @@ class SparseDictionaries(object):
         checktypes([total_features_num], [int])
         self.inv_dicts = []
         for _ in range(total_features_num):
-            self.inv_dicts.append(sc.SparseCoding())
+            self.inv_dicts.append(sc.SparseCoding(des_dim=self.des_dim))
             self.dicts.append(None)
         self.initialized = True
 
@@ -404,7 +436,7 @@ class SparseDictionaries(object):
             raise Exception('feat_num is more than total dictionaries ' +
                             'length. Check initialize stage')
         if feat_num == -1:
-            logging.warning('feat_num argument in add_dict should' +
+            LOG.warning('feat_num argument in add_dict should' +
                             ' be set when feat_dim is not, ' +
                             'else dictionary for feature 0 will be ovewritten')
             feat_num = 0
@@ -428,8 +460,8 @@ class SparseDictionaries(object):
         else:
             iter_quant = [self.inv_dicts[dict_num]]
             iter_range = [dict_num]
-        feat_dims = [] * len(iter_quant)
-        for count, inv_dict in enumerate(iter_quant):
+        feat_dims = [] * len(iter_range)
+        for count, inv_dict in zip(iter_range, iter_quant):
             feat_dims[count] = None
             try:
                 feat_dim = inv_dict.bmat.shape[0]
@@ -450,10 +482,19 @@ class SparseDictionaries(object):
         else:
             dictionaries_path = save_path
 
-        logging.info('Saving Dictionaries to ' + dictionaries_path)
+        LOG.info('Saving Dictionaries to ' + dictionaries_path)
         with open(dictionaries_path, 'wb') as output:
             pickle.dump(self.dicts, output, -1)
 
+def grad_angles(patch):
+    '''
+    Compute gradient angles on image patch for GHOG
+    '''
+    grady, gradx = np.gradient(patch.astype(float))
+    ang = np.arctan2(grady, gradx)
+    ang[ang < 0] = ang[ang < 0] + pi
+
+    return ang.ravel()  # returns values 0 to pi
 
 class FeatureExtraction(object):
     '''
@@ -461,6 +502,7 @@ class FeatureExtraction(object):
     '''
 
     def __init__(self, visualize_=False):
+        self.extract_time = []
         self.features = np.zeros(0)
         self.prev_projection = np.zeros(0)
         self.curr_projection = np.zeros(0)
@@ -477,17 +519,38 @@ class FeatureExtraction(object):
         self.curr_depth_im = np.zeros(0)
         self.hofhist = SpaceHistogram()
         self.hoghist = SpaceHistogram()
+        self.hand_contour = None
         self.fig = None
         self.hof_features = None
-        self.hog_features = None
+        self.ghog_features = None
         self.hof_plots = None
         self.hog_plot = None
+        self.winSize = (48,48)
+        self.blockSize = (16,16)
+        self.blockStride = (8,8)
+        self.cellSize = (8,8)
+        self.nbins = 9
+        self.derivAperture = 1
+        self.winSigma = 4.
+        self.histogramNormType = 0
+        self.L2HysThreshold = 2.0000000000000001e-01
+        self.gammaCorrection = 0
+        self.nlevels = 64
+        self.hists = []
+        self.winstride = (8, 8)
+        self.padding = (4, 4)
+        self.hog = cv2.HOGDescriptor(self.winSize, self.blockSize,
+                                     self.blockStride, self.cellSize,
+                                     self.nbins, self.derivAperture, self.winSigma,
+                                     self.histogramNormType, self.L2HysThreshold,
+                                     self.gammaCorrection, self.nlevels)
+
         if visualize_:
             self.view = FeatureVisualization()
 
     def visualize(self):
         self.view.plot_hof(self.hof_features)
-        self.view.plot_hog(self.hog_features)
+        self.view.plot_hog(self.ghog_features)
         self.view.plot_3d_projection(self.roi,
                                      self.prev_roi_patch,
                                      self.curr_roi_patch)
@@ -504,7 +567,9 @@ class FeatureExtraction(object):
         self.curr_roi_patch = curr_depth_im[self.roi[0, 0]:self.roi[0, 1],
                                             self.roi[1, 0]:self.roi[1, 1]]
         nonzero_mask = (self.prev_roi_patch + self.curr_roi_patch) > 0
-        yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8)).astype(float) -
+        yx_coords = (find_nonzero(
+            nonzero_mask.astype(np.uint8)).astype(float)
+                            -
                      np.array([[PRIM_Y - self.roi[0, 0],
                                 PRIM_X - self.roi[1, 0]]]))
         prev_z_coords = self.prev_roi_patch[nonzero_mask][:,
@@ -512,6 +577,9 @@ class FeatureExtraction(object):
         curr_z_coords = self.curr_roi_patch[nonzero_mask][:,
                                                           None].astype(float)
         dz_coords = (curr_z_coords - prev_z_coords).astype(float)
+        #invariance to environment height variance:
+        dz_coords[dz_coords>250] = 250
+        dz_coords[dz_coords<-250] = -250
         yx_coords_in_space = yx_coords * dz_coords / FLNT
         return np.concatenate((yx_coords_in_space,
                                dz_coords), axis=1)
@@ -520,6 +588,9 @@ class FeatureExtraction(object):
         '''
         Find unified ROI, concerning 2 consecutive frames
         '''
+        if prev_patch is None:
+            prev_patch = curr_patch
+            prev_patch_pos = curr_patch_pos
         self.roi = np.array([[
             min(prev_patch_pos[0], curr_patch_pos[0]),
             max((prev_patch.shape[0] + prev_patch_pos[0],
@@ -528,7 +599,7 @@ class FeatureExtraction(object):
              max(prev_patch.shape[1] + prev_patch_pos[1],
                  curr_patch.shape[1] + curr_patch_pos[1])]])
 
-    def hof3d(self, prev_depth_im, curr_depth_im):
+    def hof3d(self, prev_depth_im, curr_depth_im, hof_params=None):
         '''
         Compute 3DHOF features
         '''
@@ -540,9 +611,41 @@ class FeatureExtraction(object):
                              disp[:, 1] + disp[:, 2] * disp[:, 2]))[:, None]
         disp_norm[disp_norm == 0] = 1
         disp /= disp_norm.astype(float)
-        return self.hofhist.hist_data(disp)
+        hist = self.hofhist.hist_data(disp)
+        hist = hist/float(disp.size)
+        return hist
 
-    def ghog(self, depth_im):
+    def pca_features(self, square_edge_size):
+        _, pca_along_2 = cv2.PCACompute(
+            cv2.findNonZero(self.curr_patch.astype(np.uint8)).squeeze().
+            astype(float),
+            np.array([]), maxComponents=1)
+        rot_angle = np.arctan2(pca_along_2[0][0], pca_along_2[0][1])
+        patch = co.pol_oper.derotate(self.curr_patch, rot_angle,
+                             (self.curr_patch.shape[0]/2,
+                              self.curr_patch.shape[1]/2))
+        patch_res = cv2.resize(patch, (square_edge_size, square_edge_size),
+                              interpolation=cv2.INTER_NEAREST)
+        patch_res_mask = patch_res == 0
+
+        masked_array = np.ma.array(patch_res, mask=patch_res_mask)
+        masked_mean_0 = np.ma.mean(masked_array,axis=0)
+        masked_mean_1 = np.ma.mean(masked_array,axis=1)
+        cor_patch_res_0 = patch_res.copy()
+        cor_patch_res_1 = patch_res.copy()
+        cor_patch_res_0[patch_res_mask] = np.tile(masked_mean_0[None,
+                                                              :], (patch_res.shape[0], 1))[
+                                                                  patch_res_mask]
+        cor_patch_res_1[patch_res_mask] = np.tile(masked_mean_1[:,None], (
+                                                                1, patch_res.shape[1]))[
+                                                                patch_res_mask]
+        _, pca_along_0 = cv2.PCACompute(cor_patch_res_0,np.array([]), maxComponents=1)
+        _, pca_along_1 = cv2.PCACompute(cor_patch_res_1.T, np.array([]),
+                                        maxComponents=1)
+        features = np.concatenate((pca_along_0[0], pca_along_1[0]),axis=0)
+        return features
+
+    def ghog(self, depth_im, ghog_params=None):
         '''
         Compute GHOG features
         '''
@@ -551,21 +654,39 @@ class FeatureExtraction(object):
         if self.hoghist.range is None:
             self.hoghist.bin_size = co.CONST['GHOG_bin_size']
             self.hoghist.range = [[0, pi]]
-        return self.hoghist.hist_data(grad_angles(im_patch))
+        if ghog_params is not None:
+            self.hoghist.bin_size = ghog_params
 
-    def extract_features(self):
+        hist = self.hoghist.hist_data(grad_angles(im_patch))
+        #hist[0] = max(0, hist[0] - np.sum(im_patch==0))
+        hist = hist / float(np.sum(hist))
+        return hist
+
+    def extract_features(self,isstatic=False, params=([None],[None])):
         '''
-        Returns 3DHOF and GHOG
+        Returns 3DHOF and GHOG . isstatic to return only GHOG.
+        features_params is a tuple of lists of variables ([hof_bin_numbers],
+        [hog_bin_numbers])
         '''
-        if self.prev_patch is None or \
-           self.curr_count - self.prev_count > co.CONST['min_frame_count_diff']:
-            return None
+        t1 = time.time()
         self.find_roi(self.prev_patch, self.curr_patch,
                       self.prev_patch_pos, self.curr_patch_pos)
-        self.hof_features = self.hof3d(
-            self.prev_depth_im, self.curr_depth_im)
-        self.hog_features = self.ghog(self.curr_depth_im)
-        return self.hof_features[0].ravel(), self.hog_features[0].ravel()
+        self.ghog_features = self.ghog(self.curr_depth_im, params[0][0])
+        if not isstatic:
+            if self.prev_patch is None or \
+               self.curr_count - self.prev_count > co.CONST['min_frame_count_diff']:
+                return None
+            self.hof_features = self.hof3d(
+                self.prev_depth_im, self.curr_depth_im)
+            t2 = time.time()
+            self.extract_time.append(t2-t1)
+            return self.hof_features.ravel(), self.ghog_features.ravel()
+        else:
+            pca_features = self.pca_features(params[0][0])
+            t2 = time.time()
+            self.extract_time.append(t2-t1)
+            return [pca_features]
+            #return [self.ghog_features.ravel()]
 
     def update(self, img, img_count, use_dexter=False, masks_needed=True,
                masks=None):
@@ -584,10 +705,13 @@ class FeatureExtraction(object):
                     hsa.main_process(masks[img_count], display=1)
                     mask = img * (masks[img_count] > 0)
             else:
-                mask, hand_patch, hand_patch_pos = prepare_im(img)
+                try:
+                    mask, hand_patch, hand_patch_pos, self.hand_contour = prepare_im(img)
+                except ValueError:
+                    return
         (self.prev_depth_im,
          self.curr_depth_im) = (self.curr_depth_im,
-                                mask)
+                                img)
         (self.curr_count,
          self.prev_count) = (img_count,
                              self.curr_count)
@@ -597,7 +721,7 @@ class FeatureExtraction(object):
         (self.prev_patch_pos,
          self.curr_patch_pos) = (self.curr_patch_pos,
                                  hand_patch_pos)
-
+        return
 
 class Callback(object):
 
@@ -627,8 +751,8 @@ class FeatureVisualization(object):
         self.hog_plot = self.fig.add_subplot(gs[70:100, 70:100])
         plt.show()
 
-    def plot_hog(self, hog_features):
-        hog_hist, hog_bins = hog_features
+    def plot_hog(self, ghog_features):
+        hog_hist, hog_bins = ghog_features
         width = 0.7 * (hog_bins[0][1] - hog_bins[0][0])
         center = (hog_bins[0][:-1] + hog_bins[0][1:]) / 2
         self.hog_plot.clear()
@@ -720,11 +844,12 @@ class ActionRecognition(object):
     '''
 
     def __init__(self, log_lev='INFO', train_max_im_num=100,
-                 train_max_iter=2):
-        self.dictionaries = SparseDictionaries()
+                 train_max_iter=2, des_dim=None):
+        self.dictionaries = SparseDictionaries(des_dim=des_dim)
+        self.des_dim = des_dim
         self.actions = Actions()
         self.log_lev = log_lev
-        logging.getLogger().setLevel(log_lev)
+        LOG.setLevel(log_lev)
         self.train_max_im_num = train_max_im_num
         self.train_max_iter = train_max_iter
 
@@ -733,7 +858,10 @@ class ActionRecognition(object):
                    masksdata=None,
                    use_dexter=False,
                    visualize=False,
-                   for_testing=False):
+                   for_testing=False,
+                   isstatic=False,
+                   max_act_samples=None,
+                   feature_params=None):
         '''
         actions.add_action alias
         '''
@@ -743,7 +871,10 @@ class ActionRecognition(object):
                                       masksdata,
                                       use_dexter,
                                       visualize_=visualize,
-                                      for_testing=for_testing)
+                                      for_testing=for_testing,
+                                      isstatic=isstatic,
+                                      max_act_samples=max_act_samples,
+                                      feature_params=feature_params)
         return res
 
     def train_sparse_dictionaries(self, act_num=None,
@@ -788,7 +919,7 @@ class ActionRecognition(object):
                                 'd is True')
 
         if depthdata is not None:
-            logging.info('Adding action..')
+            LOG.info('Adding action..')
             self.actions.add_action(self.dictionaries,
                                     depthdata,
                                     masks_needed,
@@ -798,23 +929,25 @@ class ActionRecognition(object):
         self.dictionaries.initialize(feat_num)
         frames_num = self.actions.\
             actions[act_num].features[0].shape[1]
-        logging.info('Frames number: ' + str(frames_num))
+        LOG.info('Frames number: ' + str(frames_num))
         train_im_num = min(frames_num, self.train_max_im_num)
-        logging.info('Frames to be used for training: ' + str(train_im_num))
-        logging.info('Creating dictionaries..')
+        LOG.info('Frames to be used for training: ' + str(train_im_num))
+        LOG.info('Creating dictionaries..')
         for count in range(feat_num):
             self.dictionaries.add_dict(self.actions, feat_num=count)
         train_actions = train_im_num
         final_errors = []
-        for iteration in range(self.train_max_iter):
-            logging.info('Epoch: ' + str(iteration))
+        try_count = 0
+        iterat = range(feat_num)
+        while True:
+            LOG.info("Initializing inverse dictionaries")
             self.actions.actions[act_num].flush_sparse_features()
-            logging.info('Running Feature Sign Search Algorithm..')
-            for img_count in range(train_im_num):
-                logging.info('Frame ' + str(img_count) + ' is being edited')
+            for img_count in range(10):
+                LOG.debug('Frame ' + str(img_count) + ' is being edited')
                 sparse_features = []
-                for feat_count in range(feat_num):
-                    coding = sc.SparseCoding(log_lev=self.log_lev)
+                for feat_count in iterat:
+                    coding = sc.SparseCoding(log_lev=self.log_lev,
+                                             des_dim=self.des_dim)
                     coding.feature_sign_search_algorithm(
                         inp_features=np.atleast_2d(
                             self.actions.actions[
@@ -827,20 +960,63 @@ class ActionRecognition(object):
                                                          out_features).T)
                 self.actions.actions[act_num].add_features(
                     sparse_features=sparse_features)
-            logging.info('Training Dictionaries..')
-            for feat_count in range(feat_num):
-                if iteration == self.train_max_iter - 1:
-                    final_errors.append(self.dictionaries.train(self.actions,
-                                                                feat_count,
-                                                                final_iter=True,
-                                                                ret_errors=True,
-                                                                train_max_im_num=train_im_num)
-                                        [1])
-                else:
-                    self.dictionaries.train(self.actions, feat_count,
-                                            train_max_im_num=train_im_num)
-        logging.info('Training is completed with final errors:\n' +
+            for feat_count in iterat:
+                self.dictionaries.train(self.actions, feat_count,
+                                        train_max_im_num=10)
+            for iteration in range(self.train_max_iter):
+                LOG.info('Epoch: ' + str(iteration))
+                self.actions.actions[act_num].flush_sparse_features()
+                LOG.info('Running Feature Sign Search Algorithm..')
+                for img_count in range(train_im_num):
+                    LOG.debug('Frame ' + str(img_count) + ' is being edited')
+                    sparse_features = []
+                    for feat_count in iterat:
+                        coding = sc.SparseCoding(log_lev=self.log_lev,
+                                                 des_dim=self.des_dim)
+                        coding.feature_sign_search_algorithm(
+                            inp_features=np.atleast_2d(
+                                self.actions.actions[
+                                    act_num].features[feat_count]
+                                [:, img_count]).T.astype(float),
+                            init_bmat=self.dictionaries.inv_dicts[feat_count].
+                            bmat.copy(),
+                            max_iter=100)
+                        sparse_features.append(np.atleast_2d(coding.
+                                                             out_features).T)
+                    self.actions.actions[act_num].add_features(
+                        sparse_features=sparse_features)
+                LOG.info('Training Dictionaries..')
+                for feat_count in iterat:
+                    if iteration == self.train_max_iter - 1:
+                        final_errors.append(self.dictionaries.train(self.actions,
+                                                                    feat_count,
+                                                                    final_iter=True,
+                                                                    ret_errors=True,
+                                                                    train_max_im_num=train_im_num)
+                                            [1])
+                    else:
+                        self.dictionaries.train(self.actions, feat_count,
+                                                train_max_im_num=train_im_num)
+            LOG.info('Training is completed with final errors:\n' +
                      str(final_errors))
+            try_count += 1
+            if np.max(final_errors) > co.CONST['max_dict_error']:
+                if try_count > co.CONST['max_retries']:
+                    LOG.warning('Training has high final error but'+
+                                ' reached maximum retries')
+                    break
+                LOG.warning('Bad inverse dictionary initialization and the'
+                            + ' final error is too high, retraining..'+
+                            '(max_dict_error can be changed in config.yaml '
+                            'if needed)')
+                iterat = []
+                for count, error in enumerate(final_errors):
+                    if error > co.CONST['max_dict_error']:
+                        iterat.append(count)
+                        self.dictionaries.flush(count)
+                final_erros = []
+            else:
+                break
         if save_trained:
             self.dictionaries.save()
         return(self.dictionaries.dicts)

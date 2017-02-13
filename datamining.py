@@ -22,9 +22,9 @@ import hand_segmentation_alg as hsa
 import extract_and_process_rosbag as epr
 import full_actions_registration as far
 io.use_plugin('freeimage')
-logging.getLogger().setLevel(logging.DEBUG)
 ID_LOAD_CSV = wx.NewId()
 ID_BAG_PROCESS = wx.NewId()
+ID_PROCESS_ALL = wx.NewId()
 ID_PLAY = wx.NewId()
 ID_STOP = wx.NewId()
 ID_SAVE_CSV = wx.NewId()
@@ -199,11 +199,15 @@ class TopicsNotebook(wx.Notebook):
         '''
         wx.Notebook.__init__(self, parent, id, pos, size, style=wx.NB_TOP,
                              name=name)
+        self.start_frame_handler = start_frame_handler
+        self.end_frame_handler = end_frame_handler
+        self.forced_frame_handler = forced_frame_handler
+        self.fps = fps
         self.pages = []
         max_len = 0
         for topic in data.keys():
             max_len = max(len(data[topic].frames), max_len)
-        for topic in data.keys():
+        for topic_count, topic in enumerate(data):
             if data[topic].frames:
                 inp = [None] * max_len
                 for count, sync_count in enumerate(data[topic].sync):
@@ -219,11 +223,42 @@ class TopicsNotebook(wx.Notebook):
                 wx.StaticText(txtPanel, id=-1, label="This topic  was not saved in memory",
                               style=wx.ALIGN_CENTER, name="")
                 self.pages.append(txtPanel)
-            if len(topic) > 10:
-                label = topic[-10:]
+            label = topic
+            self.InsertPage(topic_count, self.pages[-1], label)
+
+    def change_video(self, data):
+        self.pages = []
+        max_len = 0
+        for topic in data.keys():
+            max_len = max(len(data[topic].frames), max_len)
+        for topic_count,topic in enumerate(data.keys()):
+            if data[topic].frames:
+                inp = [None] * max_len
+                for count, sync_count in enumerate(data[topic].sync):
+                    inp[sync_count] = data[topic].frames[count]
+                try:
+                    self.pages[topic_count] = VideoPanel(self, inp, self.fps,
+                                                 self.start_frame_handler,
+                                                 self.end_frame_handler,
+                                                 self.forced_frame_handler)
+                except IndexError:
+                    self.pages.append(VideoPanel(self, inp, self.fps,
+                                                 self.start_frame_handler,
+                                                 self.end_frame_handler,
+                                                 self.forced_frame_handler))
+                data[topic].frames = inp
+                data[topic].sync = []
             else:
-                label = topic
-            self.AddPage(self.pages[-1], label)
+                txtPanel = wx.Panel(self)
+                wx.StaticText(txtPanel, id=-1, label="This topic  was not saved in memory",
+                              style=wx.ALIGN_CENTER, name="")
+                try:
+                    self.pages[topic_count] = txtPanel
+                except IndexError:
+                    self.pages.append(txtPanel)
+            label = topic
+            self.RemovePage(topic_count)
+            self.InsertPage(topic_count, self.pages[topic_count], label)
 
 
 def checkclass(obj, clas):
@@ -432,7 +467,7 @@ class MainFrame(wx.Frame):
             self.frames_len = 1
         self.actionfarming = far.ActionFarmingProcedure(
             self.farm_key, self.reg_key)
-        self.rosbag_process = epr.RosbagProcess()
+        self.rosbag_process = epr.DataProcess()
         self.rosbag_process.set_keys(self.farm_key, self.reg_key)
         self.main_panel = wx.Panel(self, wx.NewId())
         self.inter_pnl = wx.Panel(self.main_panel, wx.NewId())
@@ -448,9 +483,13 @@ class MainFrame(wx.Frame):
                                 label='Save processed result in', choices=lbl_list,
                                 majorDimension=1, style=wx.RA_SPECIFY_ROWS)
         self.rbox.SetSelection(0)
+        self.append = wx.CheckBox(self.act_pnl, -1, 'Append to existent data')
+        self.append.SetValue(1)
         self.load_csv = TButton(self.act_pnl, ID_LOAD_CSV, 'Load csv')
         self.process_bag = TButton(
             self.inter_pnl, ID_BAG_PROCESS, 'Process bag')
+        self.process_all = TButton(
+            self.inter_pnl, ID_PROCESS_ALL, 'Train all actions from start')
         self.play = TButton(self.inter_pnl, ID_PLAY, 'Play')
         self.stop = TButton(self.inter_pnl, ID_STOP, 'Stop')
         self.add = TButton(self.act_pnl, ID_ADD, 'Add')
@@ -480,7 +519,6 @@ class MainFrame(wx.Frame):
         self.lst.SetColumnWidth(2, 200)
         self.lst.Bind(wx.EVT_LIST_ITEM_FOCUSED, self.on_lst_item_select)
         # DEBUGGING
-        self.load_csv_file('actions.csv')
         act_sizer = wx.StaticBoxSizer(wx.VERTICAL, self.act_pnl, 'Actions')
         act_top_but_sizer = wx.BoxSizer(wx.HORIZONTAL)
         act_top_but_sizer.AddMany([
@@ -491,8 +529,9 @@ class MainFrame(wx.Frame):
             (self.add, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),
             (self.remove, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL)])
         act_bot_but_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        act_bot_but_sizer.Add(
-            self.act_save, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL)
+        act_bot_but_sizer.AddMany([(
+            self.act_save, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),(
+            self.append, 1, wx.EXPAND | wx.ALIGN_LEFT |wx.ALL)])
         act_sizer.AddMany([(act_top_but_sizer, 0, wx.EXPAND |
                             wx.ALIGN_LEFT | wx.ALL),
                            (self.txt_inp, 0, wx.EXPAND |
@@ -509,7 +548,8 @@ class MainFrame(wx.Frame):
         process_box = wx.StaticBoxSizer(wx.HORIZONTAL,
                                         self.inter_pnl,
                                         'Rosbag file processing')
-        process_box.AddMany([(self.rbox, 0), (self.process_bag, 0)])
+        process_box.AddMany([(self.rbox, 0), (self.process_bag, 0),
+                             (self.process_all,0)])
         mis_box = wx.StaticBoxSizer(wx.HORIZONTAL,
                                     self.inter_pnl,
                                     'Starting Frame')
@@ -547,6 +587,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_actions_save, id=ID_ACT_SAVE)
         self.Bind(wx.EVT_BUTTON, self.on_load_csv, id=ID_LOAD_CSV)
         self.Bind(wx.EVT_BUTTON, self.on_process, id=ID_BAG_PROCESS)
+        self.Bind(wx.EVT_BUTTON, self.on_process_all, id=ID_PROCESS_ALL)
         self.Bind(wx.EVT_BUTTON, self.on_play, id=ID_PLAY)
         self.Bind(wx.EVT_BUTTON, self.on_stop, id=ID_STOP)
         self.Bind(wx.EVT_BUTTON, self.on_add, id=ID_ADD)
@@ -555,7 +596,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.slider_min.Bind(wx.EVT_SLIDER, self.on_min_slider)
         self.slider_max.Bind(wx.EVT_SLIDER, self.on_max_slider)
-
+        self.csv_name ='actions.csv'
         wx.CallLater(200, self.SetFocus)
         self._buffer = None
         self.exists_hand_count = None
@@ -625,7 +666,8 @@ class MainFrame(wx.Frame):
         return 1
 
     def on_actions_save(self, event):
-        self.actionfarming.run(self.lst)
+        print self.bag_path
+        self.actionfarming.run(self.lst,self.bag_path, append=self.append.GetValue())
 
     def on_frame_change(self, event, slider, main_panel):
         '''
@@ -759,6 +801,7 @@ class MainFrame(wx.Frame):
             self.lst.SetItem(index, 2, ",".join(maxl[:-1]))
 
     def load_csv_file(self, path):
+        self.lst.DeleteAllItems()
         with open(path, 'r') as inp:
             for i, line in enumerate(inp):
                 item_num = self.lst.GetItemCount()
@@ -774,7 +817,7 @@ class MainFrame(wx.Frame):
 
     def on_load_csv(self, event):
         dlg = wx.FileDialog(self, "Load action list..", os.getcwd(),
-                            "actions.csv",
+                            self.csv_name,
                             "*.csv", wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
         result = dlg.ShowModal()
         dlg.Destroy()
@@ -791,15 +834,20 @@ class MainFrame(wx.Frame):
         dlg.Destroy()
         if result == wx.ID_OK:
             self.bag_path = dlg.GetPath()
+            self.csv_name = os.path.splitext(
+                os.path.basename(self.bag_path))[0]+'.csv'
+            self.default_csv_path = os.path.join(
+                co.CONST['ground_truth_fold'], self.csv_name)
+            if os.path.exists(self.default_csv_path):
+                self.load_csv_file(self.default_csv_path)
             return 1
         elif result == wx.ID_CANCEL:
             return result
 
     def on_process(self, event):
-        if self.bag_path is None:
-            res = self.load_rosbag()
-            if res == wx.ID_CANCEL:
-                return res
+        res = self.load_rosbag()
+        if res == wx.ID_CANCEL:
+            return res
         baglength = rosbag.Bag(self.bag_path).get_message_count()
         if STOP_COUNT:
             baglength = STOP_COUNT - START_COUNT
@@ -821,8 +869,10 @@ class MainFrame(wx.Frame):
         self.rosbag_process.set_mog2_parameters(gmm_num, bg_ratio, var_thres,
                                                 history)
         rbox_sel = self.rbox.GetSelection()
-        self.data = self.rosbag_process.run(dialog=dlg, low_ram=1 - rbox_sel,
-                                               save_res=rbox_sel)
+        append = self.append.GetValue()
+        self.data = self.rosbag_process.run(self.bag_path,
+                                            dialog=dlg, low_ram=1 - rbox_sel,
+                                               save_res=rbox_sel,append=append)
         lengths = [len(self.data[key].frames) for key in self.data.keys()]
         baglength = max(lengths)
         dlg.Destroy()
@@ -838,46 +888,58 @@ class MainFrame(wx.Frame):
                     self.farm_key = key
                     found = 1
                     break
+        else:
+            found = 1
         if not found:
             raise Exception('invalid farm_key given (default is \'depth\')')
         self.height, self.width = self.data[
             self.farm_key].frames[0].shape[:2]
         self.frames_len = len(self.data[self.farm_key].frames)
-        self.nb = TopicsNotebook(self, self.data,
-                                 start_frame_handler=self.slider_min,
-                                 end_frame_handler=self.slider_max,
-                                 forced_frame_handler=self.slider_min)
-        self.ref_box = wx.StaticBox(self.main_panel, -1, 'Reference Frames',
-                                    style=wx.BORDER_RAISED)
-        self.ref_sizer = wx.StaticBoxSizer(self.ref_box, wx.HORIZONTAL)
-        self.min_pnl_sizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel,
-                                               'Starting Frame')
-        self.max_pnl_sizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel,
-                                               'Ending Frame')
-        self.min_pnl = wx.Panel(self.main_panel, -1)
-        self.min_pnl.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
-        self.max_pnl = wx.Panel(self.main_panel, -1)
-        self.max_pnl.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
-        self.min_pnl_sizer.Add(self.min_pnl, 1, wx.EXPAND)
-        self.max_pnl_sizer.Add(self.max_pnl, 1, wx.EXPAND)
-        self.ref_sizer.Add(self.min_pnl_sizer, 1, wx.SHAPED | wx.ALIGN_CENTER |
-                           wx.CENTER)
-        self.ref_sizer.Add(self.max_pnl_sizer, 1, wx.SHAPED | wx.ALIGN_CENTER |
-                           wx.CENTER)
-        self.define_panels_params()
-        self.rgt_box = wx.BoxSizer(wx.VERTICAL)
-        self.rgt_box.AddMany([(self.nb, 1, wx.EXPAND),
-                              (self.ref_sizer, 1, wx.SHAPED | wx.EXPAND)])
-        self.main_box.Add(self.rgt_box, 1)
-        self.SetSizerAndFit(self.framesizer)
+        if self.nb is None:
+            self.nb_box = wx.StaticBox(self.main_panel, -1, 'Data',
+                                       style=wx.BORDER_RAISED)
+            self.nb_sizer = wx.StaticBoxSizer(self.nb_box, wx.HORIZONTAL)
+            self.nb = TopicsNotebook(self.main_panel, self.data,
+                                     start_frame_handler=self.slider_min,
+                                     end_frame_handler=self.slider_max,
+                                     forced_frame_handler=self.slider_min)
+            self.nb_sizer.Add(self.nb, 1)
+            self.ref_box = wx.StaticBox(self.main_panel, -1, 'Reference Frames',
+                                        style=wx.BORDER_RAISED)
+            self.ref_sizer = wx.StaticBoxSizer(self.ref_box, wx.HORIZONTAL)
+            self.min_pnl_sizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel,
+                                                   'Starting Frame')
+            self.max_pnl_sizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel,
+                                                   'Ending Frame')
+            self.min_pnl = wx.Panel(self.main_panel, -1)
+            self.min_pnl.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
+            self.max_pnl = wx.Panel(self.main_panel, -1)
+            self.max_pnl.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
+            self.min_pnl_sizer.Add(self.min_pnl, 1, wx.EXPAND)
+            self.max_pnl_sizer.Add(self.max_pnl, 1, wx.EXPAND)
+            self.ref_sizer.Add(self.min_pnl_sizer, 1, wx.SHAPED | wx.ALIGN_CENTER |
+                               wx.CENTER)
+            self.ref_sizer.Add(self.max_pnl_sizer, 1, wx.SHAPED | wx.ALIGN_CENTER |
+                               wx.CENTER)
+            self.define_panels_params()
+            self.rgt_box = wx.StaticBox(self.main_panel, -1)
+            self.rgt_sizer = wx.StaticBoxSizer(self.rgt_box, wx.VERTICAL)
+            self.rgt_sizer.AddMany([(self.nb_sizer, 1, wx.EXPAND),
+                                  (self.ref_sizer, 1, wx.SHAPED | wx.EXPAND)])
+            self.main_box.Add(self.rgt_sizer, 1)
+            self.main_box.Layout()
+            self.SetSizerAndFit(self.framesizer)
+        else:
+            self.nb.change_video(self.data)
         return 1
 
     def save_as(self):
         '''
         save actions list as csv
         '''
-        dlg = wx.FileDialog(self, "Save action list as..", os.getcwd(),
-                            "actions.csv",
+        dlg = wx.FileDialog(self, "Save action list as..",
+                            co.CONST['ground_truth_fold'],
+                            self.csv_name,
                             "*.csv", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
         result = dlg.ShowModal()
         dlg.Destroy()
@@ -899,15 +961,35 @@ class MainFrame(wx.Frame):
         self.save_as()
         self.saved = 1
 
+    def on_process_all(self, event):
+        ground_truths =[os.path.splitext(fil)[0] for fil
+                        in os.listdir(co.CONST['ground_truth_fold'])
+                        if fil.endswith('.csv')]
+        rosbags = [os.path.splitext(fil)[0] for fil in
+                   os.listdir(co.CONST['rosbag_location'])
+                   if fil.endswith('.bag')]
+        to_process = [rosbag for rosbag in rosbags if rosbag in ground_truths]
+        ground_truths = [os.path.join(
+            co.CONST['ground_truth_fold'],name+'.csv') for name in to_process]
+        rosbags = [os.path.join(
+            co.CONST['rosbag_location'],name+'.bag') for name in to_process]
+        count = 0
+        for rosbag,ground_truth in zip(rosbags, ground_truths):
+            self.actionfarming.run(ground_truth,rosbag, append=count>0)
+            count += 1
 
-pathname = '/media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/all.bag'
 
+LOG = logging.getLogger(__name__)
+FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
+CH = logging.Handler()
+CH.setFormatter(logging.Formatter(FORMAT))
+LOG.addHandler(CH)
+LOG.setLevel(logging.DEBUG)
 
 def main():
     '''
     main function
     '''
-    FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
     logging.basicConfig(format=FORMAT)
     app = wx.App(0)
     frame = MainFrame(None, -1, 'Data Mining')

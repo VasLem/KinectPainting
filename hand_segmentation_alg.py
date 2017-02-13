@@ -39,7 +39,7 @@ at n-th joint defined by previous directions.
 '''
 import logging
 from math import pi
-import os
+import os, sys
 # import time
 import numpy as np
 import cv2
@@ -318,6 +318,8 @@ class FindArmSkeleton(object):
         self.skeleton_widths = []
         # surrounding_skel holds the contour points that refer to each link
         self.surrounding_skel = []
+        # hand_start holds the starting point of the hand, relatively to rest of the arm
+        self.hand_start = None
         self.init_point = None
         self.entry = None
         self.entry_inds = None
@@ -377,6 +379,10 @@ class FindArmSkeleton(object):
                                   point_close_to_corn0[None, :],
                                   point_close_to_corn1[None, :]), axis=0)
         self.hand_mask = np.zeros(self.frame.shape, np.uint8)
+        self.hand_start =  np.array([(point_close_to_corn0[0] +
+                                      point_close_to_corn1[0]) / 2.0,
+                                     (point_close_to_corn0[1] +
+                                      point_close_to_corn1[1]) / 2.0])
         cv2.drawContours(self.hand_mask, [cv2.convexHull(
             new_box).squeeze()[:, ::-1]], 0, 1, -1)
 
@@ -931,8 +937,6 @@ class FindArmSkeleton(object):
 
 def main():
     '''Main Caller Function'''
-    logging.basicConfig(
-        format='%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s')
     if not os.path.exists('arm_example.png'):
         urllib.urlretrieve("https://www.packtpub.com/\
                            sites/default/files/Article-Images/B04521_02_04.png",
@@ -990,9 +994,15 @@ def main():
         # co.edges.find_non_convex_edges_lims(edge_tolerance=1)
     # cv2.destroyAllWindows
 
+LOG = logging.getLogger('__name__')
+CH = logging.StreamHandler()
+CH.setFormatter(logging.Formatter(
+    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+LOG.handlers = []
+LOG.addHandler(CH)
+LOG.setLevel('INFO')
 if __name__ == '__main__':
     main()
-
 #####################################################################
 #####################################################################
 ############################################################
@@ -1116,7 +1126,7 @@ def main_process_upgraded(binarm3d, positions=None, display=0):
         obs_skeleton.detect_entry_upgraded(hull_pnts)
         entry = obs_skeleton.entry
         if entry is None:
-            logging.debug('No entry found')
+            LOG.debug('No entry found')
             co.chhm.no_entry += 1
             if display == 1:
                 tag_im(binarm3d, 'No entry found')
@@ -1145,7 +1155,7 @@ def main_process_upgraded(binarm3d, positions=None, display=0):
 
 def main_process(binarm3d, positions=None, display=0, entry=None):
     '''Main processing function'''
-    logging.getLogger().setLevel('INFO')
+    LOG.setLevel('INFO')
     if len(binarm3d.shape) == 3:
         binarm = binarm3d[:, :, 0].copy()
         if np.max(binarm3d) != 255:
@@ -1167,7 +1177,7 @@ def main_process(binarm3d, positions=None, display=0, entry=None):
     try:
         armpoints = find_nonzero(binarm)
     except AttributeError:  # binarm is []
-        logging.debug('No objects found')
+        LOG.debug('No objects found')
         co.chhm.no_obj += 1
         if display == 1:
             tag_im(binarm3d, 'No object found')
@@ -1188,21 +1198,21 @@ def main_process(binarm3d, positions=None, display=0, entry=None):
         entry = detect_entry(binarm)
     '''
     except IndexError:
-        logging.debug('No entry found')
+        LOG.debug('No entry found')
         if display == 1:
             tag_im(binarm3d, 'No entry found')
             co.im_results.images.append(binarm3d)
         return None, None, None
     '''
     if entry is None:
-        logging.debug('No entry found')
+        LOG.debug('No entry found')
         co.chhm.no_entry += 1
         if display == 1:
             tag_im(binarm3d, 'No entry found')
             co.im_results.images.append(binarm3d)
         return None, None, None
     if entry.shape[0] <= 1:
-        logging.debug('Arm in image corners or its entry is occluded' +
+        LOG.debug('Arm in image corners or its entry is occluded' +
                       ', hand segmentation algorithm cannot function')
         co.chhm.in_im_corn += 1
         if display == 1:
@@ -1229,7 +1239,7 @@ def main_process(binarm3d, positions=None, display=0, entry=None):
         prev_ref_point = new_ref_point[:]
         if (new_crit_ind > new_polar.shape[0] - 10 or
                 link_count > co.CONST['max_link_number']):
-            logging.debug('Reached Mask Limits')
+            LOG.debug('Reached Mask Limits')
             co.chhm.rchd_mlims += 1
             if display == 1:
                 tag_im(binarm3d, 'Reached Mask Limits')
@@ -1294,7 +1304,7 @@ def main_process(binarm3d, positions=None, display=0, entry=None):
         cand_crit_points = new_polar[np.abs(new_polar[:, 1]) < co.CONST[
             'angle_resolution'], :]
         if len(cand_crit_points) == 0:
-            logging.debug('No cocircular points found,' +
+            LOG.debug('No cocircular points found,' +
                           ' reached end of hand')
             co.chhm.no_cocirc += 1
             if display == 1:
@@ -1340,7 +1350,7 @@ def main_process(binarm3d, positions=None, display=0, entry=None):
                                  new_polar[new_crit_ind, 0] *
                                  np.sin(new_ref_angle))), [0, 0, 255], 2, 1)
         if cocircular_crit == []:
-            logging.debug('Reached end of hand without finding abnormality')
+            LOG.debug('Reached end of hand without finding abnormality')
             co.chhm.no_abnorm += 1
             if display == 1:
                 tag_im(binarm3d, 'Reached end of hand without finding ' +
@@ -1480,7 +1490,7 @@ def find_hand(*args):
                             * np.roll(dig_rad_thres, -1))[1:-1]
 
     if np.sum(dig_rad_thres) == 0:
-        logging.debug('Hand not found but reached abnormality')
+        LOG.debug('Hand not found but reached abnormality')
         if display == 1:
             tag_im(binarm3d, 'Hand not found but reached abnormality')
         co.chhm.rchd_abnorm += 1
@@ -1565,7 +1575,7 @@ def find_hand(*args):
                 [np.mean(polar[ind:, :],
                          axis=0)]), ref_point, ref_angle).
                 astype(int).T)] = [255, 0, 255]
-        logging.debug('Hand found')
+        LOG.debug('Hand found')
         if display == 1:
             tag_im(binarm3d, 'Hand found')
         co.chhm.found += 1
@@ -1593,7 +1603,7 @@ def find_hand(*args):
         # full_res_mask is hand_patch in place
         return hand_patch, hand_patch_pos, full_res_mask
     except IndexError:
-        logging.debug('Hand not found but reached abnormality')
+        LOG.debug('Hand not found but reached abnormality')
         if display == 1:
             tag_im(binarm3d, 'Hand not found but reached abnormality')
         co.chhm.rchd_abnorm += 1

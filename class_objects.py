@@ -6,6 +6,12 @@ from cv_bridge import CvBridge, CvBridgeError
 import yaml
 from __init__ import *
 import logging
+LOG = logging.getLogger('__name__')
+CH = logging.StreamHandler()
+CH.setFormatter(logging.Formatter(
+    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+LOG.addHandler(CH)
+LOG.setLevel('INFO')
 
 
 def find_nonzero(arr):
@@ -252,10 +258,10 @@ class Edges(object):
         else:
             if (frame_path is None) ^ (edges_path is None):
                 if frame_path is None:
-                    logging.error('Missing frame_path input, but edges_path is' +
+                    LOG.error('Missing frame_path input, but edges_path is' +
                                   ' given')
                 else:
-                    logging.error('Missing edges_path input, but frame_path is' +
+                    LOG.error('Missing edges_path input, but frame_path is' +
                                   ' given')
             if edges_path is None:
                 edges_path = CONST['cal_edges_path']
@@ -654,6 +660,25 @@ class PolarOperations(object):
     '''
     Class to hold all used  operations on polar coordinates
     '''
+
+    def derotate(self, img, angle, center,in_rads=True):
+        #if in_rads:
+        #    angle = angle * 180/float(pi)
+        #derotate
+        angle = - angle
+        _cos = np.cos(angle)
+        _sin = np.sin(angle)
+        _x1 = img.shape[1] / 2.0
+        _y1 = img.shape[0] / 2.0
+        _x0 = center[1]
+        _y0 = center[0]
+        # Due to the non orthogonal system of the image, it is not
+        #  [[_cos, _sin],[-_sin ,_cos]]
+        M = np.array([[_cos, -_sin, -_x0 * _cos + _y0 * _sin + (_x1)],
+                      [_sin, _cos, - _x0 * _sin - _y0 * _cos + (_y1)]])
+        img = cv2.warpAffine(img, M, (img.shape[1],
+                                      img.shape[0]))
+        return img
 
     def find_cocircular_points(self, polar_points, radius, resolution=np.sqrt(2) / 2.0):
         '''

@@ -1,6 +1,7 @@
 '''Functions for identifying moving object in almost static scene'''
 import time
 import os.path
+import sys
 #import matplotlib.pyplot as plt
 import cPickle as pickle
 import numpy as np
@@ -12,13 +13,22 @@ from scipy import ndimage
 import array
 import label_contours
 import logging
-
+LOG = logging.getLogger('__name__')
+CH = logging.StreamHandler()
+CH.setFormatter(logging.Formatter(
+    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+LOG.addHandler(CH)
+LOG.setLevel('INFO')
 
 class Mog2(object):
+    '''
+    Implementation for handling of depth video
+    '''
 
     def __init__(self):
         self.fgbg = None
         self.frame_count = 0
+        self.kernel = np.ones((5, 5), np.uint8)
 
     def initialize(self,
                    gmm_num=co.CONST['gmm_num'],
@@ -38,15 +48,18 @@ class Mog2(object):
             bg_ratio=co.CONST['bg_ratio'],
             var_thres=co.CONST['var_thres'],
             history=co.CONST['history']):
+        '''
+        Run detection
+        '''
         self.frame_count += 1
         if self.fgbg is None:
             self.initialize(gmm_num, bg_ratio, var_thres, history)
         if data is None:
-            logging.warning('MOG2: Reading data from co.data.depth_im')
+            LOG.warning('MOG2: Reading data from co.data.depth_im')
             data = co.data.depth_im.copy()
         self.fgbg.setHistory(int(history))
         inp = data.copy()
-        mog2_objects = self.fgbg.apply(inp, 0.8)
+        mog2_res = self.fgbg.apply(inp, 0.8)
         '''
         found_objects_mask = cv2.morphologyEx(mog2_objects.copy(), cv2.MORPH_OPEN,
                                               np.ones((9, 9), np.uint8))
@@ -58,9 +71,10 @@ class Mog2(object):
                                                                   er_size=3)
         co.meas.found_objects_mask = ((filtered_image *
                                        mog2_objects) > 0).astype(np.uint8)
-        return co.meas.found_objects_mask
         '''
-        return mog2_objects
+        mog2_res = (mog2_res == 127).astype(np.uint8)
+
+        return mog2_res
 
     def reset(self):
         self.fgbg = None

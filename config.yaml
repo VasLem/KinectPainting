@@ -16,7 +16,6 @@ save: n
 path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
 path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
-train_path: /media/vassilis/Thesis/Datasets/PersonaFarm/hand_dataset
 actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
 #rosbag files location
 rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions
@@ -26,8 +25,12 @@ cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 #files to save images
 save_depth: Depth
 save_color: Color
-actions_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
-rosbag_res_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
+whole_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
+train_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/train
+train_ground_truth : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/train.csv
+test_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test
+test_ground_truth: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test.csv
+ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths
 #save parameters
 max_depth_im_num_to_save: 200
 # Choose object detection method ( segmentation or noise_model or mog2)
@@ -54,13 +57,15 @@ var_thres : 20
 history : 4000
 #Variables necessary for sparse coding
 des_dim: 256
+max_dict_error: 100
+max_retries : 2
 #the rosbag for training
-train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/all.bag
+train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
 #Variables for action recognition
 3DHOF_bin_size: 5
 GHOG_bin_size: 64
-STD_small_filt_window: 30
-STD_big_filt_window: 120
+STD_small_filt_window: 20
+STD_big_filt_window: 40
 action_separation_thres: 0
 #Variables for hand segmentation
 max_link_number : 6
