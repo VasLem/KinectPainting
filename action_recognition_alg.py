@@ -149,14 +149,20 @@ class Action(object):
                                                                   np.atleast_2d(feature.ravel()).T),
                                                                  axis=1)
 
-    def update_sparse_features(self, dictionaries):
+    def update_sparse_features(self, coders, max_act_samples=None):
         '''
         Update sparse features using trained dictionaries
         '''
         self.flush_sparse_features()
         self.sparse_features = []
-        for feature, dictionary in zip(self.features, dictionaries):
-            self.sparse_features.append(np.dot(dictionary, feature))
+        for feature, coder in zip(self.features, coders):
+            if max_act_samples is not None:
+                self.sparse_features.append(coder.multicode(feature[:,
+                                                                    :max_act_samples]))
+                print self.sparse_features[-1].shape
+            else:
+                self.sparse_features.append(coder.multicode(feature))
+
 
     def flush_sparse_features(self):
         '''
@@ -305,9 +311,9 @@ class Actions(object):
                     action.add_features(features=features)
                 else:
                     sparse_features = []
-                    for feat_num, feature in enumerate(features):
-                        sparse_features.append(np.dot(dictionaries.dicts[feat_num],
-                                                      feature))
+                    for sparse_coder, feature in zip(dictionaries.sparse_dicts,
+                                                     features):
+                        sparse_features.append(sparse_coder.code(feature))
                     action.add_features(features=features,
                                                   sparse_features=sparse_features)
                 feat_count+=1
@@ -321,14 +327,15 @@ class Actions(object):
                 return self.testing.features, self.testing.sync
         return 0
 
-    def update_sparse_features(self, dicts,
-                               act_num='all', ret_sparse=False):
+    def update_sparse_features(self, coders,
+                               act_num='all', ret_sparse=False,
+                               max_act_samples=None):
         '''
         Update sparse features for all Actions or a single one, specified by
         act_num.
         Requirement is that existent dictionaries have been trained
         '''
-        if any([(dicti is None) for dicti in dicts]):
+        if any([(coder is None) for coder in coders]):
             raise Exception('Dictionaries for existent features must' +
                             'have been trained before calling')
         if act_num == 'all':
@@ -336,7 +343,8 @@ class Actions(object):
         else:
             iter_quant = [self.actions[act_num]]
         for action in iter_quant:
-            action.update_sparse_features(dicts)
+            action.update_sparse_features(coders,
+                                          max_act_samples=max_act_samples)
         if ret_sparse:
             sparse_features = []
             for action in self.actions:
@@ -363,47 +371,29 @@ class SparseDictionaries(object):
     '''
 
     def __init__(self, des_dim=None):
-        self.inv_dicts = []
+        self.sparse_dicts = []
         self.dicts = []
         self.initialized = True
         self.save_path = (os.getcwd() +
                           os.sep + 'saved_dictionaries.pkl')
         self.des_dim = des_dim
 
-    def train(self, actions, feat_num, act_num=0, bmat=None,
-              final_iter=False, ret_errors=False, train_max_im_num=-1):
+    def train(self, data, feat_num, bmat=None, display=0, min_iterations=10):
         '''
         actions=Actions class
-        act_num=0: action postion inside actions.actions list
+        act_num=none: action postion inside actions.actions list
         feat_num=0: features position inside
                     actions.actions[act_num].features list
         final_iter=False: if True, it computes the dictionary matrix, which
                        converts input features to sparse
         '''
-        checktypes([actions, feat_num], [Actions, int])
-        self.inv_dicts[feat_num].inp_features = actions.actions[
-            act_num].features[feat_num][:, :train_max_im_num].copy()
-        self.inv_dicts[feat_num].out_features = (actions.actions[act_num].
-                                                 sparse_features[feat_num].copy())
-        if bmat is not None:
-            self.inv_dicts[feat_num].bmat = bmat.copy()
-        elif self.inv_dicts[feat_num].bmat is None:
-            raise Exception('Dictionaries not correctly initialized')
-        if ret_errors:
-            init_error = np.linalg.norm(self.inv_dicts[feat_num].inp_features -
-                                        np.dot(self.inv_dicts[feat_num].bmat,
-                                               self.inv_dicts[feat_num].
-                                               out_features))
-        self.inv_dicts[feat_num].bmat = self.inv_dicts[
-            feat_num].dictionary_training()
-        if final_iter:
-            self.dicts[feat_num] = (pinv(self.inv_dicts[feat_num].bmat))
-        if ret_errors:
-            final_error = np.linalg.norm(self.inv_dicts[feat_num].inp_features -
-                                         np.dot(self.inv_dicts[feat_num].bmat,
-                                                self.inv_dicts[feat_num].
-                                                out_features))
-            return init_error, final_error
+        self.sparse_dicts[feat_num].display = display
+        checktypes([feat_num], [int])
+        self.sparse_dicts[feat_num].train_sparse_dictionary(data,
+                                                           sp_opt_max_iter=200,
+                                                           init_bmat = bmat,
+                                                            min_iterations=min_iterations)
+        self.dicts[feat_num] = (pinv(self.sparse_dicts[feat_num].bmat))
 
     def initialize(self, total_features_num):
         '''
@@ -411,56 +401,25 @@ class SparseDictionaries(object):
         '''
         self.dicts = []
         checktypes([total_features_num], [int])
-        self.inv_dicts = []
-        for _ in range(total_features_num):
-            self.inv_dicts.append(sc.SparseCoding(des_dim=self.des_dim))
+        self.sparse_dicts = []
+        for count in range(total_features_num):
+            self.sparse_dicts.append(sc.SparseCoding(des_dim=self.des_dim,
+                                                     name=str(count)))
             self.dicts.append(None)
         self.initialized = True
 
-    def add_dict(self, actions=None, feat_dim=0,
-                 act_num=0, feat_num=0):
-        '''
-        actions=Actions class
-        feat_num=Position where dict will be put
-        feat_dim=Current features dimension
-        In case feat_dim is not set:
-            actions is a necessary variable
-            act_num=0: action postion inside actions.actions list
-            feat_num=0: features position inside
-                        actions.actions[act_num].features list
-                        AND position where dict will be put
-        '''
-        if not self.initialized:
-            raise Exception('First call initialize function')
-        if feat_num > len(self.inv_dicts):
-            raise Exception('feat_num is more than total dictionaries ' +
-                            'length. Check initialize stage')
-        if feat_num == -1:
-            LOG.warning('feat_num argument in add_dict should' +
-                            ' be set when feat_dim is not, ' +
-                            'else dictionary for feature 0 will be ovewritten')
-            feat_num = 0
-        if feat_dim == 0:
-            checktypes([actions], [Actions])
-            if len(actions.actions) == 0:
-                raise Exception('Actions should have at least ' +
-                                'one entry, or set feat_dim')
-            self.inv_dicts[feat_num].initialize(actions.actions[act_num].
-                                                features[feat_num].shape[0])
-        else:
-            self.inv_dicts[feat_num].initialize(feat_dim)
 
     def flush(self, dict_num='all'):
         '''
         Reinitialize all or one dictionary
         '''
         if dict_num == 'all':
-            iter_quant = self.inv_dicts
-            iter_range = range(len(self.inv_dicts))
+            iter_quant = self.sparse_dicts
+            iter_range = range(len(self.sparse_dicts))
         else:
-            iter_quant = [self.inv_dicts[dict_num]]
+            iter_quant = [self.sparse_dicts[dict_num]]
             iter_range = [dict_num]
-        feat_dims = [] * len(iter_range)
+        feat_dims = [] * (max(iter_range)+1)
         for count, inv_dict in zip(iter_range, iter_quant):
             feat_dims[count] = None
             try:
@@ -470,8 +429,8 @@ class SparseDictionaries(object):
                 feat_dims[count] = None
         for count in iter_range:
             if feat_dims[count] is not None:
-                self.inv_dicts[count].initialize(feat_dims[count],
-                                                 flush_variables=True)
+                self.sparse_dicts[count].flush_variables()
+                self.sparse_dicts[count].initialize(feat_dims[count])
 
     def save(self, save_path=None):
         '''
@@ -484,7 +443,7 @@ class SparseDictionaries(object):
 
         LOG.info('Saving Dictionaries to ' + dictionaries_path)
         with open(dictionaries_path, 'wb') as output:
-            pickle.dump(self.dicts, output, -1)
+            pickle.dump((self.sparse_dicts, self.dicts), output, -1)
 
 def grad_angles(patch):
     '''
@@ -843,15 +802,12 @@ class ActionRecognition(object):
     Class to hold everything about action recognition
     '''
 
-    def __init__(self, log_lev='INFO', train_max_im_num=100,
-                 train_max_iter=2, des_dim=None):
+    def __init__(self, log_lev='INFO', des_dim=None):
         self.dictionaries = SparseDictionaries(des_dim=des_dim)
         self.des_dim = des_dim
         self.actions = Actions()
         self.log_lev = log_lev
         LOG.setLevel(log_lev)
-        self.train_max_im_num = train_max_im_num
-        self.train_max_iter = train_max_iter
 
     def add_action(self, depthdata=None,
                    masks_needed=True,
@@ -879,11 +835,11 @@ class ActionRecognition(object):
 
     def train_sparse_dictionaries(self, act_num=None,
                                   depthdata=None,
-                                  masks_needed=True,
+                                  masks_needed=False,
                                   masksdata=None,
                                   use_dexter=False,
                                   save_trained=True,
-                                  save_path=False):
+                                  min_iterations=10):
         '''
         Add Dexter 1 TOF Dataset or depthdata + binarymaskdata and
         set use_dexter to False (directory with .png or list accepted)
@@ -898,16 +854,14 @@ class ActionRecognition(object):
             save_trained: save dictionaries after training
         '''
         checktypes([act_num, depthdata, masks_needed, masksdata, use_dexter,
-                    save_trained, save_path],
-                   [int, (list, str, type(None)), (bool, int),
+                    save_trained],
+                   [(int, type(None)), (list, str, type(None)), (bool, int),
                     (list, str, type(None)),
-                    (bool, int), (bool, int), (bool, int)])
-        if act_num is None and len(self.actions.actions) > 0:
-            act_num = 0
-        elif len(self.actions.actions) == 0:
+                    (bool, int), (bool, int)])
+        if len(self.actions.actions) == 0:
             raise Exception('Run add_action first and then call ' +
                             'train_sparse_dictionaries')
-        feat_num = len(self.actions.actions[act_num].features)
+        feat_num = len(self.actions.actions[0].features)
 
         if depthdata is None and len(self.actions.actions) == 0:
             raise Exception("Path/List of frames depth data is at least needed" +
@@ -927,96 +881,18 @@ class ActionRecognition(object):
                                     use_dexter)
         # Train dictionaries
         self.dictionaries.initialize(feat_num)
-        frames_num = self.actions.\
-            actions[act_num].features[0].shape[1]
-        LOG.info('Frames number: ' + str(frames_num))
-        train_im_num = min(frames_num, self.train_max_im_num)
-        LOG.info('Frames to be used for training: ' + str(train_im_num))
-        LOG.info('Creating dictionaries..')
-        for count in range(feat_num):
-            self.dictionaries.add_dict(self.actions, feat_num=count)
-        train_actions = train_im_num
-        final_errors = []
-        try_count = 0
-        iterat = range(feat_num)
-        while True:
-            LOG.info("Initializing inverse dictionaries")
-            self.actions.actions[act_num].flush_sparse_features()
-            for img_count in range(10):
-                LOG.debug('Frame ' + str(img_count) + ' is being edited')
-                sparse_features = []
-                for feat_count in iterat:
-                    coding = sc.SparseCoding(log_lev=self.log_lev,
-                                             des_dim=self.des_dim)
-                    coding.feature_sign_search_algorithm(
-                        inp_features=np.atleast_2d(
-                            self.actions.actions[
-                                act_num].features[feat_count]
-                            [:, img_count]).T.astype(float),
-                        init_bmat=self.dictionaries.inv_dicts[feat_count].
-                        bmat.copy(),
-                        max_iter=100)
-                    sparse_features.append(np.atleast_2d(coding.
-                                                         out_features).T)
-                self.actions.actions[act_num].add_features(
-                    sparse_features=sparse_features)
-            for feat_count in iterat:
-                self.dictionaries.train(self.actions, feat_count,
-                                        train_max_im_num=10)
-            for iteration in range(self.train_max_iter):
-                LOG.info('Epoch: ' + str(iteration))
-                self.actions.actions[act_num].flush_sparse_features()
-                LOG.info('Running Feature Sign Search Algorithm..')
-                for img_count in range(train_im_num):
-                    LOG.debug('Frame ' + str(img_count) + ' is being edited')
-                    sparse_features = []
-                    for feat_count in iterat:
-                        coding = sc.SparseCoding(log_lev=self.log_lev,
-                                                 des_dim=self.des_dim)
-                        coding.feature_sign_search_algorithm(
-                            inp_features=np.atleast_2d(
-                                self.actions.actions[
-                                    act_num].features[feat_count]
-                                [:, img_count]).T.astype(float),
-                            init_bmat=self.dictionaries.inv_dicts[feat_count].
-                            bmat.copy(),
-                            max_iter=100)
-                        sparse_features.append(np.atleast_2d(coding.
-                                                             out_features).T)
-                    self.actions.actions[act_num].add_features(
-                        sparse_features=sparse_features)
-                LOG.info('Training Dictionaries..')
-                for feat_count in iterat:
-                    if iteration == self.train_max_iter - 1:
-                        final_errors.append(self.dictionaries.train(self.actions,
-                                                                    feat_count,
-                                                                    final_iter=True,
-                                                                    ret_errors=True,
-                                                                    train_max_im_num=train_im_num)
-                                            [1])
-                    else:
-                        self.dictionaries.train(self.actions, feat_count,
-                                                train_max_im_num=train_im_num)
-            LOG.info('Training is completed with final errors:\n' +
-                     str(final_errors))
-            try_count += 1
-            if np.max(final_errors) > co.CONST['max_dict_error']:
-                if try_count > co.CONST['max_retries']:
-                    LOG.warning('Training has high final error but'+
-                                ' reached maximum retries')
-                    break
-                LOG.warning('Bad inverse dictionary initialization and the'
-                            + ' final error is too high, retraining..'+
-                            '(max_dict_error can be changed in config.yaml '
-                            'if needed)')
-                iterat = []
-                for count, error in enumerate(final_errors):
-                    if error > co.CONST['max_dict_error']:
-                        iterat.append(count)
-                        self.dictionaries.flush(count)
-                final_erros = []
+        for feat_count in range(feat_num):
+            if act_num is None:
+                data = np.concatenate(
+                    [self.actions.actions[ind].features[feat_count] for ind in
+                    range(len(self.actions.actions))], axis=1)
             else:
-                break
+                data = self.actions.actions[act_num].features[feat_count]
+            frames_num = data.shape[1]
+            LOG.info('Frames number: ' + str(frames_num))
+            LOG.info('Creating dictionaries..')
+            self.dictionaries.train(data, feat_count, display=1,
+                                    min_iterations=min_iterations)
         if save_trained:
             self.dictionaries.save()
         return(self.dictionaries.dicts)
