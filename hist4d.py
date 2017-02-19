@@ -207,7 +207,6 @@ class Hist4D(object):
         colormap = self.create_brightness_colormap(color,
                                                  np.size(unique_hist))
         
-        
         self.draw_cubes(_axes, hist, edges)
         
         self.draw_colorbar(_axes,unique_hist,cax)

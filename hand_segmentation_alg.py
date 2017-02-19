@@ -310,7 +310,7 @@ class FindArmSkeleton(object):
     '''
 
     def __init__(self, frame=None, angle_bin_num=500, min_coords_num=50,
-                 max_links=8, link_length_thres=50):
+                 max_links=8, link_width_thres=50):
         # skeleton holds the cartesian skeleton joints
         self.skeleton = []
         # skeleton_widths is populated only with rectangle_approx method and holds the
@@ -332,7 +332,7 @@ class FindArmSkeleton(object):
         self.angle_bin_num = angle_bin_num
         self.min_coords_num = min_coords_num
         self.max_links = max_links
-        self.link_length_thres = link_length_thres
+        self.link_width_thres = link_width_thres
         self.positions_initiated = True
         if frame is not None:
             if not co.edges.exist:
@@ -690,7 +690,7 @@ class FindArmSkeleton(object):
             link_length = calculate_cart_dists(
                 np.atleast_2d(self.skeleton[-1][1]), skel_end)
         if self.skeleton:
-            if link_length < self.link_length_thres:
+            if link_length < self.link_width_thres:
                 self.skeleton[-1][1] = skel_end.astype(int)
                 self.skeleton_widths[-1][
                     1] = link_end_width_segment.astype(int)
@@ -728,7 +728,7 @@ class FindArmSkeleton(object):
         else:
             surr_mask = self.filter_mask.copy()
             surr_mask[self.filter_mask > 0] = surr_points_mask
-            if link_length < self.link_length_thres:
+            if link_length < self.link_width_thres:
                 self.surrounding_skel[-1] += surr_mask
                 self.surrounding_skel[
                     -1] = self.surrounding_skel[-1].astype(bool)

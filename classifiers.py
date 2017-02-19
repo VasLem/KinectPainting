@@ -2,6 +2,7 @@
 Implementation of Classifier Training, partly described inside Fanello et al.
 '''
 import sys
+import errno
 import glob
 import numpy as np
 import class_objects as co
@@ -10,6 +11,14 @@ import os.path
 import cPickle as pickle
 import logging
 # pylint: disable=no-member
+
+
+def makedir(path):
+    try:
+        os.makedirs(path)
+    except OSError as exception:
+        if exception.errno != errno.EEXIST:
+            raise
 
 
 class Classifier(object):
@@ -23,8 +32,8 @@ class Classifier(object):
                  buffer_size=20, des_dim=None,
                  isstatic=False,
                  use='svms', num_of_cores=4, name='',
-                 use_dicts = True,
-                 hog_num=None):
+                 use_dicts=True,
+                 feature_params=None):
         self.use_dicts = use_dicts
         self.sparse_coders = None
         self.log_lev = log_lev
@@ -70,9 +79,12 @@ class Classifier(object):
         self.num_of_cores = num_of_cores
         self.name = name
         self.allowed_train_actions = None
-        self.hog_num = hog_num
+        self.feature_params = feature_params
         self.already_expanded = False
         self.ground_truth_classes = None
+        self.testname = ''
+        self.testdataname = ''
+        self.save_fold = None
         if self.use == 'svms':
             from sklearn.svm import LinearSVC
             from sklearn.multiclass import OneVsRestClassifier
@@ -101,7 +113,8 @@ class Classifier(object):
             if self.use == 'svms':
                 from sklearn.svm import LinearSVC
                 from sklearn.multiclass import OneVsRestClassifier
-                self.unified_classifier = OneVsRestClassifier(LinearSVC(),
+                self.unified_classifier = OneVsRestClassifier(
+                                        LinearSVC(),
                                                               self.num_of_cores)
             else:
                 from sklearn.ensemble import RandomForestClassifier
@@ -118,8 +131,8 @@ class Classifier(object):
                      classifiers_retrain=False, test_against_training=False,
                      training_datapath=None, classifiers_savepath=None,
                      num_of_cores=4, buffer_size=None, classifiers_save=True,
-                     max_act_samples=None, use_dicts=True,
-                     min_dict_iterations=3):
+                     max_act_samples=None,
+                     min_dict_iterations=3, feature_params=None):
         '''
         <Arguments>
         For testing:
@@ -135,6 +148,8 @@ class Classifier(object):
             Save them if <classifiers_save> is True to <classifiers_savepath>. Do not train
             if <classifiers_savepath> already exists and <classifiers_retrain> is False.
         '''
+        if feature_params is not None:
+            self.feature_params = feature_params
         if classifiers_savepath is None:
             classifiers_savepath = self.use + '_' + self.name + '_train'
             if self.isstatic:
@@ -142,6 +157,8 @@ class Classifier(object):
             else:
                 classifiers_savepath = classifiers_savepath + '_active'
             classifiers_savepath += '.pkl'
+        if not os.path.isfile(classifiers_savepath):
+            classifiers_retrain = True
         if buffer_size is not None:
             self.buffer_size = buffer_size
         if classifiers_retrain or dicts_retrain or test_against_training:
@@ -152,9 +169,16 @@ class Classifier(object):
             self.process_dictionaries(dict_train_act_num, dicts_retrain,
                                       min_iterations=min_dict_iterations,
                                       max_act_samples=max_act_samples)
+
+        if self.use_dicts and (classifiers_retrain or test_against_training):
+            LOG.info('Making Sparse Features..')
+            self.sparse_features_lists = (self.action_recog.
+                                          actions.update_sparse_features(self.sparse_coders,
+                                                                         ret_sparse=True,
+                                                                         max_act_samples=max_act_samples))
         self.process_training(num_of_cores, classifiers_retrain,
                               classifiers_savepath, classifiers_save,
-                              test_against_training, use_dicts=use_dicts)
+                              test_against_training)
 
     def prepare_training_data(self, path=None, max_act_samples=None):
         '''
@@ -176,7 +200,8 @@ class Classifier(object):
                                          use_dexter=False,
                                          isstatic=self.isstatic,
                                          max_act_samples=max_act_samples,
-                                         feature_params=([self.hog_num], [None]))
+                                         feature_params=self.feature_params,
+                                         fss_max_iter=100)
             self.sync.append(self.action_recog.actions.actions[-1].sync)
 
     def process_dictionaries(self, train_act_num=None, retrain=False,
@@ -217,16 +242,9 @@ class Classifier(object):
                 act_num=train_act_num, min_iterations=min_iterations)
             self.sparse_coders = self.action_recog.dictionaries.sparse_dicts
 
-        LOG.info('Making Sparse Features..')
-        self.sparse_features_lists = (self.action_recog.
-                                      actions.update_sparse_features(self.sparse_coders,
-                                                                     ret_sparse=True,
-                                                                     max_act_samples=
-                                                                     max_act_samples))
-
     def process_training(self, num_of_cores=4, retrain=False,
                          savepath=None, save=True,
-                         against_training=False, use_dicts=True):
+                         against_training=False):
         '''
         Train (or load trained) Classifiers with number of cores num_of_cores, with buffer size (stride
             is 1) <self.buffer_size>. If <retrain> is True, Classifiers are retrained, even if
@@ -243,10 +261,11 @@ class Classifier(object):
                 LOG.info('Preparing Classifiers Train Data..')
             if not self.isstatic:
                 initial_traindata = []
-                if use_dicts:
+                if self.use_dicts:
                     for sparse_features in self.sparse_features_lists:
                         initial_traindata.append(np.concatenate(tuple(sparse_features),
                                                                 axis=0))
+                        print initial_traindata[-1].shape
                 else:
                     for action in self.action_recog.actions.actions:
                         initial_traindata.append(np.concatenate(tuple(action.features),
@@ -262,6 +281,7 @@ class Classifier(object):
                         initial_traindata, traindata_samples_inds,
                         traindata_frames_inds):
                     act_buffers = []
+                    print data.shape[1]
                     for count in range(data.shape[1] - self.buffer_size):
                         # Checking if corresponding frames belong to same sample
                         # and are not too timespace distant from each other
@@ -276,6 +296,7 @@ class Classifier(object):
                                    self.buffer_size / 4)):
                             act_buffers.append(np.atleast_2d(
                                 data[:, count:count + self.buffer_size].ravel()))
+                    print len(act_buffers)
                     acts_buffers.append(act_buffers)
                 LOG.info('Train Data has ' + str(len(acts_buffers)) +
                          ' buffer lists. First buffer list has length ' +
@@ -288,7 +309,7 @@ class Classifier(object):
                     multiclass_traindata.append(
                         np.concatenate(tuple(act_buffers), axis=0))
             else:
-                if use_dicts:
+                if self.use_dicts:
                     multiclass_traindata = [np.concatenate(tuple(feature_list), axis=0).T for
                                             feature_list in
                                             self.sparse_features_lists]
@@ -342,10 +363,12 @@ class Classifier(object):
         LOG.info('Processing test data..')
         LOG.info('Constructing ground truth vector..')
         LOG.info('Extracting features..')
-        sparse_features, self.test_sync = self.action_recog.add_action(datapath, masks_needed=False,
-                                                                       for_testing=True,
-                                                                       isstatic=self.isstatic,
-                                                                       feature_params=([self.hog_num], [None]))
+        sparse_features, self.test_sync = self.action_recog.add_action(
+            datapath, masks_needed=False,
+            for_testing=True,
+            isstatic=self.isstatic,
+            feature_params=self.feature_params,
+            fss_max_iter=100)
         sparse_features = np.concatenate(tuple(sparse_features), axis=0)
         if not self.isstatic:
             act_buffers = []
@@ -393,10 +416,10 @@ class Classifier(object):
             if not os.path.exists(data):
                 raise Exception(data + ' is a non existent path')
             if os.path.isdir(os.path.join(data, '0')):
-                files = [os.path.splitext(filename)[0] for filename in
+                files = [os.path.basename(filename) for filename in
                          glob.glob(os.path.join(data, '0', '*.png'))]
             else:
-                files = [os.path.splitext(filename)[0] for filename in
+                files = [os.path.basename(filename) for filename in
                          glob.glob(os.path.join(data, '*.png'))]
             if not files:
                 raise Exception(data + ' does not include any png file')
@@ -506,15 +529,87 @@ class Classifier(object):
         return np.apply_along_axis(self.masked_mean,
                                    0, data, win_size)[:-win_size + 1]
 
+    def plot_result(self, data, info=None, save=True, xlabel='Frames', ylabel='',
+                    labels=None, colors=None, linewidths=None,
+                    xticks_names=None, yticks_names=None, xticks_locs=None,
+                    yticks_locs=None, markers=None, ylim=None, xlim=None):
+        '''
+        <data> is a numpy array dims (n_points, n_plots),
+        <labels> is a string list of dimension (n_plots)
+        <colors> ditto
+        '''
+        import matplotlib
+        matplotlib.rcParams['text.usetex'] = True
+        matplotlib.rcParams['text.latex.unicode'] = True
+        # plt.style.use('seaborn-ticks')
+        if len(data.shape) == 1:
+            data = np.atleast_2d(data).T
+        fig = plt.figure()
+        axes = fig.add_subplot(111)
+        if xticks_locs is not None:
+            axes.set_xticks(xticks_locs, minor=True)
+            axes.xaxis.grid(True, which='minor')
+        if yticks_locs is not None:
+            axes.set_yticks(yticks_locs, minor=True)
+            axes.yaxis.grid(True, which='minor')
+        if xticks_names is not None:
+            plt.xticks(range(len(xticks_names)), xticks_names)
+        if yticks_names is not None:
+            plt.yticks(range(len(yticks_names)), yticks_names)
+        if markers is None:
+            markers = [','] * data.shape[1]
+        if colors is None:
+            colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k']
+        while len(colors) < data.shape[1]:
+            colors += [tuple(np.random.random(3))]
+        if linewidths is None:
+            linewidths = [1] * data.shape[1]
+        if labels is not None:
+            for count in range(data.shape[1]):
+                axes.plot(data[:, count], label='%s' % labels[count],
+                          color=colors[count],
+                          linewidth=linewidths[count],
+                          marker=markers[count])
+            lgd = self.put_legend_outside_plot(axes)
+        else:
+            for count, score in range(data.shape[1]):
+                axes.plot(data[:, count], colors=colors[count])
+        if info is not None:
+            plt.title(self.testname +
+                      '\n Dataset: ' + self.testdataname +
+                      '\n' + info.title())
+        else:
+            plt.title(self.testname +
+                      '\n Dataset ' + self.testdataname)
+            info = ''
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        if ylim is not None:
+            plt.ylim(ylim)
+        if xlim is not None:
+            plt.xlim(xlim)
+        if info is not None:
+            filename = os.path.join(
+                    self.save_fold, self.testname + ' ' + info + '.pdf')
+        else:
+            filename = os.path.join(
+                    self.save_fold, self.testname + '.pdf')
+        if save:
+            if labels is None:
+                plt.savefig(filename)
+            else:
+                plt.savefig(filename,
+                    bbox_extra_artists=(lgd,), bbox_inches='tight')
+
     def run_testing(self, data=None, online=True, against_training=False,
                     scores_filter_shape=5,
                     std_small_filter_shape=co.CONST['STD_small_filt_window'],
                     std_big_filter_shape=co.CONST['STD_big_filt_window'],
-                    ground_truth_type=co.CONST['test_ground_truth'],
+                    ground_truth_type=co.CONST['test_actions_ground_truth'],
                     img_count=None, save=True, scores_savepath=None,
-                    load=False):
+                    load=False, testname=None, display_scores=True):
         '''
-        Test ClassifierS using data (.png files) located in <data>. If <online>, the
+        Test Classifiers using data (.png files) located in <data>. If <online>, the
         testing is online, with <data> being a numpy array, which has been
         firstly processed by <hand_segmentation_alg>. If <against_training>,
         the testing happens using the concatenated training data, so <data> is
@@ -529,18 +624,36 @@ class Classifier(object):
         If <load> is True and <scores_save_path> exists, testing is bypassed and all the
         necessary results are loaded from memory.
         '''
-        if save or load:
+        if online:
+            self.testname = 'Online '
+        else:
+            self.testdataname = os.path.basename(data)
+            self.testname = 'Offline '
+        self.testname = (self.testname + self.name + ' ' + self.use).title()
+
+        if (save or load) and not online:
+            fold_name = (self.name + ' ' + self.use).title()
+            if self.testname is not None:
+                self.save_fold = os.path.join(
+                    co.CONST['results_fold'], 'Classification', fold_name,
+                    testname)
+            else:
+                self.save_fold = os.path.join(
+                    co.CONST['results_fold'], 'Classification', fold_name)
+            makedir(self.save_fold)
+
             if scores_savepath is None:
                 scores_savepath = self.use + '_' + self.name
                 if self.isstatic:
                     scores_savepath = scores_savepath + '_static'
                 else:
                     scores_savepath = scores_savepath + '_active'
-                scores_savepath += '_testscores.pkl'
+                scores_savepath += '_'+self.testdataname+'_testscores.pkl'
         if not online:
             if load and os.path.exists(scores_savepath):
                 with open(scores_savepath, 'r') as inp:
-                    self.scores, self.test_sync = pickle.load(inp)
+                    self.scores, self.test_sync, self.testname = pickle.load(
+                        inp)
                 # DEBUGGING
             else:
                 if self.use == 'svms':
@@ -575,7 +688,8 @@ class Classifier(object):
                         self.scores = expanded_scores
                     if save:
                         with open(scores_savepath, 'w') as out:
-                            pickle.dump((self.scores, self.test_sync), out)
+                            pickle.dump((self.scores, self.test_sync,
+                                         self.testname), out)
             self.test_ground_truth = self.construct_ground_truth(
                 os.path.join(data, '0'), ground_truth_type)
             if not self.isstatic:
@@ -584,7 +698,8 @@ class Classifier(object):
                 self.filtered_scores = self.scores
                 self.process_offline_scores_original(scores_filter_shape,
                                                      std_small_filter_shape,
-                                                     std_big_filter_shape)
+                                                     std_big_filter_shape,
+                                                     save=save)
             else:
                 # self.filtered_scores = self.upgr_filter(self.scores,
                 #                                        3)
@@ -599,14 +714,12 @@ class Classifier(object):
                             self.recognized_classes[-1])
                 self.recognized_classes = np.array(self.recognized_classes)
                 #self.recognized_classes = self.scores.argmax(axis=1)
-                plt.figure()
-                axes = plt.subplot(111)
-                for count, score in enumerate(np.transpose(np.array(
-                        self.filtered_scores))):
-                    axes.plot(score, label='%s' % self.train_classes[count])
-                self.put_legend_outside_plot(axes)
-                plt.title(self.use + ' ' + self.name + ' Filtered Scores')
-                plt.xlabel('Frames')
+            if display_scores:
+                self.plot_result(self.filtered_scores,
+                                 labels=self.train_classes,
+                                 xlabel='Frames',
+                                 save=save)
+
             if (self.action_recog.actions.
                     features_extract is not None):
                 LOG.info('Mean feature extraction time ' +
@@ -630,10 +743,11 @@ class Classifier(object):
             There must be a continuous data streaming (method called in every
             loop), even if the result of the previous algorithm is None
             '''
-            self.process_online_scores(data, img_count,
+            recognized_class = self.process_online_scores(data, img_count,
                                        scores_filter_shape,
                                        std_small_filter_shape,
                                        std_big_filter_shape)
+            return recognized_class
 
     def process_online_scores(self, data, img_count=None,
                               scores_filter_shape=5,
@@ -653,126 +767,144 @@ class Classifier(object):
         self.mean_from += 1
         # self.buffer_exists = self.buffer_exists[
         #    -std_big_filter_shape:]
-        if not self.img_count or (img_count == 0):
-            self._buffer = []
-            self.mean_from = 0
-            self.buffer_exists = []
+        if not self.isstatic:
+            if not self.img_count or (img_count == 0):
+                self._buffer = []
+                self.mean_from = 0
+                self.buffer_exists = []
+                self.scores = []
+                self.filtered_scores = []
+                self.filtered_scores_std_mean = []
+                self.filtered_scores_std = []
+                self.small_std_running_mean_vec = []
+                self.big_std_running_mean_vec = []
+                self.scores_running_mean_vec = []
+                self.act_inds = []
+                self.crossings = []
+            if img_count is not None:
+                self.buffer_exists += ((img_count - self.img_count) * [False])
+                self.img_count = img_count
+            if data is None:
+                self.buffer_exists.append(False)
+                return
+        elif not self.img_count:
             self.scores = []
-            self.filtered_scores = []
-            self.filtered_scores_std_mean = []
-            self.filtered_scores_std = []
-            self.small_std_running_mean_vec = []
-            self.big_std_running_mean_vec = []
-            self.scores_running_mean_vec = []
-            self.act_inds = []
-            self.crossings = []
-        if img_count is not None:
-            self.buffer_exists += ((img_count - self.img_count) * [False])
-            self.img_count = img_count
-        if data is None:
-            self.buffer_exists.append(False)
-            return
         self.features_extraction.update(
             data, self.img_count, use_dexter=False, masks_needed=False)
-        features = self.features_extraction.extract_features()
-        if features is None:
-            self.buffer_exists.append(False)
-            return
-        sparse_features = np.concatenate(
-            tuple([coder.code(features) for (coder, feature) in
-                   zip(self.sparse_coders, features)]), axis=0)
-        if len(self._buffer) < self.buffer_size:
-            self._buffer = self._buffer + [sparse_features]
-            self.buffer_exists.append(False)
-            return
+        features = self.features_extraction.extract_features(
+            isstatic=self.isstatic)
+        if not self.isstatic:
+            if features is None:
+                self.buffer_exists.append(False)
+                return
+            sparse_features = np.concatenate(
+                tuple([coder.code(features) for (coder, feature) in
+                       zip(self.sparse_coders, features)]), axis=0)
+            if len(self._buffer) < self.buffer_size:
+                self._buffer = self._buffer + [sparse_features]
+                self.buffer_exists.append(False)
+                return
+            else:
+                self._buffer = self._buffer[1:] + [sparse_features]
+                self.buffer_exists.append(True)
+            '''
+            existence = self.buffer_exists[-self.buffer_size:]
+            if sum(existence) < 3 * self.buffer_size / 4:
+                return
+            elif sum(existence) == 3 * self.buffer_size / 4:
+                self.mean_from = 0
+            '''
+            inp = np.array(self._buffer).T.reshape(1, -1)
+            # inp = np.atleast_2d(np.concatenate(tuple(self._buffer),
+            #                                   axis=0))
         else:
-            self._buffer = self._buffer[1:] + [sparse_features]
-            self.buffer_exists.append(True)
-        '''
-        existence = self.buffer_exists[-self.buffer_size:]
-        if sum(existence) < 3 * self.buffer_size / 4:
-            return
-        elif sum(existence) == 3 * self.buffer_size / 4:
-            self.mean_from = 0
-        '''
-        inp = np.array(self._buffer).T.reshape(1, -1)
-        # inp = np.atleast_2d(np.concatenate(tuple(self._buffer),
-        #                                   axis=0))
-        score = (self.unified_classifier.
-                 decision_function(inp))
+            inp = features[0].reshape(1, -1)
+        score = (self.decide(inp))
         self.scores.append(score)
-        if len(self.scores_running_mean_vec) < scores_filter_shape:
-            self.scores_running_mean_vec.append(score.ravel())
-        else:
-            self.scores_running_mean_vec = (self.scores_running_mean_vec[1:]
-                                            + [score.ravel()])
-        start_from = np.sum(self.buffer_exists[-std_small_filter_shape:])
-        self.filtered_scores.append(
-            np.mean(np.array(self.scores_running_mean_vec[
-                -start_from:]
-            ), axis=0))
-        score_std = np.std(self.filtered_scores[-1])
-        if len(self.small_std_running_mean_vec) < std_small_filter_shape:
-            self.small_std_running_mean_vec.append(score_std)
-        else:
-            self.small_std_running_mean_vec = (
-                self.small_std_running_mean_vec[1:] +
-                [score_std])
-        filtered_score_std = np.mean(self.small_std_running_mean_vec)
-        self.filtered_scores_std.append(filtered_score_std)
-        if len(self.big_std_running_mean_vec) < std_big_filter_shape:
-            self.big_std_running_mean_vec.append(filtered_score_std)
-        else:
-            self.big_std_running_mean_vec = (self.big_std_running_mean_vec[1:]
-                                             + [filtered_score_std])
-        start_from = np.sum(self.buffer_exists[
-            -min(std_big_filter_shape, self.mean_from + 1):])
-        self.filtered_scores_std_mean.append(
-            np.mean(self.big_std_running_mean_vec[-start_from:]))
-        mean_diff = self.filtered_scores_std_mean[
-            -1] - self.filtered_scores_std[-1]
-        if (np.min(mean_diff) > co.CONST['action_separation_thres'] and not
-                self.on_action):
-            self.crossings.append(self.img_count)
-            self.on_action = True
-            #self.mean_from = self.img_count
-            if self.recognized_classes:
-                self.recognized_classes[-1].add(length=self.img_count -
-                                                self.new_action_starts_count +
-                                                1)
-                LOG.info('Frame ' + str(self.img_count) + ': ' +
-                         self.recognized_classes[-1].name +
-                         ', starting from frame ' +
-                         str(self.recognized_classes[-1].start) +
-                         ' with length ' +
-                         str(self.recognized_classes[-1].length))
-            self.recognized_classes.append(ClassObject(self.train_classes))
-            index = np.argmax(self.filtered_scores[-1])
-            self._max = self.filtered_scores[-1][index]
-            self.act_inds = [index]
-            self.new_action_starts_count = self.img_count
-            self.recognized_classes[-1].add(
-                index=index,
-                start=self.new_action_starts_count)
-            self.saved_buffers_scores = []
-        else:
-            if len(self.recognized_classes) > 0:
-                _arg = np.argmax(self.filtered_scores[-1])
-                if self._max < self.filtered_scores[-1][_arg]:
-                    self._max = self.filtered_scores[-1][_arg]
-                    self.recognized_classes[-1].add(index=_arg)
-                if mean_diff < co.CONST['action_separation_thres']:
-                    self.on_action = False
-                self.saved_buffers_scores.append(score)
-                LOG.info('Frame ' + str(self.img_count) + ': ' +
-                         self.recognized_classes[-1].name)
+        if not self.isstatic:
+            if len(self.scores_running_mean_vec) < scores_filter_shape:
+                self.scores_running_mean_vec.append(score.ravel())
+            else:
+                self.scores_running_mean_vec = (self.scores_running_mean_vec[1:]
+                                                + [score.ravel()])
+            start_from = np.sum(self.buffer_exists[-std_small_filter_shape:])
+            self.filtered_scores.append(
+                np.mean(np.array(self.scores_running_mean_vec[
+                    -start_from:]
+                ), axis=0))
+            score_std = np.std(self.filtered_scores[-1])
+            if len(self.small_std_running_mean_vec) < std_small_filter_shape:
+                self.small_std_running_mean_vec.append(score_std)
+            else:
+                self.small_std_running_mean_vec = (
+                    self.small_std_running_mean_vec[1:] +
+                    [score_std])
+            filtered_score_std = np.mean(self.small_std_running_mean_vec)
+            self.filtered_scores_std.append(filtered_score_std)
+            if len(self.big_std_running_mean_vec) < std_big_filter_shape:
+                self.big_std_running_mean_vec.append(filtered_score_std)
+            else:
+                self.big_std_running_mean_vec = (self.big_std_running_mean_vec[1:]
+                                                 + [filtered_score_std])
+            start_from = np.sum(self.buffer_exists[
+                -min(std_big_filter_shape, self.mean_from + 1):])
+            self.filtered_scores_std_mean.append(
+                np.mean(self.big_std_running_mean_vec[-start_from:]))
+            mean_diff = self.filtered_scores_std_mean[
+                -1] - self.filtered_scores_std[-1]
+            if (np.min(mean_diff) > co.CONST['action_separation_thres'] and not
+                    self.on_action):
+                self.crossings.append(self.img_count)
+                self.on_action = True
+                #self.mean_from = self.img_count
+                if self.recognized_classes:
+                    self.recognized_classes[-1].add(length=self.img_count -
+                                                    self.new_action_starts_count +
+                                                    1)
+                    LOG.info('Frame ' + str(self.img_count) + ': ' +
+                             self.recognized_classes[-1].name +
+                             ', starting from frame ' +
+                             str(self.recognized_classes[-1].start) +
+                             ' with length ' +
+                             str(self.recognized_classes[-1].length))
+                self.recognized_classes.append(ClassObject(self.train_classes))
+                index = np.argmax(self.filtered_scores[-1])
+                self._max = self.filtered_scores[-1][index]
+                self.act_inds = [index]
+                self.new_action_starts_count = self.img_count
+                self.recognized_classes[-1].add(
+                    index=index,
+                    start=self.new_action_starts_count)
+                self.saved_buffers_scores = []
                 return self.recognized_classes[-1].name
             else:
-                return None
+                if len(self.recognized_classes) > 0:
+                    _arg = np.argmax(self.filtered_scores[-1])
+                    if self._max < self.filtered_scores[-1][_arg]:
+                        self._max = self.filtered_scores[-1][_arg]
+                        self.recognized_classes[-1].add(index=_arg)
+                    if mean_diff < co.CONST['action_separation_thres']:
+                        self.on_action = False
+                    self.saved_buffers_scores.append(score)
+                    LOG.info('Frame ' + str(self.img_count) + ': ' +
+                             self.recognized_classes[-1].name)
+                    return self.recognized_classes[-1].name
+                else:
+                    return None
+        if np.max(score) >= 0.7 or len(
+                self.recognized_classes) == 0:
+            self.recognized_classes.append(score.argmax())
+        else:
+            self.recognized_classes.append(
+                self.recognized_classes[-1])
+        LOG.info('Pose detected:'
+                 + self.train_classes[self.recognized_classes[-1]])
+        return self.train_classes[self.recognized_classes[-1]]
 
     def process_offline_scores_original(self, scores_filter_shape,
                                         std_small_filter_shape,
-                                        std_big_filter_shape, display=True):
+                                        std_big_filter_shape, display=True,
+                                        save=True):
         '''
         Process scores using stds as proposed by the paper
         '''
@@ -835,50 +967,36 @@ class Classifier(object):
             tuple(self.recognized_classes), axis=0)
         self.already_expanded = True
         if display:
-            import matplotlib
-            matplotlib.rcParams['text.usetex'] = True
-            matplotlib.rcParams['text.latex.unicode'] = True
-            plt.style.use('seaborn-ticks')
-            plt.figure()
-            axes = plt.subplot(111)
-            axes.plot(
-                np.array(
-                    self.less_filtered_scores_std),
-                color='r',
-                label=r'STD')
-            axes.plot(np.array(self.high_filtered_scores_std),
-                      color='g', label='STD Mean')
-            self.put_legend_outside_plot(axes)
-            axes.set_title('Filtered Scores Statistics')
-            axes.set_xlabel('Frames')
-
-            plt.figure()
-            axes = plt.subplot(111)
-            for count, score in enumerate(np.transpose(np.array(
-                    self.filtered_scores))):
-                axes.plot(score, label='%s' % self.train_classes[count])
-            self.put_legend_outside_plot(axes)
-            plt.title('Filtered Scores')
-            plt.xlabel('Frames')
-
-            plt.figure()
-            axes = plt.subplot(111)
+            self.plot_result(np.concatenate((
+                self.less_filtered_scores_std[:, None],
+                self.high_filtered_scores_std[:, None]), axis=1),
+                info='Filtered Scores Statistics',
+                xlabel='Frames',
+                labels=['STD', 'STD Mean'],
+                colors=['r', 'g'],
+                save=save)
+            self.plot_result(self.filtered_scores,
+                             labels=self.train_classes,
+                             info='Filtered Scores',
+                             xlabel='Frames',
+                             save=save)
             mean_diff = (np.array(self.high_filtered_scores_std) -
                          np.array(self.less_filtered_scores_std))
-            axes.plot((mean_diff) / float(np.max(np.abs(mean_diff[
-                np.isfinite(mean_diff)]))),
-                label='Filtered scores\nnormalized\nmean difference')
-            axes.plot(self.crossings, np.zeros_like(self.crossings), 'o',
-                      label='Selected Zero\n Crossings')
+            mean_diff = (mean_diff) / float(np.max(np.abs(mean_diff[
+                np.isfinite(mean_diff)])))
+            plots = [mean_diff]
+            labels = ['Filtered scores\nnormalized\nmean difference']
+
             if self.test_ground_truth is not None:
-                axes.plot((self.test_ground_truth - np.mean(self.test_ground_truth[
-                    np.isfinite(self.test_ground_truth)]))
-                    / float(np.max(self.test_ground_truth[
-                        np.isfinite(self.test_ground_truth)])),
-                    label='Ground Truth', linewidth=1.5)
-            self.put_legend_outside_plot(axes)
-            plt.title('Measure of actions starting and ending points')
-            plt.xlabel('Frames')
+                plots += [(self.test_ground_truth - np.mean(self.test_ground_truth[
+                    np.isfinite(self.test_ground_truth)])) / float(
+                        np.max(self.test_ground_truth[
+                            np.isfinite(self.test_ground_truth)]))]
+                labels += ['Ground Truth']
+                linewidths = [1, 1.5]
+            self.plot_result(np.vstack(plots).T, labels=labels,
+                             info='Metric of actions starting and ending ' +
+                             'points', xlabel='Frames', save=save)
 
     def put_legend_outside_plot(self, axes):
         '''
@@ -889,21 +1007,174 @@ class Classifier(object):
         axes.set_position([box.x0, box.y0, box.width * 0.8, box.height])
 
         # Put a legend to the right of the current axis
-        axes.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        lgd = axes.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        return lgd
+
+    def array_to_latex(self, arr, xlabels=None, ylabels=None,
+                       sup_x_label=None, sup_y_label=None,
+                       extra_locs=None):
+        '''
+        <arr> is the input array, <xlabels> are the labels along x axis,
+        <ylabels> are the labels along the y axis, <sup_x_label> and
+        <sup_y_label> are corresponding labels description. <arr> can be also a
+        list of 2d arrays when extra_locs is a list of 'right' and 'bot' with
+        the same length as the <arr[1:]> list . If this is the case, then starting
+        by the first array in the list, each next array is concatenated to it,
+        while adding either a double line or a double column separating them.
+        The dimensions of the arrays and the labels should be coherent, or an
+        exception will be thrown.
+        '''
+        doublerows = []
+        doublecols = []
+        whole_arr = None
+        if isinstance(arr , list):
+            if len(arr) != len(extra_locs) + 1:
+                raise Exception('<extra_locs> should have the'
+                                +' same length as <arr> -1\n'+
+                                self.array_to_latex.__doc__)
+            if not isinstance(arr[0], np.ndarray) or len(arr[0].shape)==1:
+                arr[0] = np.atleast_2d(arr[0])
+            whole_arr = arr[0]
+            for array,loc in zip(arr[1:],extra_locs):
+                if not isinstance(array, np.ndarray) or len(array.shape)==1:
+                    array = np.atleast_2d(array)
+                if loc == 'right':
+                    if whole_arr.shape[0] != array.shape[0]:
+                        raise Exception ('The dimensions are not coeherent\n'+
+                                         self.array_to_latex.__doc)
+                    doublecols.append(whole_arr.shape[1])
+                    whole_arr = np.concatenate((whole_arr,array), axis=1)
+                elif loc == 'bot':
+                    if whole_arr.shape[1] != array.shape[1]:
+                        raise Exception ('The dimensions are not coeherent\n'+
+                                         self.array_to_latex.__doc)
+                    doublerows.append(whole_arr.shape[0])
+                    whole_arr = np.concatenate((whole_arr,array), axis=0)
+        elif len(arr.shape) == 1:
+            whole_arr = np.atleast_2d(arr)
+        else:
+            whole_arr = arr
+        if xlabels is not None:
+            xlabels = np.array(xlabels)
+            xlabels = xlabels.astype(list)
+        if ylabels is not None:
+            ylabels = np.array(ylabels)
+            ylabels = ylabels.astype(list)
+        y_size, x_size = whole_arr.shape
+        y_mat, x_mat = whole_arr.shape
+        ex_x = xlabels is not None
+        ex_y = ylabels is not None
+        ex_xs = sup_x_label is not None
+        ex_ys = sup_y_label is not None
+        x_mat = x_size + ex_y + ex_ys
+        y_mat = y_size + ex_x + ex_xs
+        init = '\documentclass{standalone} \n'
+        needed_packages = '\usepackage{array, multirow, hhline, rotating}\n'
+        cols_space = []
+        if len(doublecols) != 0:
+            doublecols = np.array(doublecols)
+            doublecols += ex_y + ex_ys - 1
+            for cnt in range(x_mat):
+                if cnt in doublecols:
+                    cols_space.append('c ||')
+                else:
+                    cols_space.append('c|')
+        else:
+            cols_space = ['c |'] * x_mat
+        begin = '\\begin{document} \n \\begin{tabular}{|' + ''.join(cols_space) + '}\n'
+        small_hor_line = '\cline{' + \
+            str(1 + ex_ys + ex_y) + '-' + str(x_mat) + '}'
+        double_big_hor_line = ('\hhline{' + (ex_ys)*'|~'
+                                 + (x_size+ex_y) *'|=' +'|}')
+        big_hor_line = '\cline{' + str(1 + ex_ys) + '-' + str(x_mat) + '}'
+        whole_hor_line = '\cline{1-' + str(x_mat) + '}'
+        if sup_x_label is not None:
+            if ex_ys or ex_y:
+                multicolumn = ('\multicolumn{' + str(ex_ys + ex_y) + '}{c|}{} & ' +
+                               '\multicolumn{' + str(x_size) +
+                               '}{c|}{' + sup_x_label + '} \\\\ \n')
+            else:
+                multicolumn = ('\multicolumn{' + str(x_size) +
+                               '}{|c|}{' + sup_x_label + '} \\\\ \n')
+
+        else:
+            multicolumn = ''
+        if ex_ys:
+            multirow = whole_hor_line + \
+                '\multirow{' + str(y_size) + '}{*}{\\rotatebox[origin=c]{90}{'\
+            + sup_y_label + '}}'
+        else:
+            multirow = ''
+
+        end = '\hline \end{tabular}\n \end{document}'
+        if isinstance(whole_arr[0, 0], float):
+            whole_arr = np.around(whole_arr, 3)
+        str_arr = whole_arr.astype(str)
+        str_rows = [' & '.join(row) + '\\\\ \n ' for row in str_arr]
+        if ex_y:
+            str_rows = ["%s & %s" % (ylabel, row) for (row, ylabel) in
+                        zip(str_rows, ylabels)]
+        if ex_ys:
+            str_rows = [" & " + str_row for str_row in str_rows]
+        xlabels_row = ''
+        if ex_x:
+            if ex_ys or ex_y:
+                xlabels_row = (' \multicolumn{' + str(x_mat - x_size) +
+                               '}{c |}{ } & ' + ' & '.
+                               join(xlabels.astype(list)) + '\\\\ \n')
+            else:
+                xlabels_row = (' & '.join(xlabels.astype(list)) + '\\\\ \n')
+
+        xlabels_row += multirow
+        if not ex_ys:
+            str_rows = [xlabels_row] + str_rows
+        else:
+            str_rows[0] = xlabels_row + str_rows[0]
+
+        str_mat = (small_hor_line + multicolumn + small_hor_line)
+        for cnt in range(len(str_rows)):
+            str_mat += str_rows[cnt]
+            if cnt in doublerows:
+                str_mat += double_big_hor_line
+            else:
+                str_mat += big_hor_line
+        str_mat = init + needed_packages + begin + str_mat + end
+        return str_mat
 
     def compute_performance_measures(self, fmask):
         from sklearn import metrics
+        dif=set(np.unique(self.test_ground_truth)).symmetric_difference(
+            set(np.unique(self.recognized_classes)))
+        for cnt in range(len(fmask)):
+            if self.recognized_classes[cnt] in dif:
+                fmask[cnt]=False
         y_true = self.test_ground_truth[fmask]
         y_pred = self.recognized_classes[fmask]
-        print y_true, y_pred
         f1_scores = metrics.f1_score(y_true, y_pred, average=None)
-        print f1_scores
+        LOG.info('F1 Scores:' + np.array2string(f1_scores))
         confusion_mat = metrics.confusion_matrix(y_true, y_pred)
-        print confusion_mat
+        LOG.info('Confusion Matrix: ' + np.array2string(confusion_mat))
         accuracy = metrics.accuracy_score(y_true, y_pred)
-        print accuracy
+        LOG.info('Accuracy: '+ str(accuracy))
+        #labels = self.train_classes
+        labels = np.array(
+            self.train_classes)[np.unique(y_true).astype(int)]
+        if self.save_fold is not None:
+            with open(os.path.join(self.save_fold, 'f1_scores.tex'), 'w') as out:
+                out.write(self.array_to_latex([f1_scores,np.atleast_2d(accuracy)],
+                                              xlabels=np.concatenate((labels,
+                                                               ['Accuracy']),axis=0),
+                                              sup_x_label='F-Scores',
+                                              extra_locs=['right']))
+            with open(os.path.join(self.save_fold,
+                                   'Confusion_Matrix.tex'), 'w') as out:
+                out.write(self.array_to_latex(confusion_mat,
+                                              ylabels=labels,
+                                              xlabels=labels,
+                                              sup_x_label='Predicted',
+                                              sup_y_label='Actual'))
 
-    def visualize_scores(self, title=''):
+    def visualize_scores(self, subfolder=None):
         '''
         Plot results with title <title>
         '''
@@ -937,28 +1208,38 @@ class Classifier(object):
 
         if fmask is not None:
             self.compute_performance_measures(fmask)
-        plt.figure()
-        axes = plt.subplot(111)
+        plots = []
+        linewidths = []
+        labels = []
+        markers = []
+        xticks = None
         if self.test_ground_truth is not None:
-            axes.plot(
-                self.test_ground_truth,
-                label='Ground Truth',
-                linewidth=1.5)
+            plots.append(self.test_ground_truth)
+            labels.append('Ground Truth')
+            linewidths.append(1.5)
+            markers.append(',')
         if self.crossings is not None:
-            axes.set_xticks(self.crossings, minor=True)
-            axes.xaxis.grid(True, which='minor')
-            axes.plot(self.crossings, np.zeros_like(self.crossings) - 1, 'o',
-                      label='Actions\nbreak-\n points')
-        axes.plot(self.recognized_classes, label='Identified\nClasses')
-        self.put_legend_outside_plot(axes)
-        axes.set_xlabel('Frames')
-        labels = self.train_classes
-        plt.yticks(range(len(labels)), labels)
-        plt.ylim((-1, len(labels) + 1))
-        if title is None:
-            axes.set_title('Result')
-        else:
-            axes.set_title(title)
+            xticks = self.crossings
+            expanded_xticks = np.zeros_like(self.test_ground_truth)
+            expanded_xticks[:] = None
+            expanded_xticks[xticks] = 0
+            plots.append(expanded_xticks)
+            markers.append('o')
+            labels.append('Actions\nbreak-\npoints')
+            linewidths.append(1)
+        plots.append(self.recognized_classes)
+        labels.append('Identified\nClasses')
+        yticks = self.train_classes
+        ylim = (-1, len(self.train_classes) + 1)
+        markers.append(',')
+        linewidths.append(1)
+        self.plot_result(np.vstack(plots).T, labels=labels,
+                             xticks_locs=xticks, ylim=ylim,
+                             yticks_names=yticks,
+                             info='Classification Results',
+                             markers=markers,
+                             linewidths=linewidths,
+                             xlabel='Frames', save=self.save_fold is not None)
 
 
 class ClassObject(object):
@@ -1008,14 +1289,13 @@ def fake_online_testing(classifier, data='train', path=None):
         img_count = int(filter(str.isdigit, filename))
         classifier.run_testing(
             img,
+            testname='Online',
             img_count=img_count,
             online=True,
             load=False)
     classifier.recognized_classes[-1].add(length=img_count)
     classifier.test_ground_truth = classifier.construct_ground_truth(
         classifier.buffer_exists, ground_truth_type=co.CONST[data + '_ground_truth'])
-    plt.figure()
-    axes = plt.subplot(111)
     classifier.filtered_scores = np.array(classifier.filtered_scores).squeeze()
     classifier.buffer_exists = np.array(classifier.buffer_exists)
     expanded_scores = np.zeros(
@@ -1024,44 +1304,41 @@ def fake_online_testing(classifier, data='train', path=None):
     expanded_scores[
         classifier.buffer_exists.astype(bool),
         :] = classifier.filtered_scores
-    for count, scores in enumerate(np.transpose(np.array(
-            expanded_scores))):
-        axes.plot(scores.ravel(), label='%s' % classifier.train_classes[count])
-    classifier.put_legend_outside_plot(axes)
-    plt.title('Filtered Scores')
-    plt.xlabel('Frames')
-    plt.figure()
-    axes = plt.subplot(111)
-    axes.plot(
-        np.array(
-            classifier.filtered_scores_std),
-        color='r',
-        label=r'STD')
-    axes.plot(np.array(classifier.filtered_scores_std_mean),
-              color='g', label='STD Mean')
-    classifier.put_legend_outside_plot(axes)
-    axes.set_title('Filtered Scores Statistics')
-    axes.set_xlabel('Frames')
+    classifier.plot_results(expanded_scores,
+                            labels=['%s' % classifier.train_classes[count]
+                                    for count in expanded_scores.shape[1]],
+                            info='Filtered Scores',
+                            xlabel='Frames')
+    classifier.plot_results(np.concatenate((
+        classifier.filtered_scores_std,
+        classifier.filtered_scores_std_mean), axis=0).T,
+        colors=['r', 'g'],
+        labels=['STD', 'STD Mean'],
+        info='Filtered Scores Statistics',
+        xlabel='Frames')
 
 
 def construct_actions_classifier(testname='train', train=False,
                                  test=True, visualize=True,
                                  dicts_retrain=False):
     actions_svm = Classifier('INFO', isstatic=False,
-                             name='actions', des_dim=256)
+                             name='actions', des_dim=128,
+                             use_dicts=True)
     actions_svm.run_training(classifiers_retrain=train,
                              dicts_retrain=dicts_retrain,
-                             buffer_size=25, max_act_samples=200)
+                             buffer_size=25, max_act_samples=1000)
     if test or visualize:
         if not test:
-            actions_svm.run_testing(co.CONST[testname + '_path'],
-                                    ground_truth_type=co.CONST[
-                                        testname + '_ground_truth'],
+            actions_svm.run_testing(co.CONST['test_'+testname],
+                                      ground_truth_type=co.CONST[
+                                          'test_'+testname + '_ground_truth'],
+                                    testname=testname,
                                     online=False, load=True)
         else:
-            actions_svm.run_testing(co.CONST[testname + '_path'],
-                                    ground_truth_type=co.CONST[
-                                        testname + '_ground_truth'],
+            actions_svm.run_testing(co.CONST['test_'+testname],
+                                      ground_truth_type=co.CONST[
+                                          'test_'+testname + '_ground_truth'],
+                                    testname=testname,
                                     online=False, load=False)
         if visualize:
             actions_svm.visualize_scores('Actions SVM testing')
@@ -1069,23 +1346,24 @@ def construct_actions_classifier(testname='train', train=False,
 
 
 def construct_poses_classifier(
-        testname='train', train=True, test=True, visualize=True):
+        testname='train', train=True, test=True, visualize=True, pca_num=32):
     static_forest = Classifier('INFO', isstatic=True,
                                name='poses', use='forest',
-                               hog_num=32, use_dicts=False)
-
+                               feature_params=pca_num, use_dicts=False)
     static_forest.run_training(classifiers_retrain=train,
                                max_act_samples=2000)
     if test or visualize:
         if not test:
-            static_forest.run_testing(co.CONST[testname + '_path'],
+            static_forest.run_testing(co.CONST['test_'+testname],
                                       ground_truth_type=co.CONST[
-                                          testname + '_ground_truth'],
+                                          'test_'+testname + '_ground_truth'],
+                                      testname=testname,
                                       online=False, load=True)
         else:
-            static_forest.run_testing(co.CONST[testname + '_path'],
+            static_forest.run_testing(co.CONST['test_'+testname],
                                       ground_truth_type=co.CONST[
-                                          testname + '_ground_truth'],
+                                          'test_'+ testname + '_ground_truth'],
+                                      testname=testname,
                                       online=False, load=False)
         if visualize:
             static_forest.visualize_scores('Poses Forest Testing')
@@ -1098,8 +1376,11 @@ def main():
     Example Usage
     '''
 
-    testname = 'test'
-    construct_actions_classifier(testname, train=False,dicts_retrain=False)
+    testname = 'actions'
+    construct_poses_classifier(
+        testname,
+        test=True,
+        train=False)
     # construct_poses_classifier(test)
 
     '''

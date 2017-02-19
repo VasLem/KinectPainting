@@ -9,12 +9,16 @@ from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image, TimeReference
 import threading
 import message_filters as mfilters
+from math import exp
+'''
 LOG = logging.getLogger(__name__)
 FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
-CH = logging.Handler()
+CH = logging.StreamHandler()
 CH.setFormatter(logging.Formatter(FORMAT))
+LOG.handlers = []
 LOG.addHandler(CH)
-LOG.setLevel(logging.DEBUG)
+LOG.setLevel('INFO')
+'''
 SHAPE = (500, 900)
 
 
@@ -62,9 +66,12 @@ class ROSThread(threading.Thread):
         '''
         Overrides Thread.run . Call Thread.start(), not this.
         '''
+        print('Initializing subscriber..')
         subscriber = ROSSubscriber(self._parent,
                                    self._data)
-        rospy.init_node('canvas', anonymous=False, disable_signals=True)
+        print('Initializing node..')
+        rospy.init_node('canvas', anonymous=True, disable_signals=True)
+        print('Waiting for input..')
         rospy.spin()
 
 
@@ -99,7 +106,7 @@ class Canvas(wx.Panel):
     def __init__(self, parent, data):
         wx.Panel.__init__(self, parent)
         [self.height, self.width] = data.shape[:2]
-        self.SetMinSize(wx.Size(self.height, self.width))
+        self.SetMinSize(wx.Size(self.width, self.height))
         self.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.data = data
@@ -114,23 +121,43 @@ class Canvas(wx.Panel):
 class MainFrame(wx.Frame):
     def __init__(self,parent, id_, title):
         wx.Frame.__init__(self,parent, id_, title)
+        self.canvas_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.Bind(EVT_READY, self.on_process)
         self.data = Data()
         self.drawing_im = None
         self.canvas = None
         self.ros_thread = ROSThread(self,self.data)
         self.ros_thread.start()
-
+        self.init_depth = 0
+        self.draw = 0
+        self.erase = 0
+        self.size = 1
     def on_process(self, event):
         inp = np.tile(self.data.hand[:, :, None] % 255, (1, 1, 3))
         if self.drawing_im is None:
             self.drawing_im = np.zeros_like(inp)
-        self.drawing_im[self.data.skel[-1, -1,0], self.data.skel[-1,-1,1]] = [0, 255 , 0]
-        inp = np.minimum(self.drawing_im+inp)
-        inp[inp>255] = inp
+            self.init_depth = self.data.hand[self.data.skel[-1,-1,0],
+                                             self.data.skel[-1,-1,1]]
+        dep = self.data.hand[self.data.skel[-1,-1,0],
+                                    self.data.skel[-1,-1,1]]
+        if dep != 0:
+            self.size = int(5*(11-10*dep/float(self.init_depth)))
+        self.size = min(self.size, 10)
+        self.size = max(self.size , 1)
+        if self.data.class_name == 'Punch':
+                cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
+                                            self.data.skel[-1, -1, 0]), self.size,
+                           [0,0,0], -1)
+        elif self.data.class_name == 'Index':
+            cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
+                                        self.data.skel[-1, -1, 0]), self.size,
+                       [255,255,255], -1)
+        inp = inp + self.drawing_im
         inp = inp.astype(np.uint8)
         if self.canvas is None:
             self.canvas = Canvas(self, inp)
+            self.canvas_sizer.Add(self.canvas)
+            self.SetSizerAndFit(self.canvas_sizer)
         else:
             self.canvas.data = inp
         self.canvas.Refresh(False)
@@ -141,7 +168,6 @@ def main():
     '''
     main function
     '''
-    logging.basicConfig(format=FORMAT)
     app = wx.App(0)
     frame = MainFrame(None, -1, 'Painter')
     frame.Show(True)

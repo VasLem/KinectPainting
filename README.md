@@ -81,6 +81,10 @@ some troubleshooting is needed. One can run `python init_code.py` . If any modul
 
 
 		sudo pip install scikit-fuzzy
+	
+	It is suggested to also install progressbar2:
+		
+		sudo pip install progressbar2
 		
 
 5. **Kinect 2 Libraries** are required, although this will change in upcoming releases, so that to remove this requirement and make it optional. Actually, any depth device with a software that can publish to ROS can be used in this project, so there is no reason to demand those specific libraries to start with.

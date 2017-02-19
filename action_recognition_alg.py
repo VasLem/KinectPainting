@@ -110,7 +110,7 @@ class SpaceHistogram(object):
         Compute normalized N-D histograms
         '''
         hist, edges = np.histogramdd(sample, self.bin_size, range=self.range)
-        return hist
+        return hist, edges
 
 
 class Action(object):
@@ -149,7 +149,8 @@ class Action(object):
                                                                   np.atleast_2d(feature.ravel()).T),
                                                                  axis=1)
 
-    def update_sparse_features(self, coders, max_act_samples=None):
+    def update_sparse_features(self, coders, max_act_samples=None,
+                               fss_max_iter=None):
         '''
         Update sparse features using trained dictionaries
         '''
@@ -158,10 +159,11 @@ class Action(object):
         for feature, coder in zip(self.features, coders):
             if max_act_samples is not None:
                 self.sparse_features.append(coder.multicode(feature[:,
-                                                                    :max_act_samples]))
-                print self.sparse_features[-1].shape
+                                                                    :max_act_samples],
+                                                                    max_iter=fss_max_iter))
             else:
-                self.sparse_features.append(coder.multicode(feature))
+                self.sparse_features.append(coder.multicode(feature,
+                                                            max_iter=fss_max_iter))
 
 
     def flush_sparse_features(self):
@@ -209,7 +211,8 @@ class Actions(object):
                    isderotated=True,
                    isstatic=False,
                    max_act_samples=None,
-                   feature_params=None):
+                   feature_params=None,
+                   fss_max_iter = None):
         '''
         features_extract= FeatureExtraction Class
         dictionaries= SparseDictionaries Class
@@ -261,7 +264,7 @@ class Actions(object):
                                 ind = int(par_folder)
                                 files.append(fil)
                                 action.sync.append(int(filter(
-                                    str.isdigit, fil)))
+                                    str.isdigit, os.path.basename(fil))))
                                 samples_indices.append(ind)
                             except ValueError:
                                 pass
@@ -294,6 +297,7 @@ class Actions(object):
                                          centers[count])
                     for count in range(len(imgs))]
         feat_count=0
+        self.sparse_time = [[],[]]
         for img_count, img in enumerate(imgs):
             #DEBUGGING
             #cv2.imshow('test',(img%255).astype(np.uint8))
@@ -311,15 +315,25 @@ class Actions(object):
                     action.add_features(features=features)
                 else:
                     sparse_features = []
+                    count=0
                     for sparse_coder, feature in zip(dictionaries.sparse_dicts,
                                                      features):
-                        sparse_features.append(sparse_coder.code(feature))
+                        t1=time.time()
+                        sparse_features.append(sparse_coder.code(feature,
+                                                                 max_iter=fss_max_iter))
+                        t2=time.time()
+                        self.sparse_time[count].append(t2-t1)
+                        count+=1
                     action.add_features(features=features,
                                                   sparse_features=sparse_features)
                 feat_count+=1
                 if max_act_samples is not None:
                     if feat_count==max_act_samples:
                         break
+        #DEBUGGING
+        #print np.min(self.sparse_time,axis=1) ,\
+        #np.max(self.sparse_time,axis=1), np.mean(self.sparse_time,axis=1)\
+        #        ,np.median(self.sparse_time,axis=1)
         if for_testing:
             if len(dictionaries.dicts) != 0:
                 return self.testing.sparse_features, self.testing.sync
@@ -498,18 +512,15 @@ class FeatureExtraction(object):
         self.hists = []
         self.winstride = (8, 8)
         self.padding = (4, 4)
-        self.hog = cv2.HOGDescriptor(self.winSize, self.blockSize,
-                                     self.blockStride, self.cellSize,
-                                     self.nbins, self.derivAperture, self.winSigma,
-                                     self.histogramNormType, self.L2HysThreshold,
-                                     self.gammaCorrection, self.nlevels)
+        self.hof_edges = None
+        self.ghog_edges = None
 
         if visualize_:
             self.view = FeatureVisualization()
 
     def visualize(self):
-        self.view.plot_hof(self.hof_features)
-        self.view.plot_hog(self.ghog_features)
+        self.view.plot_hof(self.hof_features, self.hof_edges)
+        self.view.plot_hog(self.ghog_features, self.ghog_edges)
         self.view.plot_3d_projection(self.roi,
                                      self.prev_roi_patch,
                                      self.curr_roi_patch)
@@ -525,7 +536,9 @@ class FeatureExtraction(object):
                                             self.roi[1, 0]:self.roi[1, 1]]
         self.curr_roi_patch = curr_depth_im[self.roi[0, 0]:self.roi[0, 1],
                                             self.roi[1, 0]:self.roi[1, 1]]
-        nonzero_mask = (self.prev_roi_patch + self.curr_roi_patch) > 0
+        nonzero_mask = (self.prev_roi_patch * self.curr_roi_patch) > 0
+        if np.sum(nonzero_mask) == 0:
+            return None
         yx_coords = (find_nonzero(
             nonzero_mask.astype(np.uint8)).astype(float)
                             -
@@ -566,15 +579,20 @@ class FeatureExtraction(object):
             self.hofhist.bin_size = co.CONST['3DHOF_bin_size']
             #self.hofhist.range = [[-1,1],[-1,1],[-1,1]]
         disp = self.compute_scene_flow(prev_depth_im, curr_depth_im)
+        if disp is None:
+            return None
         disp_norm = np.sqrt((disp[:, 0] * disp[:, 0] + disp[:, 1] *
                              disp[:, 1] + disp[:, 2] * disp[:, 2]))[:, None]
         disp_norm[disp_norm == 0] = 1
         disp /= disp_norm.astype(float)
-        hist = self.hofhist.hist_data(disp)
+        hist, hof_edges = self.hofhist.hist_data(disp)
+        self.hof_edges= hof_edges
         hist = hist/float(disp.size)
         return hist
 
-    def pca_features(self, square_edge_size):
+    def pca_features(self, square_edge_size=None):
+        if square_edge_size is None:
+            square_edge_size = 32
         _, pca_along_2 = cv2.PCACompute(
             cv2.findNonZero(self.curr_patch.astype(np.uint8)).squeeze().
             astype(float),
@@ -615,33 +633,34 @@ class FeatureExtraction(object):
             self.hoghist.range = [[0, pi]]
         if ghog_params is not None:
             self.hoghist.bin_size = ghog_params
-
-        hist = self.hoghist.hist_data(grad_angles(im_patch))
+        hist, ghog_edges = self.hoghist.hist_data(grad_angles(im_patch))
+        self.ghog_edges = ghog_edges
         #hist[0] = max(0, hist[0] - np.sum(im_patch==0))
         hist = hist / float(np.sum(hist))
         return hist
 
-    def extract_features(self,isstatic=False, params=([None],[None])):
+    def extract_features(self,isstatic=False, params=None):
         '''
-        Returns 3DHOF and GHOG . isstatic to return only GHOG.
-        features_params is a tuple of lists of variables ([hof_bin_numbers],
-        [hog_bin_numbers])
+        Returns 3DHOF and GHOG . isstatic to return 3DXYPCA. params is a number
+        or (dictionary:not yet implemented/needed)
         '''
         t1 = time.time()
         self.find_roi(self.prev_patch, self.curr_patch,
                       self.prev_patch_pos, self.curr_patch_pos)
-        self.ghog_features = self.ghog(self.curr_depth_im, params[0][0])
         if not isstatic:
             if self.prev_patch is None or \
                self.curr_count - self.prev_count > co.CONST['min_frame_count_diff']:
                 return None
             self.hof_features = self.hof3d(
                 self.prev_depth_im, self.curr_depth_im)
+            if self.hof_features is None:
+                return None
+            self.ghog_features = self.ghog(self.curr_depth_im,params)
             t2 = time.time()
             self.extract_time.append(t2-t1)
             return self.hof_features.ravel(), self.ghog_features.ravel()
         else:
-            pca_features = self.pca_features(params[0][0])
+            pca_features = self.pca_features(params)
             t2 = time.time()
             self.extract_time.append(t2-t1)
             return [pca_features]
@@ -710,20 +729,21 @@ class FeatureVisualization(object):
         self.hog_plot = self.fig.add_subplot(gs[70:100, 70:100])
         plt.show()
 
-    def plot_hog(self, ghog_features):
-        hog_hist, hog_bins = ghog_features
+    def plot_hog(self, ghog_features, ghog_edges):
+        hog_hist = ghog_features
+        hog_bins = ghog_edges
         width = 0.7 * (hog_bins[0][1] - hog_bins[0][0])
         center = (hog_bins[0][:-1] + hog_bins[0][1:]) / 2
         self.hog_plot.clear()
         self.hog_plot.bar(center, hog_hist, align='center', width=width)
 
-    def plot_hof(self, hof_features):
-        self.hist4d.draw(hof_features[0], hof_features[
-                         1], fig=self.fig, all_axes=self.hof_plots)
+    def plot_hof(self, hof_features, hof_edges):
+        self.hist4d.draw(hof_features, hof_edges
+                         , fig=self.fig, all_axes=self.hof_plots)
 
     def plot_3d_projection(self, roi, prev_roi_patch, curr_roi_patch):
         self.patches3d_plot.clear()
-        nonzero_mask = (prev_roi_patch + curr_roi_patch) > 0
+        nonzero_mask = (prev_roi_patch * curr_roi_patch) > 0
         yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8)).astype(float) -
                      np.array([[PRIM_Y - roi[0, 0],
                                 PRIM_X - roi[1, 0]]]))
@@ -731,8 +751,6 @@ class FeatureVisualization(object):
                                                      None].astype(float)
         curr_z_coords = curr_roi_patch[nonzero_mask][:,
                                                      None].astype(float)
-        dz_coords = (curr_z_coords - prev_z_coords).astype(float)
-        yx_coords_in_space = yx_coords * dz_coords / FLNT
         prev_yx_proj = yx_coords * prev_z_coords / (FLNT)
         curr_yx_proj = yx_coords * curr_z_coords / (FLNT)
         prev_yx_proj = prev_yx_proj[prev_z_coords.ravel() != 0]
@@ -817,7 +835,8 @@ class ActionRecognition(object):
                    for_testing=False,
                    isstatic=False,
                    max_act_samples=None,
-                   feature_params=None):
+                   feature_params=None,
+                   fss_max_iter=None):
         '''
         actions.add_action alias
         '''
@@ -830,7 +849,8 @@ class ActionRecognition(object):
                                       for_testing=for_testing,
                                       isstatic=isstatic,
                                       max_act_samples=max_act_samples,
-                                      feature_params=feature_params)
+                                      feature_params=feature_params,
+                                      fss_max_iter=fss_max_iter)
         return res
 
     def train_sparse_dictionaries(self, act_num=None,

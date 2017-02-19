@@ -12,7 +12,7 @@ from math import pi
 import time
 import class_objects as co
 import extract_and_process_rosbag as epr
-import svm_training as st
+import classifiers as cs
 KINECT = None
 def signal_handler(sig, frame):
     '''
@@ -38,19 +38,15 @@ class Kinect(object):
         signal.signal(signal.SIGINT, signal_handler)
         self.image_sub = rospy.Subscriber(
             "/kinect2/sd/image_depth",Image,self.callback, queue_size=10)
-        self.image_pub = rospy.Publisher("hand", Image)
-        self.class_pub = rospy.Publisher("class", TimeReference)
-        self.skel_pub = rospy.Publisher("skeleton", Image)
-        rospy.init_node('kinect_stream', anonymous=False)
+        self.image_pub = rospy.Publisher("hand", Image,queue_size=10)
+        self.class_pub = rospy.Publisher("class", TimeReference,queue_size=10)
+        self.skel_pub = rospy.Publisher("skeleton", Image,queue_size=10)
+        rospy.init_node('kinect_stream', anonymous=True)
         self.bridge = CvBridge()
         ###
         # Hand action recognition
         self.open_kernel = np.ones((5, 5), np.uint8)
         self.prepare_frame = epr.DataProcess(save=False)
-        self.svm = st.SVM()
-        self.svm.run_training(retrain_svms=False,
-                              retrain_dicts=False,
-                              buffer_size = 25)#load dictionaries and svms
         self.time = []
     def callback(self, data):
         '''
@@ -73,9 +69,7 @@ class Kinect(object):
                         processed,
                         angle,
                         center)
-        cv2.imshow('test', (derotated%255).astype(np.uint8))
-        cv2.waitKey(10)
-        recognized_class = self.svm.run_testing(derotated)
+        recognized_class = cs.POSES_CLASSIFIER.run_testing(derotated)
         self.time.append(time.time())
         if recognized_class is not None:
             self.image_pub.publish(self.bridge.cv2_to_imgmsg(

@@ -25,12 +25,15 @@ cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 #files to save images
 save_depth: Depth
 save_color: Color
+#folders to save datasets and ground truths
 whole_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
-train_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/train
-train_ground_truth : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/train.csv
-test_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test
-test_ground_truth: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test.csv
+test_actions : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test2
+test_actions_ground_truth : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test2.csv
+test_poses: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test1
+test_poses_ground_truth: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test1.csv
 ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths
+#folder to save algorithms results
+results_fold : /media/vassilis/Data/Thesis/KinectPainting/Results
 #save parameters
 max_depth_im_num_to_save: 200
 # Choose object detection method ( segmentation or noise_model or mog2)

@@ -71,6 +71,7 @@ class DataProcess(object):
         self.data = {}
         self.initial_im_set = []
         self.img_count = 0
+        self.sync_count = -1
         self.nnz_img = None
         self.initial_background = None
         self.untrusty_pixels = None
