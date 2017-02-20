@@ -65,11 +65,9 @@ class Kinect(object):
             LOG.info('No hand found')
             return
         self.prepare_frame.data = {}
-        derotated = co.pol_oper.derotate(
-                        processed,
-                        angle,
-                        center)
-        recognized_class = cs.POSES_CLASSIFIER.run_testing(derotated)
+        recognized_class = cs.POSES_CLASSIFIER.run_testing(processed,
+                                                           derot_angle=angle,
+                                                           derot_center=center)
         self.time.append(time.time())
         if recognized_class is not None:
             self.image_pub.publish(self.bridge.cv2_to_imgmsg(

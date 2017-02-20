@@ -10,7 +10,6 @@ from sensor_msgs.msg import Image, TimeReference
 import threading
 import message_filters as mfilters
 from math import exp
-'''
 LOG = logging.getLogger(__name__)
 FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
 CH = logging.StreamHandler()
@@ -18,7 +17,6 @@ CH.setFormatter(logging.Formatter(FORMAT))
 LOG.handlers = []
 LOG.addHandler(CH)
 LOG.setLevel('INFO')
-'''
 SHAPE = (500, 900)
 
 
@@ -132,18 +130,30 @@ class MainFrame(wx.Frame):
         self.draw = 0
         self.erase = 0
         self.size = 1
+        self.prev_size = 1
+        self.depths = []
     def on_process(self, event):
         inp = np.tile(self.data.hand[:, :, None] % 255, (1, 1, 3))
         if self.drawing_im is None:
             self.drawing_im = np.zeros_like(inp)
-            self.init_depth = self.data.hand[self.data.skel[-1,-1,0],
-                                             self.data.skel[-1,-1,1]]
+        if self.init_depth == 0:
+            self.init_depth = self.data.hand[self.data.skel[-1, -1, 0],
+                                             self.data.skel[-1, -1, 1]]
         dep = self.data.hand[self.data.skel[-1,-1,0],
-                                    self.data.skel[-1,-1,1]]
+                             self.data.skel[-1,-1,1]]
+        if dep!=0:
+            if len(self.depths)<20:
+                self.depths.append(dep)
+            else:
+                self.depths= self.depths[1:]+[dep]
+            dep = np.median(np.array(self.depths))
         if dep != 0:
             self.size = int(5*(11-10*dep/float(self.init_depth)))
         self.size = min(self.size, 10)
         self.size = max(self.size , 1)
+        if self.prev_size != self.size:
+            LOG.info('Current Size:'+ str(self.size))
+            self.prev_size = self.size
         if self.data.class_name == 'Punch':
                 cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
                                             self.data.skel[-1, -1, 0]), self.size,
@@ -154,6 +164,7 @@ class MainFrame(wx.Frame):
                        [255,255,255], -1)
         inp = inp + self.drawing_im
         inp = inp.astype(np.uint8)
+        inp = cv2.flip(inp, -1)
         if self.canvas is None:
             self.canvas = Canvas(self, inp)
             self.canvas_sizer.Add(self.canvas)

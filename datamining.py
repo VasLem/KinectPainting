@@ -1,5 +1,5 @@
 '''
-One-shot dataset farmer, using single rosbag file
+Dataset farmer application
 '''
 # pylint: disable=unused-argument,too-many-ancestors,too-many-instance-attributes
 # pylint: disable=too-many-arguments
@@ -59,23 +59,25 @@ def getbitmap(main_panel, img):
     numpy array to bitmap
     '''
     psize = main_panel.GetSize()
-
-    if img.shape[0] != psize[0] or img.shape[1] != psize[1]:
-        copy = cv2.resize(img, (psize[0], psize[1]))
-    else:
-        copy = img.copy()
-    if len(copy.shape) == 2:
-        copy = np.tile(copy[:, :, None], (1, 1, 3))
-    if not isinstance(copy[0, 0, 0], np.uint8) or np.max(copy) == 1:
-        if np.max(copy) > 5000:
-            copy = copy % 256
+    if img is not None:
+        if img.shape[0] != psize[0] or img.shape[1] != psize[1]:
+            copy = cv2.resize(img, (psize[0], psize[1]))
         else:
-            copy = (copy / float(np.max(copy))) * 255
-        copy = copy.astype(np.uint8)
-    image = wx.Image(copy.shape[1], copy.shape[0])
-    image.SetData(copy.tostring())
-    wx_bitmap = image.ConvertToBitmap()
-    return wx_bitmap
+            copy = img.copy()
+        if len(copy.shape) == 2:
+            copy = np.tile(copy[:, :, None], (1, 1, 3))
+        if not isinstance(copy[0, 0, 0], np.uint8) or np.max(copy) == 1:
+            if np.max(copy) > 5000:
+                copy = copy % 256
+            else:
+                copy = (copy / float(np.max(copy))) * 255
+            copy = copy.astype(np.uint8)
+        image = wx.Image(copy.shape[1], copy.shape[0])
+        image.SetData(copy.tostring())
+        wx_bitmap = image.ConvertToBitmap()
+        return wx_bitmap
+    else:
+        return None
 
 
 class SpinStepCtrl(wx.SpinCtrlDouble):
@@ -206,7 +208,7 @@ class TopicsNotebook(wx.Notebook):
         self.pages = []
         max_len = 0
         for topic in data.keys():
-            max_len = max(len(data[topic].frames), max_len)
+            max_len = max(np.max(data[topic].sync) + 1, max_len)
         for topic_count, topic in enumerate(data):
             if data[topic].frames:
                 inp = [None] * max_len
@@ -489,7 +491,7 @@ class MainFrame(wx.Frame):
         self.process_bag = TButton(
             self.inter_pnl, ID_BAG_PROCESS, 'Process bag')
         self.process_all = TButton(
-            self.inter_pnl, ID_PROCESS_ALL, 'Train all actions from start')
+            self.inter_pnl, ID_PROCESS_ALL, 'Process all actions at once')
         self.play = TButton(self.inter_pnl, ID_PLAY, 'Play')
         self.stop = TButton(self.inter_pnl, ID_STOP, 'Stop')
         self.add = TButton(self.act_pnl, ID_ADD, 'Add')
@@ -673,10 +675,12 @@ class MainFrame(wx.Frame):
         '''
         change frame when slider value changes
         '''
-        painter = wx.AutoBufferedPaintDC(main_panel)
-        painter.Clear()
-        painter.DrawBitmap(getbitmap(main_panel, self.data[
-            self.farm_key].frames[slider.GetValue()]), 0, 0)
+        bmp = getbitmap(main_panel, self.data[
+            self.farm_key].frames[slider.GetValue()])
+        if bmp is not None:
+            painter = wx.AutoBufferedPaintDC(main_panel)
+            painter.Clear()
+            painter.DrawBitmap(bmp, 0, 0)
 
     def on_min_slider(self, event):
         '''

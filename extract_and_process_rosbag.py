@@ -105,7 +105,7 @@ class DataProcess(object):
             farm_key='depth', reg_key='hand', save=False, load=False,
             pathname='extracted_bag', low_ram=True,
             detect_hand=True, dialog=None,
-            save_res=False, derotate=True, append=False):
+            save_res=False, derotate=False, append=False):
         '''
         Save rosbag frames to a dictionary according to the topic. Using as reference the
         newest topic with the closest timestamp , a synchronization vector is made. Each
@@ -173,7 +173,7 @@ class DataProcess(object):
                 low_ram=True,
                 detect_hand=True, dialog=None, start=str(START_COUNT),
                 stop=str(STOP_COUNT), save_res=False, save_path=None, timestamp=0,
-                derotate=True, append=False):
+                derotate=False, append=False):
         '''
         If <inp> is a string, then it is the path of a rosbag file.
         If <inp> is a numpy array, then it is the data to be processed.
@@ -263,6 +263,27 @@ class DataProcess(object):
                 else:
                     cv_image = inp
                 self.sync_count+=1
+                if low_ram:
+                    cop = cv_image.copy()
+                    if len(cop.shape) == 3:
+                        cop = np.mean(cop, axis=2)
+                    if not isinstance(cop[0, 0], np.uint8) or np.max(
+                            cop) == 1:
+                        if np.max(cop) > 256:
+                            cop = cop % 256
+                        else:
+                            cop = (cop / float(np.max(cop))) * 255
+                    cop = cop.astype(np.uint8)
+                else:
+                    cop = cv_image
+                try:
+                    self.data[topic].frames.append(cop)
+                except (AttributeError, KeyError):
+                    self.data[topic] = DataStruct(topic)
+                    self.data[topic].frames.append(cop)
+                self.data[topic].timestamps.append(timestamp)
+                self.data[topic].sync.append(self.sync_count)
+                self.data[topic].info.append(self.seg_count)
             else:
                 continue
             if self.sync_count < self.init_num:
@@ -317,27 +338,6 @@ class DataProcess(object):
                 if init_check:
                     self.mog2.fgbg.apply(cv_image.astype(np.float32))
                     continue
-                if low_ram:
-                    cop = cv_image.copy()
-                    if len(cop.shape) == 3:
-                        cop = np.mean(cop, axis=2)
-                    if not isinstance(cop[0, 0], np.uint8) or np.max(
-                            cop) == 1:
-                        if np.max(cop) > 256:
-                            cop = cop % 256
-                        else:
-                            cop = (cop / float(np.max(cop))) * 255
-                    cop = cop.astype(np.uint8)
-                else:
-                    cop = cv_image
-                try:
-                    self.data[topic].frames.append(cop)
-                except (AttributeError, KeyError):
-                    self.data[topic] = DataStruct(topic)
-                    self.data[topic].frames.append(cop)
-                self.data[topic].timestamps.append(timestamp)
-                self.data[topic].sync.append(self.sync_count)
-                self.data[topic].info.append(self.seg_count)
                 if detect_hand:
                     self.register_hand(topic, single=True,
                                        frame=cv_image,
@@ -379,7 +379,7 @@ class DataProcess(object):
                       rename_key=True, single=False, frame=None,
                       frame_sync=None, dialog=None,
                       low_ram=False, save_res=False,
-                      derotate=True):
+                      derotate=False):
         '''
         farm_key : from which topic to get data
         reg_key : what name will have the topic to register hand data

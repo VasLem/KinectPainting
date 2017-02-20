@@ -190,6 +190,8 @@ class Actions(object):
         self.save_path = (os.getcwd() +
                           os.sep + 'saved_actions.pkl')
         self.features_extract = None
+        self.sparse_time = [[],[]]
+        self.preproc_time = []
 
     def remove_action(self, act_num):
         '''
@@ -208,11 +210,13 @@ class Actions(object):
                    use_dexter=False,
                    visualize_=False,
                    for_testing=False,
-                   isderotated=True,
+                   isderotated=False,
                    isstatic=False,
                    max_act_samples=None,
                    feature_params=None,
-                   fss_max_iter = None):
+                   fss_max_iter = None,
+                   derot_centers = None,
+                   derot_angles = None):
         '''
         features_extract= FeatureExtraction Class
         dictionaries= SparseDictionaries Class
@@ -253,6 +257,7 @@ class Actions(object):
             angles = []
             centers = []
             action.sync = []
+            derot_info = False
             if os.path.isdir(os.path.join(depthdata, '0')):
                 for root, dirs, filenames in os.walk(depthdata):
                     for filename in sorted(filenames):
@@ -269,10 +274,12 @@ class Actions(object):
                             except ValueError:
                                 pass
                         elif filename.endswith('angles.txt'):
+                            derot_info = True
                             fil = os.path.join(root, filename)
                             with open(fil, 'r') as inpf:
                                 angles += map(float, inpf)
                         elif filename.endswith('centers.txt'):
+                            derot_info = True
                             fil = os.path.join(root, filename)
                             with open(fil, 'r') as inpf:
                                 for line in inpf:
@@ -290,20 +297,61 @@ class Actions(object):
             imgs = [cv2.imread(filename, -1) for filename
                     in files]
         else:
-            imgs = depthdata[:]
-        if not isderotated:
-            imgs = [co.pol_oper.derotate(imgs[count],
+            if not isstatic and isderotated:
+                if isinstance(depthdata, list) and len(depthdata)==2:
+                    imgs_prev = depthdata[0]
+                    imgs_next = depthdata[1]
+                else:
+                    raise Exception('If the data provided is for actions ' +
+                                    'recognition and is derotated, then it ' +
+                                    'must be a list of 2 arrays, the first ' +
+                                    'including images derotated with next' +
+                                    ' rotation frames and the second' +
+                                    ' including images '
+                                    + 'derotated with current rotation frames')
+            else:
+                imgs = depthdata[:]
+        if not derot_info:
+            if derot_angles is not None and derot_centers is not None:
+                centers = derot_centers
+                angles = derot_angles
+                derot_info = True
+
+        if not isderotated and derot_info:
+            if isstatic:
+                imgs = [co.pol_oper.derotate(imgs[count],
                                          angles[count],
                                          centers[count])
                     for count in range(len(imgs))]
+            elif not isstatic:
+                imgs_prev = [co.pol_oper.derotate(imgs[count],
+                                         angles[count+1],
+                                         centers[count+1])
+                    for count in range(len(imgs)-1)]
+                imgs_next = [co.pol_oper.derotate(imgs[count+1],
+                                         angles[count+1],
+                                         centers[count+1])
+                    for count in range(len(imgs)-1)]
         feat_count=0
-        self.sparse_time = [[],[]]
+        img_len = len(imgs)
         for img_count, img in enumerate(imgs):
             #DEBUGGING
-            #cv2.imshow('test',(img%255).astype(np.uint8))
+            #cv2.imshow('test',(imgs_prev[img_count]%255).astype(np.uint8))
             #cv2.waitKey(10)
-            self.features_extract.update(img, img_count, use_dexter,
+            t1 = time.time()
+            if not isstatic and derot_info:
+                if img_count == img_len-1:
+                    break
+                self.features_extract.update(imgs_prev[img_count], img_count-1, use_dexter,
                                     masks_needed, masks)
+                self.features_extract.update(imgs_next[img_count], img_count,
+                                             use_dexter, masks_needed, masks)
+            else:
+                self.features_extract.update(img, img_count, use_dexter,
+                                             masks_needed, masks)
+            t2 = time.time()
+            self.preproc_time.append(t2-t1)
+
             # Extract Features
             features = self.features_extract.extract_features(isstatic=isstatic,
                                                          params=feature_params)
@@ -514,6 +562,7 @@ class FeatureExtraction(object):
         self.padding = (4, 4)
         self.hof_edges = None
         self.ghog_edges = None
+        self.feat_names = None
 
         if visualize_:
             self.view = FeatureVisualization()
@@ -639,7 +688,7 @@ class FeatureExtraction(object):
         hist = hist / float(np.sum(hist))
         return hist
 
-    def extract_features(self,isstatic=False, params=None):
+    def extract_features(self,isstatic=False, params=None, both=True):
         '''
         Returns 3DHOF and GHOG . isstatic to return 3DXYPCA. params is a number
         or (dictionary:not yet implemented/needed)
@@ -648,6 +697,8 @@ class FeatureExtraction(object):
         self.find_roi(self.prev_patch, self.curr_patch,
                       self.prev_patch_pos, self.curr_patch_pos)
         if not isstatic:
+            if self.feat_names is None:
+                self.feat_names = ['3DHOF', 'GHOG']
             if self.prev_patch is None or \
                self.curr_count - self.prev_count > co.CONST['min_frame_count_diff']:
                 return None
@@ -660,6 +711,8 @@ class FeatureExtraction(object):
             self.extract_time.append(t2-t1)
             return self.hof_features.ravel(), self.ghog_features.ravel()
         else:
+            if self.feat_names is None:
+                self.feat_names = ['3DXYPCA']
             pca_features = self.pca_features(params)
             t2 = time.time()
             self.extract_time.append(t2-t1)

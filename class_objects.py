@@ -425,6 +425,141 @@ class KalmanFilter:
         self.cur_objects_mask = np.zeros(0)
         self.can_exist = np.zeros(0)
 
+class Latex(object):
+    '''
+    Basic transriptions to latex
+    '''
+    def array_transcribe(self, arr, xlabels=None, ylabels=None,
+                       sup_x_label=None, sup_y_label=None,
+                       extra_locs=None):
+        '''
+        <arr> is the input array, <xlabels> are the labels along x axis,
+        <ylabels> are the labels along the y axis, <sup_x_label> and
+        <sup_y_label> are corresponding labels description. <arr> can be also a
+        list of numpy arrays when <extra_locs> is a list of 'right' and 'bot' with
+        the same length as the <arr[1:]> list . If this is the case, then starting
+        by the first array in the list, each next array is concatenated to it,
+        while adding either a double line or a double column separating them.
+        The dimensions of the arrays and the labels should be coherent, or an
+        exception will be thrown.
+        '''
+        doublerows = []
+        doublecols = []
+        whole_arr = None
+        if isinstance(arr , list):
+            if len(arr) != len(extra_locs) + 1:
+                raise Exception('<extra_locs> should have the'
+                                +' same length as <arr> -1\n'+
+                                self.array_transcribe.__doc__)
+            if not isinstance(arr[0], np.ndarray) or len(arr[0].shape)==1:
+                arr[0] = np.atleast_2d(arr[0])
+            whole_arr = arr[0]
+            for array,loc in zip(arr[1:],extra_locs):
+                if not isinstance(array, np.ndarray) or len(array.shape)==1:
+                    array = np.atleast_2d(array)
+                if loc == 'right':
+                    if whole_arr.shape[0] != array.shape[0]:
+                        raise Exception ('The dimensions are not coeherent\n'+
+                                         self.array_transcribe.__doc__)
+                    doublecols.append(whole_arr.shape[1])
+                    whole_arr = np.concatenate((whole_arr,array), axis=1)
+                elif loc == 'bot':
+                    if whole_arr.shape[1] != array.shape[1]:
+                        raise Exception ('The dimensions are not coeherent\n'+
+                                         self.array_transcribe.__doc__)
+                    doublerows.append(whole_arr.shape[0])
+                    whole_arr = np.concatenate((whole_arr,array), axis=0)
+        elif len(arr.shape) == 1:
+            whole_arr = np.atleast_2d(arr)
+        else:
+            whole_arr = arr
+        if xlabels is not None:
+            xlabels = np.array(xlabels)
+            xlabels = xlabels.astype(list)
+        if ylabels is not None:
+            ylabels = np.array(ylabels)
+            ylabels = ylabels.astype(list)
+        y_size, x_size = whole_arr.shape
+        y_mat, x_mat = whole_arr.shape
+        ex_x = xlabels is not None
+        ex_y = ylabels is not None
+        ex_xs = sup_x_label is not None
+        ex_ys = sup_y_label is not None
+        x_mat = x_size + ex_y + ex_ys
+        y_mat = y_size + ex_x + ex_xs
+        init = '\\documentclass{standalone} \n'
+        needed_packages = '\\usepackage{array, multirow, hhline, rotating}\n'
+        cols_space = []
+        if len(doublecols) != 0:
+            doublecols = np.array(doublecols)
+            doublecols += ex_y + ex_ys - 1
+            for cnt in range(x_mat):
+                if cnt in doublecols:
+                    cols_space.append('c ||')
+                else:
+                    cols_space.append('c|')
+        else:
+            cols_space = ['c |'] * x_mat
+        begin = '\\begin{document} \n \\begin{tabular}{|' + ''.join(cols_space) + '}\n'
+        small_hor_line = '\\cline{' + \
+            str(1 + ex_ys + ex_y) + '-' + str(x_mat) + '}'
+        double_big_hor_line = ('\\hhline{' + (ex_ys)*'|~'
+                               + (x_size+ex_y) *'|=' +'|}')
+        big_hor_line = '\\cline{' + str(1 + ex_ys) + '-' + str(x_mat) + '}'
+        whole_hor_line = '\\cline{1-' + str(x_mat) + '}'
+        if sup_x_label is not None:
+            if ex_ys or ex_y:
+                multicolumn = ('\\multicolumn{' + str(ex_ys + ex_y) + '}{c|}{} & ' +
+                               '\\multicolumn{' + str(x_size) +
+                               '}{c|}{' + sup_x_label + '} \\\\ \n')
+            else:
+                multicolumn = ('\\multicolumn{' + str(x_size) +
+                               '}{|c|}{' + sup_x_label + '} \\\\ \n')
+
+        else:
+            multicolumn = ''
+        if ex_ys:
+            multirow = whole_hor_line + \
+                '\\multirow{' + str(y_size) + '}{*}{\\rotatebox[origin=c]{90}{'\
+            + sup_y_label + '}}'
+        else:
+            multirow = ''
+
+        end = '\\hline \\end{tabular}\n \\end{document}'
+        if isinstance(whole_arr[0, 0], float):
+            whole_arr = np.around(whole_arr, 3)
+        str_arr = whole_arr.astype(str)
+        str_rows = [' & '.join(row) + '\\\\ \n ' for row in str_arr]
+        if ex_y:
+            str_rows = ["%s & %s" % (ylabel, row) for (row, ylabel) in
+                        zip(str_rows, ylabels)]
+        if ex_ys:
+            str_rows = [" & " + str_row for str_row in str_rows]
+        xlabels_row = ''
+        if ex_x:
+            if ex_ys or ex_y:
+                xlabels_row = (' \\multicolumn{' + str(x_mat - x_size) +
+                               '}{c |}{ } & ' + ' & '.
+                               join(xlabels.astype(list)) + '\\\\ \n')
+            else:
+                xlabels_row = (' & '.join(xlabels.astype(list)) + '\\\\ \n')
+
+        xlabels_row += multirow
+        if not ex_ys:
+            str_rows = [xlabels_row] + str_rows
+        else:
+            str_rows[0] = xlabels_row + str_rows[0]
+
+        str_mat = (small_hor_line + multicolumn + small_hor_line)
+        for cnt in range(len(str_rows)):
+            str_mat += str_rows[cnt]
+            if cnt in doublerows:
+                str_mat += double_big_hor_line
+            else:
+                str_mat += big_hor_line
+        str_mat = init + needed_packages + begin + str_mat + end
+        return str_mat
+
 
 class Lim(object):
     '''limits for for-loops'''
@@ -1216,6 +1351,7 @@ counters = Counter()
 chhm = CountHandHitMisses()
 data = Data()
 edges = Edges()
+latex = Latex()
 lims = Lim()
 masks = Mask()
 meas = Measure()
