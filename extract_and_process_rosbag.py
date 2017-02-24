@@ -121,6 +121,7 @@ class DataProcess(object):
         '''
         self.folder = ''
         self.data = {}
+        self.sync_count = -1
         if save_res:
             if isinstance(data, basestring):
                 self.folder = os.path.splitext(
@@ -467,7 +468,7 @@ class DataProcess(object):
                     if self.angle_vec is None:
                         self.angle_vec = []
                         self.center_vec = []
-                    if len(self.angle_vec)>=5:
+                    if len(self.angle_vec) >= 5:
                         self.angle_vec = self.angle_vec[1:] + [angle]
                         self.center_vec = (self.center_vec[1:] +
                                            [self.skeleton.hand_start])

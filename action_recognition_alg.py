@@ -234,6 +234,7 @@ class Actions(object):
         if depthdata is None:
             raise Exception("Depth data frames are at least  needed")
         if for_testing:
+            self.testing = Action()
             action = self.testing
         else:
             self.actions.append(Action())
@@ -287,13 +288,31 @@ class Actions(object):
                                         float(num) for num
                                         in line.split(' ')]
                                     centers += [center]
-                action.samples_indices = np.array(samples_indices)
-                action.angles = angles
             else:
-                LOG.error('depthtdata must have numbered'+
-                              ' subdirectories, to denote the'+
-                              ' different samples')
-                raise NotImplementedError
+                for root, dirs, filenames in os.walk(depthdata):
+                    for filename in sorted(filenames):
+                        if filename.endswith('.png'):
+                            fil = os.path.join(root, filename)
+                            files.append(fil)
+                            action.sync.append(int(filter(
+                                str.isdigit, os.path.basename(fil))))
+                            samples_indices.append(0)
+                        elif filename.endswith('angles.txt'):
+                            derot_info = True
+                            fil = os.path.join(root, filename)
+                            with open(fil, 'r') as inpf:
+                                angles += map(float, inpf)
+                        elif filename.endswith('centers.txt'):
+                            derot_info = True
+                            fil = os.path.join(root, filename)
+                            with open(fil, 'r') as inpf:
+                                for line in inpf:
+                                    center = [
+                                        float(num) for num
+                                        in line.split(' ')]
+                                    centers += [center]
+            action.samples_indices = np.array(samples_indices)
+            action.angles = angles
             imgs = [cv2.imread(filename, -1) for filename
                     in files]
         else:
@@ -336,7 +355,7 @@ class Actions(object):
         img_len = len(imgs)
         for img_count, img in enumerate(imgs):
             #DEBUGGING
-            #cv2.imshow('test',(imgs_prev[img_count]%255).astype(np.uint8))
+            #cv2.imshow('test',(imgs[img_count]%255).astype(np.uint8))
             #cv2.waitKey(10)
             t1 = time.time()
             if not isstatic and derot_info:
@@ -464,8 +483,10 @@ class SparseDictionaries(object):
         self.dicts = []
         checktypes([total_features_num], [int])
         self.sparse_dicts = []
+        if not isinstance(self.des_dim, list):
+            self.des_dim = total_features_num * [self.des_dim]
         for count in range(total_features_num):
-            self.sparse_dicts.append(sc.SparseCoding(des_dim=self.des_dim,
+            self.sparse_dicts.append(sc.SparseCoding(des_dim=self.des_dim[count],
                                                      name=str(count)))
             self.dicts.append(None)
         self.initialized = True
@@ -640,16 +661,22 @@ class FeatureExtraction(object):
         return hist
 
     def pca_features(self, square_edge_size=None):
+        '''
+        Compute 3DXYPCA features
+        '''
         if square_edge_size is None:
-            square_edge_size = 32
+            square_edge_size = co.CONST['3DXYPCA_num']
         _, pca_along_2 = cv2.PCACompute(
             cv2.findNonZero(self.curr_patch.astype(np.uint8)).squeeze().
             astype(float),
             np.array([]), maxComponents=1)
-        rot_angle = np.arctan2(pca_along_2[0][0], pca_along_2[0][1])
+        rot_angle = np.arctan2(pca_along_2[0][1], pca_along_2[0][0])
         patch = co.pol_oper.derotate(self.curr_patch, rot_angle,
                              (self.curr_patch.shape[0]/2,
                               self.curr_patch.shape[1]/2))
+		#DEBUGGING
+        #cv2.imshow('test',patch.astype(np.uint8))
+        #cv2.waitKey(10)
         patch_res = cv2.resize(patch, (square_edge_size, square_edge_size),
                               interpolation=cv2.INTER_NEAREST)
         patch_res_mask = patch_res == 0
@@ -665,8 +692,10 @@ class FeatureExtraction(object):
         cor_patch_res_1[patch_res_mask] = np.tile(masked_mean_1[:,None], (
                                                                 1, patch_res.shape[1]))[
                                                                 patch_res_mask]
-        _, pca_along_0 = cv2.PCACompute(cor_patch_res_0,np.array([]), maxComponents=1)
-        _, pca_along_1 = cv2.PCACompute(cor_patch_res_1.T, np.array([]),
+        #DEBUGGING: I have switched cor_patch_res and the classification was
+        #better, still I dont think I am doing it correctly
+        _, pca_along_0 = cv2.PCACompute(cor_patch_res_1,np.array([]), maxComponents=1)
+        _, pca_along_1 = cv2.PCACompute(cor_patch_res_0.T, np.array([]),
                                         maxComponents=1)
         features = np.concatenate((pca_along_0[0], pca_along_1[0]),axis=0)
         return features

@@ -62,14 +62,19 @@ history : 4000
 des_dim: 256
 max_dict_error: 100
 max_retries : 2
+fss_max_iter: 100 # set to None if no Feature Sign Search iterations limit is wanted
 #the rosbag for training
 train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
 #Variables for action recognition
 3DHOF_bin_size: 5
 GHOG_bin_size: 64
-STD_small_filt_window: 20
-STD_big_filt_window: 40
+3DXYPCA_num: 32 # per dimension
+RF_trees: 10
+STD_small_filt_window: 20 #window of buffers, not frames
+STD_big_filt_window: 40 #window of buffers, not frames
 action_separation_thres: 0
+buffer_max_misses: 4
+buffer_size: 10
 #Variables for hand segmentation
 max_link_number : 6
 max_hsa_contours_num: 5

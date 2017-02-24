@@ -1,8 +1,9 @@
-import os, errno
+import os, sys, errno
 import numpy as np
 import classifiers as clfs
 import class_objects as co
-
+import cPickle as pickle
+import logging
 
 def makedir(path):
     try:
@@ -10,23 +11,52 @@ def makedir(path):
     except OSError as exception:
         if exception.errno != errno.EEXIST:
             raise
-class PosesToActions(object):
-
-    def __init__(self):
-        # matrix rows are poses labels
+class MixedClassifier(clfs.Classifier):
+    '''
+    CLassifier that combines a specified SVMs classifier <svms_classifier>,
+    that classifies all actions in timespace, and a Random Forest one, <rf_classifier>,
+    that classifies static actions. During training phase, a confusion matrix
+    between random forest predictions and provided ground truth of actions
+    (static and dynamic) is constructed, named 'coherence matrix'.
+    The combination is done using a mixed Bayesian-deduced model, which is
+    explained in detail in <run_testing> . It basically uses both classifiers,
+    to produce a better estimation, which is extremely useful in realtime,
+    where the SVMs classifier can not cope well in actions boundaries.
+    '''
+    def __init__(self, svms_classifier=None, rf_classifier=None,
+                 log_lev='INFO',visualize=False):
+        # matrix rows are poses labels`
         # matrix columns are actions labels
         # matrix entries are coherence probabilities
+        if svms_classifier is None or rf_classifier is None:
+            raise Exception(self.__doc__)
+        self.poses_classifier = rf_classifier  # poses classifier
+        self.actions_classifier = svms_classifier  # actions classifier
+        clfs.Classifier.__init__(self,log_lev=log_lev, visualize=visualize,
+                                 masks_needed=False,
+                 buffer_size = self.actions_classifier.buffer_size,
+                 isstatic = False, use='mixed', name='actions')
         self.coherence_matrix = None
-        self.poses_classifier = clfs.POSES_CLASSIFIER  # poses classifier
-        self.actions_classifier = clfs.ACTIONS_CLASSIFIER  # actions classifier
+        self.actions = self.actions_classifier.train_classes
+        self.poses = self.poses_classifier.train_classes
+        _max = len(self.poses_classifier.train_classes)
+        match = [-1] * (len(self.actions))
+        for cnt,pose in enumerate(self.poses):
+            act_ind = self.actions.index(pose)
+            match[cnt] = act_ind
+        left = list(set(range(len(match)))-set(match))
+        for cnt in range(len(match)):
+            if match[cnt] == -1:
+                match[cnt] = left[0]
+                left = left[1:]
+        self.a2p_match = np.array(match)
+        self.train_classes = np.array(
+                self.actions_classifier.train_classes)[self.a2p_match].tolist()
         # actions ground truth
         self.poses_predictions = None
-        self.poses = self.poses_classifier.train_classes
         self.actions_ground_truth = None
-        self.actions = None
 
-    def extract_variables(self, set_pathname, csv_pathname,
-                          keep_only_valid_actions=True):
+    def extract_pred_and_gt(self):
         '''
         This function loads from a <csv_pathname> the actions ground truth and
         tests <self.poses_classifier> using images inside <set_pathname>,
@@ -39,26 +69,58 @@ class PosesToActions(object):
         inside <self.actions_classifier>. If this is not desired, set
         <keep_only_valid_actions> to False.
         '''
-        self.actions_ground_truth = self.actions_classifier.construct_ground_truth(
-            set_pathname, csv_pathname, keep_only_valid_actions)
-        self.actions = (
-            self.actions_classifier.train_classes)
-        self.poses_predictions = self.poses_classifier.run_testing(
-            set_pathname, online=False, load=False, save=False,
-            display_scores=False)
-        poses_predictions_expanded = np.zeros(
-            np.max(self.poses_classifier.test_sync) + 1)
-        poses_predictions_expanded[:] = None
-        poses_predictions_expanded[self.poses_classifier.test_sync
-                           ] = self.poses_predictions
-        self.poses_predictions = poses_predictions_expanded
-        fmask = np.isfinite(self.actions_ground_truth
-                           )*np.isfinite(
-                               self.poses_predictions)
-        self.poses_predictions = self.poses_predictions[
-            fmask].astype(int)
-        self.actions_ground_truth = self.actions_ground_truth[
-            fmask].astype(int)
+        ground_truths =[os.path.splitext(fil)[0] for fil
+                        in os.listdir(co.CONST['ground_truth_fold'])
+                        if fil.endswith('.csv')]
+        rosbags = [os.path.splitext(fil)[0] for fil in
+                   os.listdir(co.CONST['rosbag_location'])
+                   if fil.endswith('.bag')]
+        to_process = [rosbag for rosbag in rosbags if rosbag in ground_truths]
+        ground_truths = [os.path.join(
+            co.CONST['ground_truth_fold'],name+'.csv') for name in to_process]
+        rosbags = [os.path.join(
+            co.CONST['rosbag_location'],name+'.bag') for name in to_process]
+        self.poses_predictions = []
+        self.actions_ground_truth = []
+        data = {}
+        prev_root = ''
+        prev_action = ''
+        for root, dirs, filenames in os.walk(co.CONST['actions_path']):
+            for filename in sorted(filenames):
+                if root != prev_root and str.isdigit(
+                    os.path.normpath(
+                        root).split(
+                            os.path.sep)[-1]):
+                    prev_root = root
+                    action = os.path.normpath(
+                            root).split(os.path.sep)[-2]
+                    if action != prev_action:
+                        LOG.info('Processing action: ' + action)
+                        prev_action = action
+                    if action not in self.actions:
+                        raise Exception('Action ' + action +
+                                        'not in trained actions superset')
+                    self.poses_classifier.reset_offline_test()
+                    actions_ground_truth = (
+                        self.actions_classifier.construct_ground_truth(
+                        data=root, ground_truth_type='constant-' +action))
+                    poses_pred = self.poses_classifier.run_testing(
+                        data=root, online=False,
+                        construct_gt=False,
+                        save=False,load=False,display_scores=False)
+                    poses_predictions_expanded = np.zeros(
+                        np.max(self.poses_classifier.test_sync) + 1)
+                    poses_predictions_expanded[:] = None
+                    poses_predictions_expanded[self.poses_classifier.test_sync
+                                       ] = poses_pred
+                    poses_pred = poses_predictions_expanded
+                    fmask = np.isfinite(
+                                poses_pred)*np.isfinite(actions_ground_truth)
+                    self.poses_predictions += (poses_pred[
+                        fmask].astype(int)).tolist()
+                    self.actions_ground_truth += (
+                        actions_ground_truth[fmask].astype(int)).tolist()
+        self.poses_classifier.reset_offline_test()
 
     def construct_coherence(self):
         '''
@@ -73,26 +135,41 @@ class PosesToActions(object):
             raise Exception(self.construct_coherence.__doc__)
         self.coherence_matrix = np.zeros((len(self.poses),
                                           len(self.actions)))
+        
         for action_truth, pose_pred in zip(self.actions_ground_truth,
                                            self.poses_predictions):
             self.coherence_matrix[pose_pred,
                                   action_truth] += 1
+        self.coherence_matrix = self.coherence_matrix[
+            :, self.a2p_match]
+        #self.actions = [self.actions[cnt] for cnt in self.a2p_match]
         self.coherence_matrix = self.coherence_matrix / np.sum(
             self.coherence_matrix, axis=0)
         return self.coherence_matrix
 
-    def run(self, set_pathname, csv_pathname, keep_only_valid_actions=True):
+    def run_training(self, save=True, load=True):
         '''
-        Convenience function
+        Computes coherence matrix
+        Overrides <clfs.run_training>
         '''
-        self.extract_variables(set_pathname, csv_pathname,
-                               keep_only_valid_actions)
-        self.construct_coherence()
+        savefile = 'trained_mixed_classifier.pkl'
+        if load and os.path.isfile(savefile):
+            with open(savefile, 'r') as inp:
+                (self.coherence_matrix,
+                 self.poses,
+                 self.actions) = pickle.load(inp)
+        else:
+            self.extract_pred_and_gt()
+            self.construct_coherence()
+            if save:
+                with open(savefile,'w') as out:
+                    pickle.dump((self.coherence_matrix,self.poses,self.actions), out)
+
         return self.coherence_matrix, self.poses, self.actions
 
     def plot_coherence(self, save=True):
         '''
-        plot nicely the coherence matrix
+        Plots the coherence matrix
         '''
         from matplotlib import pyplot as plt
         import matplotlib
@@ -127,16 +204,173 @@ class PosesToActions(object):
         if save:
             plt.savefig(os.path.join(
                 save_fold, 'Coherence Matrix.pdf'))
-        plt.show()
 
+    def run_testing(self, data=None, online=True, against_training=False,
+                    scores_filter_shape=5,
+                    std_small_filter_shape=co.CONST['STD_small_filt_window'],
+                    std_big_filter_shape=co.CONST['STD_big_filt_window'],
+                    ground_truth_type=co.CONST['test_actions_ground_truth'],
+                    img_count=None, save=True, scores_savepath=None,
+                    load=False, testname=None, display_scores=True,
+                    derot_angle=None, derot_center=None,
+                    construct_gt=True, just_scores=False):
+        '''
+        Mixed bayesian model, meant to provide unified action scores.
+        P(p_i|a_j) = c_ij in Coherence Map C
+        P(a_j|t) = probabilities produced by svms scores
+        P(p_i|t) = poses RF probability scores
+        Combined Prediction = Sum{i}{c[i,j]*P[a_j]/P[p_i]*Sum{k}{c[i,k]*P[a_j]}}
+        If S is the matrix [P(a_j|t)[j,t]], j=0:n-1, t=0:T-1
+        and R is the matrix [1/P[p_i|t][i,t]], i=0:m, t=0:T-1
+        then the combined prediction becomes S'= S x (C.T * (R x (C*S)))
+        where '*' is the dot product and 'x' is the Hadamard product.
+        If S[:,t] is missing, it is replaced by a uniform hypothesis of
+        probability.
+
+        Overrides <clfs.Classifier.run_testing>, but the input arguments are
+        the same, so for help consult <classifiers.Classifiers>
+        '''
+        if online:
+            self.img_count += 1
+            if img_count is not None:
+                self.scores_exist += ((img_count - self.img_count) * [False])
+                if img_count is not None:
+                    self.img_count = img_count
+        self.init_testing(data=data,
+                          online=online,
+                          save=save,
+                          load=load,
+                          testname=testname,
+                          scores_savepath=scores_savepath,
+                          scores_filter_shape=5,
+                          std_small_filter_shape=co.CONST[
+                              'STD_small_filt_window'],
+                          std_big_filter_shape=co.CONST[
+                              'STD_big_filt_window'])
+        rf_exist = self.poses_classifier.run_testing(data=data,
+                                          online=online,
+                                          construct_gt=False,
+                                          ground_truth_type=ground_truth_type,
+                                         save=False,
+                                         load=True,
+                                         display_scores=True,
+                                         testname = testname,
+                                         just_scores=True,
+                                         derot_angle=derot_angle,
+                                             derot_center=derot_center)
+        if self.actions_classifier.run_testing(data=data,
+                                            online=online,
+                                            construct_gt=False,
+                                            ground_truth_type=ground_truth_type,
+                                            save=False,
+                                            load=True,
+                                            display_scores=True,
+                                            testname = testname,
+                                            just_scores=True,
+                                            derot_angle=derot_angle,
+                                               derot_center=derot_center):
+            self.scores_exist.append(True)
+            if online:
+                svms_scores = self.actions_classifier.scores[-1]
+                svms_scores = svms_scores[:, self.a2p_match]
+            else:
+                svms_scores = self.actions_classifier.scores
+                svms_scores = svms_scores[:, self.a2p_match]
+        else: #only in online mode
+            '''
+            if rf_exist:
+                self.scores_exist.append(True)
+                svms_scores = np.zeros(
+                        (1,len(self.train_classes))) + 1 / float(
+                            len(self.train_classes))
+            else:
+            '''
+            self.scores_exist.append(False)
+            return False
+        if not online:
+            self.test_ground_truth = self.construct_ground_truth(data, ground_truth_type)
+        if online:
+            rf_probs = self.poses_classifier.scores[-1]
+        else:
+            rf_probs = self.poses_classifier.scores
+            probs_expanded = np.zeros((1+self.poses_classifier.test_sync[-1],
+                                        len(self.poses)))
+            probs_expanded[:] = np.nan
+            probs_expanded[self.poses_classifier.test_sync, :
+                                        ] = rf_probs
+            rf_probs = probs_expanded
+        inv_rf_probs = np.zeros_like(rf_probs)
+        inv_rf_probs[rf_probs != 0] = 1 / rf_probs[rf_probs != 0]
+        fmask_svms = np.isfinite(svms_scores[:, 0])
+        fmask_rf = np.isfinite(rf_probs[:,0] )
+        fin_svms_probs = svms_scores[fmask_svms, :]
+        _mins = np.min(fin_svms_probs, axis=1)[:, None]
+        _maxs = np.max(fin_svms_probs, axis=1)[:, None]
+        below_z = fin_svms_probs < 0
+        thres = 0.1
+        fin_svms_probs = (thres * (below_z*fin_svms_probs - _mins)/
+                          (- _mins).astype(float) +
+                          (1-thres) *((1-below_z)*fin_svms_probs/
+                                      _maxs.astype(float)))
+        #exp_svms_probs = np.zeros_like(svms_scores)
+        #exp_svms_probs[fmask_rf,:] = 1/float(len(self.train_classes))
+        #exp_svms_probs[fmask_svms,:] = fin_svms_probs
+        #fin_svms_probs = exp_svms_probs[fmask_rf, :]
+        fin_svms_probs = fin_svms_probs.T
+        fin_inv_rf_probs = inv_rf_probs[fmask_rf, :]
+
+        fin_inv_rf_probs = fin_inv_rf_probs.T
+
+        self.scores = np.zeros_like(svms_scores)
+        self.scores[:] = np.NaN
+        fin_scores = np.dot(self.coherence_matrix.T,
+                              np.dot(self.coherence_matrix,
+                              fin_svms_probs)
+                              * fin_inv_rf_probs) * fin_svms_probs
+        fin_scores = fin_scores.T
+        fin_scores = np.minimum(fin_scores, 10)
+        self.scores[fmask_rf, :] = fin_scores
+        _sum = np.sum(
+            self.scores[fmask_rf, :], axis=1)[:, None]
+        _sum[_sum == 0] = 1
+        self.scores[fmask_rf, :] = self.scores[fmask_rf, :] / _sum
+        #pylint: disable=no-member
+        if not online:
+            self.recognized_classes = self.classify_offline(display=True)
+            self.display_scores_and_time(save=save)
+        else:
+            self.classify_online(self.scores.ravel(),
+                                 self.actions_classifier.img_count,
+                                 self.actions_classifier.mean_from)
+        #pylint: enable=no-member
+
+
+        return self.scores
 
 def main():
-    poses_to_actions = PosesToActions()
+    from matplotlib import pyplot as plt
+    mixedclassifier = MixedClassifier(clfs.ACTIONS_CLASSIFIER_SIMPLE,clfs.POSES_CLASSIFIER)
     testname = 'actions'
-    coherence = poses_to_actions.run(co.CONST['test_'+ testname ],
-                         co.CONST['test_'+ testname + '_ground_truth'])
-    poses_to_actions.plot_coherence()
+    coherence = mixedclassifier.run_training(load=True)
+    mixedclassifier.reset_online_test()
+    clfs.fake_online_testing(mixedclassifier,testname)
+    '''
+    mixedclassifier.run_testing(co.CONST['test_' + testname],
+                            ground_truth_type=co.CONST[
+        'test_' + testname + '_ground_truth'],
+        online=False, load=True)
+    '''
+    mixedclassifier.plot_coherence()
+    mixedclassifier.visualize_scores()
+    plt.show()
 
+LOG = logging.getLogger('__name__')
+CH = logging.StreamHandler(sys.stderr)
+CH.setFormatter(logging.Formatter(
+    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+LOG.handlers = []
+LOG.addHandler(CH)
+LOG.setLevel(logging.INFO)
 
 if __name__ == '__main__':
     main()

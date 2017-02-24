@@ -1,0 +1,15 @@
+\documentclass{standalone} 
+\usepackage{array, multirow, hhline, rotating}
+\begin{document} 
+ \begin{tabular}{|c |c |c |c |c |c |c |c |c |}
+\cline{3-9}\multicolumn{2}{c|}{} & \multicolumn{7}{c|}{Predicted} \\ 
+\cline{3-9} \multicolumn{2}{c |}{ } & Tiger & Palm & Pinch & Punch & Index & Handflip down & Handflip up\\ 
+\cline{1-9}\multirow{7}{*}{\rotatebox[origin=c]{90}{Actual}} & Tiger & 358 & 0 & 0 & 0 & 3 & 0 & 0\\ 
+ \cline{2-9} & Palm & 0 & 444 & 1 & 28 & 0 & 0 & 0\\ 
+ \cline{2-9} & Pinch & 0 & 0 & 767 & 0 & 0 & 0 & 0\\ 
+ \cline{2-9} & Punch & 0 & 0 & 0 & 508 & 0 & 0 & 0\\ 
+ \cline{2-9} & Index & 0 & 0 & 0 & 0 & 386 & 0 & 0\\ 
+ \cline{2-9} & Handflip down & 7 & 0 & 0 & 0 & 0 & 212 & 28\\ 
+ \cline{2-9} & Handflip up & 12 & 0 & 0 & 14 & 0 & 24 & 156\\ 
+ \cline{2-9}\hline \end{tabular}
+ \end{document}

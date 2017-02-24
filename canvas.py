@@ -164,7 +164,11 @@ class MainFrame(wx.Frame):
                        [255,255,255], -1)
         inp = inp + self.drawing_im
         inp = inp.astype(np.uint8)
+        for link in self.data.skel:
+            cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]), 
+                     [255, 0, 0], 3)
         inp = cv2.flip(inp, -1)
+
         if self.canvas is None:
             self.canvas = Canvas(self, inp)
             self.canvas_sizer.Add(self.canvas)
