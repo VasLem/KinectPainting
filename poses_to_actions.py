@@ -5,6 +5,8 @@ import class_objects as co
 import cPickle as pickle
 import logging
 
+
+
 def makedir(path):
     try:
         os.makedirs(path)
@@ -24,7 +26,8 @@ class MixedClassifier(clfs.Classifier):
     where the SVMs classifier can not cope well in actions boundaries.
     '''
     def __init__(self, svms_classifier=None, rf_classifier=None,
-                 log_lev='INFO',visualize=False):
+                 log_lev='INFO',visualize=False,
+                 add_info='without sparse coding'):
         # matrix rows are poses labels`
         # matrix columns are actions labels
         # matrix entries are coherence probabilities
@@ -35,7 +38,10 @@ class MixedClassifier(clfs.Classifier):
         clfs.Classifier.__init__(self,log_lev=log_lev, visualize=visualize,
                                  masks_needed=False,
                  buffer_size = self.actions_classifier.buffer_size,
-                 isstatic = False, use='mixed', name='actions')
+                 ispassive = False, use='mixed', name='actions',
+                                add_info=add_info)
+        self.poses_classifier_test = None
+        self.actions_classifier_test = None
         self.coherence_matrix = None
         self.actions = self.actions_classifier.train_classes
         self.poses = self.poses_classifier.train_classes
@@ -104,10 +110,11 @@ class MixedClassifier(clfs.Classifier):
                     actions_ground_truth = (
                         self.actions_classifier.construct_ground_truth(
                         data=root, ground_truth_type='constant-' +action))
-                    poses_pred = self.poses_classifier.run_testing(
+                    self.poses_classifier.run_testing(
                         data=root, online=False,
                         construct_gt=False,
                         save=False,load=False,display_scores=False)
+                    poses_pred = self.poses_classifier.recognized_classes
                     poses_predictions_expanded = np.zeros(
                         np.max(self.poses_classifier.test_sync) + 1)
                     poses_predictions_expanded[:] = None
@@ -147,14 +154,18 @@ class MixedClassifier(clfs.Classifier):
             self.coherence_matrix, axis=0)
         return self.coherence_matrix
 
-    def run_training(self, save=True, load=True):
+    def run_training(self, save=True, load=True,
+                     classifiers_savepath=None):
         '''
         Computes coherence matrix
         Overrides <clfs.run_training>
         '''
-        savefile = 'trained_mixed_classifier.pkl'
-        if load and os.path.isfile(savefile):
-            with open(savefile, 'r') as inp:
+        if classifiers_savepath is None:
+            classifiers_savepath = 'trained_'
+            classifiers_savepath += self.full_name.replace(' ','_').lower()
+            classifiers_savepath += '.pkl'
+        if load and os.path.isfile(classifiers_savepath):
+            with open(classifiers_savepath, 'r') as inp:
                 (self.coherence_matrix,
                  self.poses,
                  self.actions) = pickle.load(inp)
@@ -162,7 +173,7 @@ class MixedClassifier(clfs.Classifier):
             self.extract_pred_and_gt()
             self.construct_coherence()
             if save:
-                with open(savefile,'w') as out:
+                with open(classifiers_savepath,'w') as out:
                     pickle.dump((self.coherence_matrix,self.poses,self.actions), out)
 
         return self.coherence_matrix, self.poses, self.actions
@@ -205,6 +216,87 @@ class MixedClassifier(clfs.Classifier):
             plt.savefig(os.path.join(
                 save_fold, 'Coherence Matrix.pdf'))
 
+
+    def run_mixer(self, rf_probs, svms_scores=None, img_count=None, save=False,
+                  online=True,*args,**kwargs):
+        if not self.testing_initialized:
+            if not online:
+                self.reset_offline_test()
+            else:
+                self.reset_online_test()
+        if isinstance(rf_probs, tuple):
+            svms_scores= rf_probs[1]
+            rf_probs = rf_probs[0]
+        if img_count is not None:
+            self.img_count=img_count
+        fmask_svms = np.isfinite(np.array(svms_scores[:, 0]))
+        fmask_rf = np.isfinite(np.array(rf_probs[:,0]))
+        partial_lack = np.logical_xor(fmask_svms, fmask_rf)
+        partial_lack_svms = np.logical_and(partial_lack,
+                                           np.logical_not(fmask_svms))
+        partial_lack_rf = np.logical_and(partial_lack,
+                                         np.logical_not(fmask_rf))
+        fin_svms_probs = svms_scores[fmask_svms, :]
+        _mins = np.min(fin_svms_probs, axis=1)[:, None]
+        _maxs = np.max(fin_svms_probs, axis=1)[:, None]
+        below_z = fin_svms_probs < 0
+        thres = 1/float(len(self.train_classes))
+        fin_svms_probs = (thres * (below_z*fin_svms_probs - _mins)/
+                          (- _mins).astype(float) +
+                          (1-thres) *((1-below_z)*fin_svms_probs/
+                                      _maxs.astype(float)))
+        fin_svms_probs = fin_svms_probs/np.sum(
+            fin_svms_probs,axis=1)[:,None]
+        exp_svms_probs = np.zeros_like(svms_scores)
+        exp_svms_probs[partial_lack_svms, :] = thres
+        exp_svms_probs[fmask_svms, :] = fin_svms_probs
+
+        total = np.logical_or(fmask_svms, fmask_rf)
+        fin_svms_probs = exp_svms_probs[total, :]
+        fin_svms_probs = fin_svms_probs.T
+        if rf_probs[total,:].shape[0] == 0:
+            fin_inv_rf_probs = np.zeros_like(rf_probs) + 1/float(
+                thres)
+        else:
+            fin_rf_probs = rf_probs[fmask_rf,:]
+            fin_inv_rf_probs = np.zeros_like(fin_rf_probs)
+            fin_inv_rf_probs[fin_rf_probs != 0] = 1/ fin_rf_probs[
+                fin_rf_probs != 0]
+            inv_rf_probs = np.zeros_like(rf_probs)
+            inv_rf_probs[fmask_rf,:] = fin_inv_rf_probs
+            inv_rf_probs[partial_lack_rf, :] = 1/float(thres)
+            fin_inv_rf_probs = inv_rf_probs[total, :]
+        fin_inv_rf_probs = fin_inv_rf_probs.T
+
+        self.scores = np.zeros_like(svms_scores)
+        self.scores[:] = np.NaN
+        fin_scores = np.dot(self.coherence_matrix.T,
+                              np.dot(self.coherence_matrix,
+                              fin_svms_probs)
+                              * fin_inv_rf_probs) * fin_svms_probs
+        fin_scores = fin_scores.T
+        fin_scores = np.minimum(fin_scores, 10)
+        self.scores[total, :] = fin_scores
+        _sum = np.sum(
+            self.scores[total, :], axis=1)[:, None]
+        _sum[_sum == 0] = 1
+        self.scores[total, :] = self.scores[total, :] / _sum
+        #pylint: disable=no-member
+        if not online:
+            self.recognized_classes = self.classify_offline(display=True)
+            self.display_scores_and_time(save=save)
+        else:
+            self.classify_online(self.scores.ravel(),
+                                 self.img_count,
+                                 self.actions_classifier.mean_from)
+        #pylint: enable=no-member
+
+        self.img_count += 1
+
+        return self.recognized_classes, self.scores
+
+
+
     def run_testing(self, data=None, online=True, against_training=False,
                     scores_filter_shape=5,
                     std_small_filter_shape=co.CONST['STD_small_filt_window'],
@@ -231,7 +323,6 @@ class MixedClassifier(clfs.Classifier):
         the same, so for help consult <classifiers.Classifiers>
         '''
         if online:
-            self.img_count += 1
             if img_count is not None:
                 self.scores_exist += ((img_count - self.img_count) * [False])
                 if img_count is not None:
@@ -247,30 +338,33 @@ class MixedClassifier(clfs.Classifier):
                               'STD_small_filt_window'],
                           std_big_filter_shape=co.CONST[
                               'STD_big_filt_window'])
-        rf_exist = self.poses_classifier.run_testing(data=data,
+        rf_exist,_ = self.poses_classifier.run_testing(data=data,
                                           online=online,
                                           construct_gt=False,
                                           ground_truth_type=ground_truth_type,
-                                         save=False,
+                                         save=True,
                                          load=True,
                                          display_scores=True,
                                          testname = testname,
                                          just_scores=True,
                                          derot_angle=derot_angle,
-                                             derot_center=derot_center)
-        if self.actions_classifier.run_testing(data=data,
+                                             derot_center=derot_center,
+                                            img_count=self.img_count)
+        svms_scores_exist, _ = self.actions_classifier.run_testing(data=data,
+                                            derot_angle=derot_angle,
+                                               derot_center=derot_center,
                                             online=online,
                                             construct_gt=False,
                                             ground_truth_type=ground_truth_type,
-                                            save=False,
+                                            save=True,
                                             load=True,
                                             display_scores=True,
                                             testname = testname,
                                             just_scores=True,
-                                            derot_angle=derot_angle,
-                                               derot_center=derot_center):
-            self.scores_exist.append(True)
+                                              img_count=self.img_count)
+        if svms_scores_exist:
             if online:
+                self.scores_exist.append(True)
                 svms_scores = self.actions_classifier.scores[-1]
                 svms_scores = svms_scores[:, self.a2p_match]
             else:
@@ -287,8 +381,6 @@ class MixedClassifier(clfs.Classifier):
             '''
             self.scores_exist.append(False)
             return False
-        if not online:
-            self.test_ground_truth = self.construct_ground_truth(data, ground_truth_type)
         if online:
             rf_probs = self.poses_classifier.scores[-1]
         else:
@@ -299,69 +391,30 @@ class MixedClassifier(clfs.Classifier):
             probs_expanded[self.poses_classifier.test_sync, :
                                         ] = rf_probs
             rf_probs = probs_expanded
-        inv_rf_probs = np.zeros_like(rf_probs)
-        inv_rf_probs[rf_probs != 0] = 1 / rf_probs[rf_probs != 0]
-        fmask_svms = np.isfinite(svms_scores[:, 0])
-        fmask_rf = np.isfinite(rf_probs[:,0] )
-        fin_svms_probs = svms_scores[fmask_svms, :]
-        _mins = np.min(fin_svms_probs, axis=1)[:, None]
-        _maxs = np.max(fin_svms_probs, axis=1)[:, None]
-        below_z = fin_svms_probs < 0
-        thres = 0.1
-        fin_svms_probs = (thres * (below_z*fin_svms_probs - _mins)/
-                          (- _mins).astype(float) +
-                          (1-thres) *((1-below_z)*fin_svms_probs/
-                                      _maxs.astype(float)))
-        #exp_svms_probs = np.zeros_like(svms_scores)
-        #exp_svms_probs[fmask_rf,:] = 1/float(len(self.train_classes))
-        #exp_svms_probs[fmask_svms,:] = fin_svms_probs
-        #fin_svms_probs = exp_svms_probs[fmask_rf, :]
-        fin_svms_probs = fin_svms_probs.T
-        fin_inv_rf_probs = inv_rf_probs[fmask_rf, :]
-
-        fin_inv_rf_probs = fin_inv_rf_probs.T
-
-        self.scores = np.zeros_like(svms_scores)
-        self.scores[:] = np.NaN
-        fin_scores = np.dot(self.coherence_matrix.T,
-                              np.dot(self.coherence_matrix,
-                              fin_svms_probs)
-                              * fin_inv_rf_probs) * fin_svms_probs
-        fin_scores = fin_scores.T
-        fin_scores = np.minimum(fin_scores, 10)
-        self.scores[fmask_rf, :] = fin_scores
-        _sum = np.sum(
-            self.scores[fmask_rf, :], axis=1)[:, None]
-        _sum[_sum == 0] = 1
-        self.scores[fmask_rf, :] = self.scores[fmask_rf, :] / _sum
-        #pylint: disable=no-member
         if not online:
-            self.recognized_classes = self.classify_offline(display=True)
-            self.display_scores_and_time(save=save)
-        else:
-            self.classify_online(self.scores.ravel(),
-                                 self.actions_classifier.img_count,
-                                 self.actions_classifier.mean_from)
-        #pylint: enable=no-member
-
-
-        return self.scores
+            self.test_ground_truth = self.construct_ground_truth(data, ground_truth_type)
+        self.run_mixer(rf_probs, svms_scores, save=save, online=online)
 
 def main():
     from matplotlib import pyplot as plt
-    mixedclassifier = MixedClassifier(clfs.ACTIONS_CLASSIFIER_SIMPLE,clfs.POSES_CLASSIFIER)
+    mixedclassifier_simple = MixedClassifier(clfs.ACTIONS_CLASSIFIER_SIMPLE,
+                                             clfs.POSES_CLASSIFIER,
+                                             add_info='without sparse coding')
+    mixedclassifier_sparse = MixedClassifier(clfs.ACTIONS_CLASSIFIER_SPARSE,
+                                             clfs.POSES_CLASSIFIER,
+                                             add_info='with sparse coding')
     testname = 'actions'
-    coherence = mixedclassifier.run_training(load=True)
-    mixedclassifier.reset_online_test()
-    clfs.fake_online_testing(mixedclassifier,testname)
-    '''
-    mixedclassifier.run_testing(co.CONST['test_' + testname],
+    coherence = mixedclassifier_simple.run_training(load=True)
+    #mixedclassifier.reset_online_test()
+    #clfs.fake_online_testing(mixedclassifier,testname)
+
+    mixedclassifier_simple.run_testing(co.CONST['test_' + testname],
                             ground_truth_type=co.CONST[
         'test_' + testname + '_ground_truth'],
         online=False, load=True)
-    '''
-    mixedclassifier.plot_coherence()
-    mixedclassifier.visualize_scores()
+
+    mixedclassifier_simple.plot_coherence()
+    mixedclassifier_simple.visualize_scores()
     plt.show()
 
 LOG = logging.getLogger('__name__')
@@ -373,4 +426,5 @@ LOG.addHandler(CH)
 LOG.setLevel(logging.INFO)
 
 if __name__ == '__main__':
+    # signal.signal(signal.SIGINT, signal_handler)
     main()

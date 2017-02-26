@@ -1,0 +1,11 @@
+\documentclass{standalone} 
+\usepackage{array, multirow, hhline, rotating}
+\begin{document} 
+ \begin{tabular}{|c |c |c |c |c |}
+\cline{2-5}\cline{2-5} \multicolumn{1}{c |}{ } & Mean(ms) & Max(ms) & Min(ms) & Median(ms)\\ 
+\cline{1-5}Preprocessing & 1.27 & 14.663 & 0.638 & 1.149\\ 
+ \hhline{|=|=|=|=|=|}Sparse Coding 3DHOF & 2.854 & 37.303 & 0.872 & 1.649\\ 
+ \cline{1-5}Sparse Coding GHOG & 1.508 & 43.856 & 0.481 & 1.139\\ 
+ \hhline{|=|=|=|=|=|}Feature Extaction & 3.032 & 8.484 & 0.914 & 2.757\\ 
+ \cline{1-5}\hline \end{tabular}
+ \end{document}

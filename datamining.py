@@ -34,6 +34,7 @@ ID_MAX = wx.NewId()
 ID_REMOVE = wx.NewId()
 ID_MASK_RECOMPUTE = wx.NewId()
 ID_ACT_SAVE = wx.NewId()
+ID_BAG_RECORD = wx.NewId()
 CURR_DIR = os.getcwd()
 ACTIONS_SAVE_PATH = os.path.join(CURR_DIR, 'actions')
 ROSBAG_WHOLE_RES_SAVE_PATH = os.path.join(CURR_DIR, 'whole_result')
@@ -589,6 +590,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_actions_save, id=ID_ACT_SAVE)
         self.Bind(wx.EVT_BUTTON, self.on_load_csv, id=ID_LOAD_CSV)
         self.Bind(wx.EVT_BUTTON, self.on_process, id=ID_BAG_PROCESS)
+        self.Bind(wx.EVT_BUTTON, self.on_record, id=ID_BAG_RECORD)
         self.Bind(wx.EVT_BUTTON, self.on_process_all, id=ID_PROCESS_ALL)
         self.Bind(wx.EVT_BUTTON, self.on_play, id=ID_PLAY)
         self.Bind(wx.EVT_BUTTON, self.on_stop, id=ID_STOP)
@@ -602,6 +604,13 @@ class MainFrame(wx.Frame):
         wx.CallLater(200, self.SetFocus)
         self._buffer = None
         self.exists_hand_count = None
+
+
+    def on_record(self, event):
+        '''
+        record rosbag and process on the fly or after the record
+        '''
+        raise NotImplementedError
 
     def on_lst_item_select(self, event):
         ind = self.lst.GetFocusedItem()

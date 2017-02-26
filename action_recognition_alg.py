@@ -211,7 +211,7 @@ class Actions(object):
                    visualize_=False,
                    for_testing=False,
                    isderotated=False,
-                   isstatic=False,
+                   ispassive=False,
                    max_act_samples=None,
                    feature_params=None,
                    fss_max_iter = None,
@@ -316,7 +316,7 @@ class Actions(object):
             imgs = [cv2.imread(filename, -1) for filename
                     in files]
         else:
-            if not isstatic and isderotated:
+            if not ispassive and isderotated:
                 if isinstance(depthdata, list) and len(depthdata)==2:
                     imgs_prev = depthdata[0]
                     imgs_next = depthdata[1]
@@ -337,12 +337,12 @@ class Actions(object):
                 derot_info = True
 
         if not isderotated and derot_info:
-            if isstatic:
+            if ispassive:
                 imgs = [co.pol_oper.derotate(imgs[count],
                                          angles[count],
                                          centers[count])
                     for count in range(len(imgs))]
-            elif not isstatic:
+            elif not ispassive:
                 imgs_prev = [co.pol_oper.derotate(imgs[count],
                                          angles[count+1],
                                          centers[count+1])
@@ -358,7 +358,7 @@ class Actions(object):
             #cv2.imshow('test',(imgs[img_count]%255).astype(np.uint8))
             #cv2.waitKey(10)
             t1 = time.time()
-            if not isstatic and derot_info:
+            if not ispassive and derot_info:
                 if img_count == img_len-1:
                     break
                 self.features_extract.update(imgs_prev[img_count], img_count-1, use_dexter,
@@ -372,7 +372,7 @@ class Actions(object):
             self.preproc_time.append(t2-t1)
 
             # Extract Features
-            features = self.features_extract.extract_features(isstatic=isstatic,
+            features = self.features_extract.extract_features(ispassive=ispassive,
                                                          params=feature_params)
             # Save action to actions object
             if features is not None:
@@ -409,8 +409,9 @@ class Actions(object):
         return 0
 
     def update_sparse_features(self, coders,
-                               act_num='all', ret_sparse=False,
-                               max_act_samples=None):
+                               act_num='all',
+                               max_act_samples=None,
+                               fss_max_iter=None):
         '''
         Update sparse features for all Actions or a single one, specified by
         act_num.
@@ -425,12 +426,8 @@ class Actions(object):
             iter_quant = [self.actions[act_num]]
         for action in iter_quant:
             action.update_sparse_features(coders,
-                                          max_act_samples=max_act_samples)
-        if ret_sparse:
-            sparse_features = []
-            for action in self.actions:
-                sparse_features.append(action.sparse_features)
-            return sparse_features
+                                          max_act_samples=max_act_samples,
+                                          fss_max_iter=fss_max_iter)
 
     def save(self, save_path=None):
         '''
@@ -717,15 +714,15 @@ class FeatureExtraction(object):
         hist = hist / float(np.sum(hist))
         return hist
 
-    def extract_features(self,isstatic=False, params=None, both=True):
+    def extract_features(self,ispassive=False, params=None, both=True):
         '''
-        Returns 3DHOF and GHOG . isstatic to return 3DXYPCA. params is a number
+        Returns 3DHOF and GHOG . ispassive to return 3DXYPCA. params is a number
         or (dictionary:not yet implemented/needed)
         '''
         t1 = time.time()
         self.find_roi(self.prev_patch, self.curr_patch,
                       self.prev_patch_pos, self.curr_patch_pos)
-        if not isstatic:
+        if not ispassive:
             if self.feat_names is None:
                 self.feat_names = ['3DHOF', 'GHOG']
             if self.prev_patch is None or \
@@ -915,7 +912,7 @@ class ActionRecognition(object):
                    use_dexter=False,
                    visualize=False,
                    for_testing=False,
-                   isstatic=False,
+                   ispassive=False,
                    max_act_samples=None,
                    feature_params=None,
                    fss_max_iter=None):
@@ -929,7 +926,7 @@ class ActionRecognition(object):
                                       use_dexter,
                                       visualize_=visualize,
                                       for_testing=for_testing,
-                                      isstatic=isstatic,
+                                      ispassive=ispassive,
                                       max_act_samples=max_act_samples,
                                       feature_params=feature_params,
                                       fss_max_iter=fss_max_iter)

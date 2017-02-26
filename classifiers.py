@@ -31,21 +31,32 @@ class Classifier(object):
     def __init__(self, log_lev='INFO',
                  visualize=False, masks_needed=False,
                  buffer_size=co.CONST['buffer_size'], des_dim=None,
-                 isstatic=False,
+                 ispassive=False,
                  use='svms', num_of_cores=4, name='',
+                 add_info=None,
                  use_dicts=True,
                  feature_params=None):
 
         # General configuration
+        self.add_info=add_info
         self.log_lev = log_lev
         self.visualize = visualize
         self.buffer_size = buffer_size
         self.masks_needed = masks_needed
-        self.isstatic = isstatic
+        self.ispassive = ispassive
         self.use = use
         self.num_of_cores = num_of_cores
         self.name = name
         self.feature_params = feature_params
+        if ispassive:
+            info='passive '
+        else:
+            info='dynamic '
+        info = info + self.name +' '+self.use
+        if self.add_info:
+            info += ' ' + self.add_info
+        self.full_name = info.title()
+
         if self.use == 'svms':
             from sklearn.svm import LinearSVC
             from sklearn.multiclass import OneVsRestClassifier
@@ -64,7 +75,6 @@ class Classifier(object):
 
 
         # Sparse coding variables
-        self.sparse_features_lists = None
         self.dicts = None
 
         # Training variables
@@ -72,7 +82,7 @@ class Classifier(object):
         self.train_ground_truth = None  # is loaded from memory after training
         self.train_classes = None  # is loaded from memory after training
         self.allowed_train_actions = None
-        if isstatic:
+        if ispassive:
             fil = os.path.join(co.CONST['rosbag_location'],
                                'gestures_type.csv')
             self.allowed_train_actions = []
@@ -125,6 +135,7 @@ class Classifier(object):
         self.less_filtered_scores_std = None
         self.high_filtered_scores_std = None
         self.testdata = None
+        self.testing_initialized = False
 
     def initialize_classifier(self, classifier=None):
         if classifier is not None:
@@ -158,11 +169,9 @@ class Classifier(object):
         self.filtered_scores = None
         self.recognized_classes = []
         self.crossings = None
-        self.testname = ''
         self.save_fold = None
-
+        self.testing_initialized = True
         # Testing offline variables
-        self.testdataname = ''
         self.test_sync = None
 
     def reset_online_test(self):
@@ -176,7 +185,6 @@ class Classifier(object):
         self.filtered_scores = []
         self.recognized_classes = []
         self.crossings = []
-        self.testname = ''
         self.save_fold = None
 
         # Testing online variables
@@ -201,6 +209,7 @@ class Classifier(object):
         self.less_filtered_scores_std = None
         self.high_filtered_scores_std = None
         self.testdata = None
+        self.testing_initialized = True
 
     def run_training(self, dict_train_act_num=None, dicts_retrain=False,
                      classifiers_retrain=False, test_against_training=False,
@@ -223,16 +232,17 @@ class Classifier(object):
             Save them if <classifiers_save> is True to <classifiers_savepath>. Do not train
             if <classifiers_savepath> already exists and <classifiers_retrain> is False.
         '''
+        LOG.info(self.full_name+':')
         if feature_params is not None:
             self.feature_params = feature_params
         if classifiers_savepath is None:
-            classifiers_savepath = self.use + '_' + self.name + '_train'
-            if self.isstatic:
-                classifiers_savepath = classifiers_savepath + '_static'
-            else:
-                classifiers_savepath = classifiers_savepath + '_active'
+            classifiers_savepath = 'trained_'
+            classifiers_savepath += self.full_name.replace(' ','_').lower()
             classifiers_savepath += '.pkl'
+
         if not os.path.isfile(classifiers_savepath):
+            LOG.info('Missing trained classifier save file:'+classifiers_savepath)
+            LOG.info(self.full_name + ' will be retrained')
             classifiers_retrain = True
         if buffer_size is not None:
             self.buffer_size = buffer_size
@@ -247,20 +257,21 @@ class Classifier(object):
 
         if self.use_dicts and (classifiers_retrain or test_against_training):
             LOG.info('Making Sparse Features..')
-            self.sparse_features_lists = (self.action_recog.
-                                          actions.update_sparse_features(self.sparse_coders,
-                                                                         ret_sparse=True,
-                                                                         max_act_samples=max_act_samples))
+            self.action_recog.actions.update_sparse_features(
+                                              self.sparse_coders,
+                                              max_act_samples=max_act_samples,
+                                              fss_max_iter=self.fss_max_iter)
         self.process_training(num_of_cores, classifiers_retrain,
                               classifiers_savepath, classifiers_save,
                               test_against_training)
 
     def prepare_training_data(self, path=None, max_act_samples=None,
-                              fss_max_iter=None):
+                              fss_max_iter=100):
         '''
         Read actions from the <path> and name them according to their parent
         folder name
         '''
+        self.fss_max_iter = fss_max_iter
         LOG.info('Adding actions..')
         if path is None:
             path = co.CONST['actions_path']
@@ -273,7 +284,7 @@ class Classifier(object):
             self.action_recog.add_action(os.path.join(path, action),
                                          self.masks_needed,
                                          use_dexter=False,
-                                         isstatic=self.isstatic,
+                                         ispassive=self.ispassive,
                                          max_act_samples=max_act_samples,
                                          feature_params=self.feature_params,
                                          fss_max_iter=fss_max_iter)
@@ -289,18 +300,20 @@ class Classifier(object):
             of each action.
         '''
         if dictionaries_savepath is None:
-            dictionaries_savepath = self.use + '_dict_' + self.name + '_train'
-            if self.isstatic:
-                dictionaries_savepath = dictionaries_savepath + '_static'
+            dictionaries_savepath = 'trained_coders_for'
+            if self.ispassive:
+                dictionaries_savepath += '_passive_'
             else:
-                dictionaries_savepath = dictionaries_savepath + '_active'
+                dictionaries_savepath += '_dynamic_'
+            dictionaries_savepath += self.name+'_' + self.use
             dictionaries_savepath += '.pkl'
         read_from_mem = 0
         self.action_recog.dictionaries.save_path = dictionaries_savepath
         if not retrain:
             try:
                 with open(self.action_recog.dictionaries.save_path, 'r') as inp:
-                    LOG.info('Loading dictionaries..')
+                    LOG.info('Loading dictionaries from: '+
+                             self.action_recog.dictionaries.save_path)
                     self.sparse_coders, self.dicts = pickle.load(inp)
                     self.action_recog.dictionaries.dicts = self.dicts
                     self.action_recog.dictionaries.sparse_dicts = self.sparse_coders
@@ -333,11 +346,12 @@ class Classifier(object):
                 LOG.info('Preparing Classifiers Train Data for testing..')
             else:
                 LOG.info('Preparing Classifiers Train Data..')
-            if not self.isstatic:
+            if not self.ispassive:
                 initial_traindata = []
                 if self.use_dicts:
-                    for sparse_features in self.sparse_features_lists:
-                        initial_traindata.append(np.concatenate(tuple(sparse_features),
+                    for action in self.action_recog.actions.actions:
+                        initial_traindata.append(np.concatenate(tuple(action.
+                                                                      sparse_features),
                                                                 axis=0))
                 else:
                     for action in self.action_recog.actions.actions:
@@ -381,11 +395,13 @@ class Classifier(object):
                         np.concatenate(tuple(act_buffers), axis=0))
             else:
                 if self.use_dicts:
-                    multiclass_traindata = [np.concatenate(tuple(feature_list), axis=0).T for
-                                            feature_list in
-                                            self.sparse_features_lists]
+                    multiclass_traindata = [np.concatenate(
+                        tuple(action.sparse_features), axis=0).T for
+                                            action in
+                                            self.action_recog.actions.actions]
                 else:
-                    multiclass_traindata = [np.concatenate(tuple(action.features), axis=0).T for
+                    multiclass_traindata = [np.concatenate(
+                        tuple(action.features), axis=0).T for
                                             action in
                                             self.action_recog.actions.actions]
 
@@ -405,7 +421,8 @@ class Classifier(object):
             LOG.info('Final TrainData to be used as input to Classifier' +
                      ' has shape ' + str(self.one_v_all_traindata.shape))
         if not retrain and os.path.exists(savepath):
-            LOG.info('Loading trained Classifiers..')
+            LOG.info('Loading trained Classifiers from: ' +
+                     savepath)
             with open(savepath, 'r') as inp:
                 (self.unified_classifier, self.train_ground_truth,
                  self.train_classes) = pickle.load(inp)
@@ -422,7 +439,7 @@ class Classifier(object):
             self.initialize_classifier(self.classifier_type.fit(self.one_v_all_traindata,
                                                                 self.train_ground_truth))
         if save and not loaded:
-            LOG.info('Saving trained Classifiers..')
+            LOG.info('Saving trained Classifiers to: ' + savepath)
             with open(savepath, 'w') as out:
                 pickle.dump((self.unified_classifier, self.train_ground_truth,
                              self.train_classes), out)
@@ -432,16 +449,15 @@ class Classifier(object):
         Offline testing data processing, using data in <datapath>.
         '''
         LOG.info('Processing test data..')
-        LOG.info('Constructing ground truth vector..')
         LOG.info('Extracting features..')
         features, self.test_sync = self.action_recog.add_action(
             datapath, masks_needed=False,
             for_testing=True,
-            isstatic=self.isstatic,
+            ispassive=self.ispassive,
             feature_params=self.feature_params,
             fss_max_iter=100)
         features = np.concatenate(tuple(features), axis=0)
-        if not self.isstatic:
+        if not self.ispassive:
             act_buffers = []
             frames_inds = self.action_recog.actions.testing.sync
             test_buffers_start_inds = []
@@ -729,48 +745,60 @@ class Classifier(object):
                      testname=None, scores_savepath=None,
                      scores_filter_shape = 5,
                      std_small_filter_shape=co.CONST['STD_small_filt_window'],
-                     std_big_filter_shape=co.CONST['STD_big_filt_window']):
+                     std_big_filter_shape=co.CONST['STD_big_filt_window'],
+                     testdatapath=None, *kwargs):
         '''
         Initializes paths and names used in testing to save, load and visualize
         data.
         Built as a convenience method, in case <self.run_testing> gets overriden.
         '''
+        if online:
+            self.reset_online_test()
+        else:
+            self.reset_offline_test()
         self.scores_filter_shape = scores_filter_shape
         self.std_small_filter_shape = std_small_filter_shape
         self.std_big_filter_shape = std_big_filter_shape
         self.online = online
         if testname is not None:
-            self.testname = testname
+            self.testname = testname.title()
         else:
             self.testname = (self.name + ' ' + self.use).title()
+        if self.add_info is not None:
+            self.testname += ' ' + self.add_info.title()
         if online:
-            self.testdataname = 'online'
+            if testdatapath is not None:
+                self.testdataname = ('online (using '
+                                     + os.path.basename(testdatapath) + ')')
+            else:
+                self.testdataname = 'online'
         else:
             self.testdataname = os.path.basename(data)
         if (save or load):
             fold_name = (self.name + ' ' + self.use).title()
             self.save_fold = os.path.join(
-                co.CONST['results_fold'], 'Classification', fold_name,
-                self.testdataname)
+                co.CONST['results_fold'], 'Classification', fold_name)
+            if self.add_info is not None:
+                self.save_fold = os.path.join(
+                 self.save_fold, self.add_info.replace(' ','_').lower())
+            self.save_fold = os.path.join(self.save_fold,self.testdataname)
             makedir(self.save_fold)
 
             if scores_savepath is None:
-                self.scores_savepath = self.use + '_' + self.name
-                if self.isstatic:
-                    self.scores_savepath = self.scores_savepath + '_static'
-                else:
-                    self.scores_savepath = self.scores_savepath + '_active'
-                self.scores_savepath += '_' + self.testdataname + '_testscores.pkl'
+                self.scores_savepath = self.testdataname + '_scores_for_'
+                self.scores_savepath += self.full_name.replace(' ',
+                                                               '_').lower()
+                self.scores_savepath += '.pkl'
 
-    def run_testing(self, data=None, online=True, against_training=False,
+    def run_testing(self, data=None, derot_angle=None, derot_center=None,
+                    online=True, against_training=False,
                     scores_filter_shape=5,
                     std_small_filter_shape=co.CONST['STD_small_filt_window'],
                     std_big_filter_shape=co.CONST['STD_big_filt_window'],
                     ground_truth_type=co.CONST['test_actions_ground_truth'],
                     img_count=None, save=True, scores_savepath=None,
                     load=False, testname=None, display_scores=True,
-                    derot_angle=None, derot_center=None,
-                    construct_gt=True, just_scores=False):
+                    construct_gt=True, just_scores=False,testdatapath=None):
         '''
         Test Classifiers using data (.png files) located in <data>. If <online>, the
         testing is online, with <data> being a numpy array, which has been
@@ -786,25 +814,34 @@ class Classifier(object):
         testing results are saved to <scores_savepath>, or a path constructed
         by the configuration. <testname> overrides the first line of the plots.
         If <load> is True and <scores_save_path> exists, testing is bypassed and all the
-        necessary results are loaded from memory.
+        necessary results are loaded from memory. If <just_scores> is True, the
+        classification stage is not done and only scores are computed. If
+        <testdatapath> is not <None> and <online> is True, then it will be
+        assumed that a pseudoonline testing is taking place
         '''
-        self.init_testing(data=data,
-                          online=online,
-                          save=save,
-                          load=load,
-                          testname=testname,
-                          scores_savepath=scores_savepath,
-                          scores_filter_shape=5,
-                          std_small_filter_shape=co.CONST[
-                              'STD_small_filt_window'],
-                          std_big_filter_shape=co.CONST[
-                              'STD_big_filt_window'])
+        if isinstance(data, tuple):
+            derot_angle = data[1]
+            derot_center = data[2]
+            data = data[0]
+        if not self.testing_initialized:
+            self.init_testing(data=data,
+                              online=online,
+                              save=save,
+                              load=load,
+                              testname=testname,
+                              scores_savepath=scores_savepath,
+                              scores_filter_shape=5,
+                              std_small_filter_shape=co.CONST[
+                                  'STD_small_filt_window'],
+                              std_big_filter_shape=co.CONST[
+                                  'STD_big_filt_window'],
+                              testdatapath=testdatapath)
         if not online:
             if load and os.path.exists(self.scores_savepath):
+                LOG.info('Loading saved scores from: ' + self.scores_savepath)
                 with open(self.scores_savepath, 'r') as inp:
                     self.scores, self.test_sync, self.testname = pickle.load(
                         inp)
-                # DEBUGGING
             else:
                 if self.use == 'svms':
                     LOG.info('Classifier contains ' +
@@ -814,7 +851,7 @@ class Classifier(object):
                     self.scores = self.decide(
                         self.one_v_all_traindata)
                 else:
-                    if not self.isstatic:
+                    if not self.ispassive:
                         (testdata,
                          test_buffers_start_inds,
                          test_buffers_end_inds) = self.offline_testdata_processing(
@@ -823,11 +860,11 @@ class Classifier(object):
                         testdata = self.offline_testdata_processing(
                             data)
                     self.testdata = testdata
-                    LOG.info(self.name + ':')
+                    LOG.info(self.full_name + ':')
                     LOG.info('Testing Classifiers..')
                     self.scores = self.decide(
                         testdata)
-                    if not self.isstatic:
+                    if not self.ispassive:
                         expanded_scores = np.zeros((self.test_sync[-1] + 1,
                                                     self.scores.shape[1]))
                         expanded_scores[:] = np.NaN
@@ -837,16 +874,19 @@ class Classifier(object):
                             expanded_scores[start:end + 1, :] = score[None, :]
                         self.scores = expanded_scores
                     if save:
-                        with open(scores_savepath, 'w') as out:
+                        with open(self.scores_savepath, 'w') as out:
+                            LOG.info('Saving scores to: '+self.scores_savepath)
                             pickle.dump((self.scores, self.test_sync,
                                          self.testname), out)
             if construct_gt:
+                LOG.info('Constructing ground truth vector..')
                 self.test_ground_truth = self.construct_ground_truth(
                     data, ground_truth_type)
             if not just_scores:
                 self.classify_offline(save=save)
-                self.display_scores_and_time(save=save)
-            return True
+                if display_scores:
+                    self.display_scores_and_time(save=save)
+            return True , self.scores
         else:
             '''
             input is processed from hand_segmentation_alg (any data
@@ -855,20 +895,22 @@ class Classifier(object):
             There must be a continuous data streaming (method called in every
             loop), even if the result of the previous algorithm is None
             '''
-            scores_exist = self.process_online_data(data, img_count,
+            scores_exist,score = self.process_online_data(data, img_count,
                                                           derot_angle,
                                                           derot_center,
                                                        just_scores=just_scores)
-            return scores_exist
+            return scores_exist, score
+
+
 
     def display_scores_and_time(self, save=False):
         '''
         Displays scores and elapsed time
         '''
         self.plot_result(np.array(self.filtered_scores),
-                         labels=self.train_classes,
-                         xlabel='Frames',
-                         save=save)
+                             labels=self.train_classes,
+                             xlabel='Frames',
+                             save=save)
         LOG.info(self.name.title()+':')
         if (self.action_recog.actions.
                 features_extract is not None):
@@ -939,9 +981,10 @@ class Classifier(object):
             time_array = co.latex.array_transcribe(times_mat, xlabels=hor_labels,
                                                    ylabels=ver_labels,
                                                    extra_locs=orient[:-1])
-            with open(os.path.join(self.save_fold, 'times.tex'),
-                      'w') as out:
-                out.write(time_array)
+            if save:
+                with open(os.path.join(self.save_fold, 'times.tex'),
+                          'w') as out:
+                    out.write(time_array)
 
     def process_online_data(self, data, img_count=None,
                             derot_angle=None, derot_center=None,
@@ -958,7 +1001,7 @@ class Classifier(object):
         self.mean_from += 1
         # self.buffer_exists = self.buffer_exists[
         #    -self.std_big_filter_shape:]
-        if not self.isstatic:
+        if not self.ispassive:
             if not self.img_count or (img_count == 0):
                 self._buffer = []
                 self.mean_from = 0
@@ -974,20 +1017,27 @@ class Classifier(object):
                 self.scores_running_mean_vec = []
                 self.act_inds = []
                 self.crossings = []
-                self.frame_prev = data.copy()
                 self.count_prev = self.img_count - 1
             if img_count is not None:
                 self.frame_exists += ((img_count - self.img_count) * [False])
                 self.scores_exist += ((img_count - self.img_count) * [False])
                 self.mean_from = img_count - self.img_count + self.mean_from
                 self.img_count = img_count
-            if data is None:
-                self.frame_exists.append(False)
-                self.scores_exist.append(False)
-                return False
         elif not self.img_count:
+            self.reset_online_test()
+            self.scores_exist = []
+            self.frame_exists = []
             self.scores = []
-        if not self.isstatic:
+            self.filtered_scores = []
+        if data is None:
+            self.frame_exists.append(False)
+            self.scores_exist.append(False)
+            return False, np.array([[None] *
+                                    len(self.train_classes)]).astype(
+                                        np.float64)
+        if self.frame_prev is None:
+                self.frame_prev = data.copy()
+        if not self.ispassive:
             self.features_extraction.update(
                 co.pol_oper.derotate(self.frame_prev,
                                      derot_angle,
@@ -1013,8 +1063,8 @@ class Classifier(object):
         self.frame_prev = data.copy()
         self.count_prev = self.img_count
         features = self.features_extraction.extract_features(
-            isstatic=self.isstatic)
-        if not self.isstatic:
+            ispassive=self.ispassive)
+        if not self.ispassive:
             if features is not None:
                 self.frame_exists.append(True)
                 if self.use_dicts:
@@ -1030,7 +1080,9 @@ class Classifier(object):
                     self._buffer = self._buffer + [features]
                     self.buffer_exists.append(False)
                     self.scores_exist.append(False)
-                    return False
+                    return False, np.array([[None] *
+                                    len(self.train_classes)]).astype(
+                                        np.float64)
                 else:
                     self._buffer = self._buffer[1:] + [features]
             else:
@@ -1044,7 +1096,9 @@ class Classifier(object):
             else:
                 self.buffer_exists.append(False)
                 self.scores_exist.append(False)
-                return False
+                return False, np.array([[None] *
+                                    len(self.train_classes)]).astype(
+                                        np.float64)
             #require that buffers' window is contiguous in order to compute mean STD
             existence = self.buffer_exists[
                 - min(self.mean_from,
@@ -1052,7 +1106,9 @@ class Classifier(object):
                       + self.buffer_size):]
             if sum(existence) < 3 * len(existence) / 4:
                 self.scores_exist.append(False)
-                return False
+                return False, np.array([[None] *
+                                    len(self.train_classes)]).astype(
+                                        np.float64)
             elif sum(existence) == 3 * len(existence) / 4:
                 self.mean_from = 0
             inp = np.concatenate(tuple(self._buffer),axis=0).T.reshape(1,-1)
@@ -1065,9 +1121,11 @@ class Classifier(object):
         score = (self.decide(inp))
         self.scores.append(score)
         if not just_scores:
-            return self.classify_online(score, self.img_count,
+            self.classify_online(score, self.img_count,
                                         self.mean_from)
-        return True
+        else:
+            self.filtered_scores.append(score)
+        return True, np.array(score).reshape(1,-1)
 
     def classify_online(self, score, img_count, mean_from):
         '''
@@ -1075,7 +1133,7 @@ class Classifier(object):
         computed. It is a convenience function to allow the modification of
         the scores, if this is wanted, before performing classification
         '''
-        if not self.isstatic:
+        if not self.ispassive:
             if len(self.scores_running_mean_vec) < self.scores_filter_shape:
                 self.scores_running_mean_vec.append(score.ravel())
             else:
@@ -1128,6 +1186,8 @@ class Classifier(object):
                 self.recognized_classes[-1].add(
                     index=index,
                     start=self.new_action_starts_count)
+                LOG.info('Frame ' + str(img_count) + ': ' +
+                         self.recognized_classes[-1].name)
                 self.saved_buffers_scores = []
                 if len(self.recognized_classes)>=2:
                     return self.recognized_classes[-2]
@@ -1140,23 +1200,24 @@ class Classifier(object):
                         self.max_filtered_score = self.filtered_scores[
                             -1][_arg]
                         self.recognized_classes[-1].add(index=_arg)
+                        LOG.info('Frame ' + str(img_count) + ': ' +
+                                 self.recognized_classes[-1].name)
                     if std_mean_diff < co.CONST['action_separation_thres']:
                         self.on_action = False
                     self.saved_buffers_scores.append(score)
-                    LOG.info('Frame ' + str(img_count) + ': ' +
-                             self.recognized_classes[-1].name)
                     return None
                 else:
                     return None
-        if np.max(score) >= 0.7 or len(
-                self.recognized_classes) == 0:
-            self.recognized_classes.append(score.argmax())
         else:
-            self.recognized_classes.append(
-                self.recognized_classes[-1])
-        LOG.info('Pose detected:'
-                 + self.train_classes[self.recognized_classes[-1]])
-        return self.train_classes[self.recognized_classes[-1]]
+            if np.max(score) >= 0.7 or len(
+                    self.recognized_classes) == 0:
+                self.recognized_classes.append(score.argmax())
+            else:
+                self.recognized_classes.append(
+                    self.recognized_classes[-1])
+            LOG.info('Pose detected:'
+                     + self.train_classes[self.recognized_classes[-1]])
+            return self.train_classes[self.recognized_classes[-1]]
 
     def classify_offline(self, display=True,
                                         save=True):
@@ -1167,7 +1228,7 @@ class Classifier(object):
 
         Process scores using stds as proposed by the paper
         '''
-        if not self.isstatic:
+        if not self.ispassive:
             self.filtered_scores = self.upgr_filter(self.scores,
                                                     self.scores_filter_shape)
             #self.filtered_scores = self.scores
@@ -1337,7 +1398,7 @@ class Classifier(object):
             if self.test_ground_truth is not None:
                 fmask = self.scores_exist * np.isfinite(self.test_ground_truth)
         elif self.test_ground_truth is not None:
-            if self.isstatic:
+            if self.ispassive:
                 recognized_classes_expanded = np.zeros_like(
                     self.test_ground_truth)
                 recognized_classes_expanded[:] = np.nan
@@ -1351,7 +1412,6 @@ class Classifier(object):
             else:
                 fmask = (np.isfinite(self.recognized_classes) * np.isfinite(
                     self.test_ground_truth)).astype(bool)
-        print self.test_ground_truth.shape, np.max(self.crossings)
         if fmask is not None:
             self.compute_performance_measures(fmask)
         plots = []
@@ -1452,7 +1512,8 @@ def fake_online_testing(classifier, testname='actions', path=None):
             online=True,
             load=False,
             derot_angle=angles[count],
-            derot_center=centers[count])
+            derot_center=centers[count],
+            testdatapath = co.CONST['test_' + testname])
     classifier.recognized_classes[-1].add(length=max(sync))
     if len(classifier.scores_exist)>1:
         classifier.test_ground_truth = classifier.construct_ground_truth(
@@ -1474,14 +1535,14 @@ def fake_online_testing(classifier, testname='actions', path=None):
                                     for count in
                                     range(expanded_scores.shape[1])],
                             info='Filtered Scores',
-                            xlabel='Frames', save=False)
+                            xlabel='Frames', save=True)
     classifier.plot_result(np.concatenate((
         classifier.filtered_scores_std,
         classifier.filtered_scores_std_mean), axis=0).T,
                             colors=['r', 'g'],
                             labels=['STD', 'STD Mean'],
                             info='Filtered Scores Statistics',
-                            xlabel='Frames', save=False)
+                            xlabel='Frames', save=True)
 
 def signal_handler(sig, frame):
     '''
@@ -1489,38 +1550,42 @@ def signal_handler(sig, frame):
     '''
     LOG.info('\nGot SIGINT')
     LOG.info('Exiting...')
+    show = 0
     if POSES_CLASSIFIER.online:
         from matplotlib import pyplot as plt
         POSES_CLASSIFIER.display_scores_and_time()
-        plt.show()
+        show = 1
     if ACTIONS_CLASSIFIER_SPARSE.online:
         from matplotlib import pyplot as plt
         ACTIONS_CLASSIFIER_SPARSE.display_scores_and_time()
-        plt.show()
+        show = 1
     if ACTIONS_CLASSIFIER_SIMPLE.online:
         from matplotlib import pyplot as plt
         ACTIONS_CLASSIFIER_SIMPLE.display_scores_and_time()
+        show = 1
+    if show:
         plt.show()
     sys.exit(0)
 
-def construct_actions_classifier(testname='train', train=False,
+def construct_dynamic_actions_classifier(testname='train', train=False,
                                  test=True, visualize=True,
                                  dicts_retrain=False, hog_num=None,
                                  name='actions', use_dicts=True,
-                                 des_dim=None):
+                                 des_dim=None, test_against_all=False):
     '''
     Constructs an SVMs classifier with input 3DHOF and GHOG features
     '''
     if not use_dicts:
-        name = name + ' without sparse coding'
+        add_info = 'without sparse coding'
     else:
         if des_dim is None:
             des_dim = [256, 128]
-        name = name + ' with sparse coding'
-    actions_svm = Classifier('INFO', isstatic=False,
+        add_info = 'with sparse coding'
+    actions_svm = Classifier('INFO', ispassive=False,
                              name=name, des_dim=des_dim,
                              use_dicts=use_dicts,
-                             feature_params=hog_num)
+                             feature_params=hog_num,
+                             add_info=add_info)
     actions_svm.run_training(classifiers_retrain=train,
                              dicts_retrain=dicts_retrain,
                              max_act_samples=1000)
@@ -1531,40 +1596,54 @@ def construct_actions_classifier(testname='train', train=False,
                 'test_' + testname + '_ground_truth'],
                 online=False, load=True)
         else:
-            actions_svm.run_testing(co.CONST['test_' + testname],
-                                    ground_truth_type=co.CONST[
-                'test_' + testname + '_ground_truth'],
-                online=False, load=False)
-        if visualize:
-            actions_svm.visualize_scores()
+            if test_against_all:
+                iterat = ['actions','poses']
+            else:
+                iterat = [testname]
+            for name in iterat:
+                actions_svm.reset_offline_test()
+                actions_svm.run_testing(co.CONST['test_' + name],
+                                        ground_truth_type=co.CONST[
+                    'test_' + name + '_ground_truth'],
+                                        online=False, load=False)
+                if visualize:
+                    actions_svm.visualize_scores()
     return actions_svm
 
 
-def construct_poses_classifier(testname='train',
-                               train=True, test=True, visualize=True, pca_num=None):
+def construct_passive_actions_classifier(testname='train',
+                               train=True, test=True, visualize=True,
+                               pca_num=None,
+                               test_against_all=False):
     '''
-    Constructs a random forests poses classifier with input 3DXYPCA features
+    Constructs a random forests passive_actions classifier with input 3DXYPCA features
     '''
-    static_forest = Classifier('INFO', isstatic=True,
-                               name='poses', use='forest',
+    passive_forest = Classifier('INFO', ispassive=True,
+                               name='actions', use='forest',
                                feature_params=pca_num, use_dicts=False)
-    static_forest.run_training(classifiers_retrain=train,
+    passive_forest.run_training(classifiers_retrain=train,
                                max_act_samples=2000)
     if test or visualize:
         if not test:
-            static_forest.run_testing(co.CONST['test_' + testname],
+            passive_forest.run_testing(co.CONST['test_' + testname],
                                       ground_truth_type=co.CONST[
                                           'test_' + testname + '_ground_truth'],
                                       online=False, load=True)
         else:
-            static_forest.run_testing(co.CONST['test_' + testname],
+            if test_against_all:
+                iterat = ['actions','poses']
+            else:
+                iterat = [testname]
+            for name in iterat:
+                passive_forest.reset_offline_test()
+                passive_forest.run_testing(co.CONST['test_' + name],
                                       ground_truth_type=co.CONST[
-                                          'test_' + testname + '_ground_truth'],
+                                          'test_' + name + '_ground_truth'],
                                       online=False, load=False)
-        if visualize:
-            static_forest.visualize_scores()
+                if visualize:
+                    passive_forest.visualize_scores()
 
-    return static_forest
+    return passive_forest
 
 
 def main():
@@ -1573,15 +1652,16 @@ def main():
     '''
     from matplotlib import pyplot as plt
     testname = 'actions'
-    # construct_poses_classifier(test)
-    '''
-    ACTIONS_CLASSIFIER_SIMPLE.run_testing(co.CONST['test_' + testname],
+    # construct_passive_actions_classifier(test)
+
+    POSES_CLASSIFIER.run_testing(co.CONST['test_' + testname],
                             ground_truth_type=co.CONST[
         'test_' + testname + '_ground_truth'],
         online=False, load=False)
     '''
     fake_online_testing(ACTIONS_CLASSIFIER_SIMPLE, testname)
-    ACTIONS_CLASSIFIER_SIMPLE.visualize_scores()
+    '''
+    ACTIONS_CLASSIFIER_SPARSE.visualize_scores()
     plt.show()
 
 LOG = logging.getLogger('__name__')
@@ -1591,15 +1671,20 @@ CH.setFormatter(logging.Formatter(
 LOG.handlers = []
 LOG.addHandler(CH)
 LOG.setLevel(logging.INFO)
-signal.signal(signal.SIGINT, signal_handler)
-POSES_CLASSIFIER = construct_poses_classifier(train=False, test=False,
-                                              visualize=False)
-ACTIONS_CLASSIFIER_SPARSE = construct_actions_classifier(train=False, test=False,
-                                                         visualize=False)
-ACTIONS_CLASSIFIER_SIMPLE = construct_actions_classifier(train=False,
+POSES_CLASSIFIER = construct_passive_actions_classifier(train=False, test=False,
+                                              visualize=False,
+                                             test_against_all=False)
+ACTIONS_CLASSIFIER_SPARSE = construct_dynamic_actions_classifier(train=False,
+                                                         dicts_retrain=False,
                                                          test=False,
                                                          visualize=False,
-                                                         use_dicts=False)
+                                                         test_against_all=False)
+ACTIONS_CLASSIFIER_SIMPLE = construct_dynamic_actions_classifier(train=False,
+                                                         test=False,
+                                                         visualize=False,
+                                                         use_dicts=False,
+                                                         test_against_all=False)
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGINT, signal_handler)
     main()

@@ -23,7 +23,7 @@ LOG.setLevel(logging.INFO)
 
 class SparseCoding(object):
 
-    def __init__(self, log_lev='INFO', des_dim=None, name='',
+    def __init__(self, log_lev='DEBUG', des_dim=None, name='',
                  dist_beta=0.1, dist_sigma=0.005, display=0):
         LOG.setLevel(log_lev)
         self.name = name
@@ -78,11 +78,7 @@ class SparseCoding(object):
                                 str(init_bmat.shape[0]) + 'x' +
                                 str(init_bmat.shape[1]))
         if (self.bmat is None) or self.flush_flag:
-            self.bmat = random.random((feat_dim, self.des_dim)) - 0.5
-            self.bmat -= mean(self.bmat, axis=1)[:, None]
-            sigm = np.sqrt(npsum(self.bmat * self.bmat, axis=0))
-            sigm[sigm == 0] = 1
-            self.bmat /= sigm
+            self.bmat = random.random((feat_dim, self.des_dim))
         if (self.sparse_features is None) or self.flush_flag:
             self.sparse_features = zeros((self.des_dim, 1))
         self.theta = zeros(self.des_dim)
@@ -118,8 +114,7 @@ class SparseCoding(object):
         # Step 1
         btb = dot(self.bmat.T, self.bmat)
         btf = dot(self.bmat.T, self.inp_features)
-        gamma = min([2 * self.dist_sigma**2 * self.dist_beta,
-                     co.CONST['max_gamma'], np.max(-2 * btf) / 10])
+        gamma = np.max(np.abs(-2 * btf)) / 100
         # Set max iterations
         step2 = 1
         singularity_met = False
@@ -131,19 +126,20 @@ class SparseCoding(object):
             self.max_iter = max_iter
         self.prev_sparse_feats = None
         for count in range(self.max_iter):
-            # Step 2
+            # Step 2    
             if step2:
                 zero_coeffs = (self.sparse_features == 0)
                 qp_der_outfeati = 2 * \
-                    (dot(btb, self.sparse_features) - btf) * zero_coeffs
+                    (dot(btb, self.sparse_features)
+                     - btf) * zero_coeffs.reshape(-1,1)
                 i = argmax(npabs(qp_der_outfeati))
-                if npabs(qp_der_outfeati[i]) >= gamma:
+                if npabs(qp_der_outfeati[i]) > gamma:
                     self.theta[i] = -sign(qp_der_outfeati[i])
                     self.active_set[i] = True
-                elif count == 0:
-                    gamma = 0.8 * npabs(qp_der_outfeati[i])
-                    self.theta[i] = -sign(qp_der_outfeati[i])
-                    self.active_set[i] = True
+                #elif count == 0:
+                    #gamma = 0.8 * npabs(qp_der_outfeati[i])
+                    #self.theta[i] = -sign(qp_der_outfeati[i])
+                    #self.active_set[i] = True
             # Step 3
             bmat_h = self.bmat[:, self.active_set]
             sparse_feat_h = self.sparse_features[self.active_set]
@@ -162,7 +158,12 @@ class SparseCoding(object):
                     np.sum(col_space * col_space, axis=0)
                 projected_q = npsum(sub_projection * col_space, axis=1)
                 if np.allclose(projected_q.ravel(), _q_.ravel(), atol=1e-03):
-                    invbmat_h2 = pinv(bmat_h2)
+                    try:
+                        invbmat_h2 = pinv(bmat_h2)
+                    except:
+                        LOG.debug('PROBLEM with pinv')
+                        self.sparse_features = self.prev_sparse_feats.ravel()
+                        break
                 else:
                     # has not be met with present data, so I just add small
                     # diagonal quantities
@@ -217,7 +218,7 @@ class SparseCoding(object):
                               ' problems)')
                     LOG.debug('Reverting to previous iteration result ' +
                               'and exiting loop..')
-                    self.sparse_features = self.prev_sparse_feats
+                    self.sparse_features = self.prev_sparse_feats.ravel()
                     break
                 else:
                     LOG.error('Current Objective Function value: ' +
@@ -244,6 +245,7 @@ class SparseCoding(object):
                         else:
                             self.sparse_feat_list.append(
                                 self.sparse_features.ravel())
+                    self.sparse_features = self.sparse_features.reshape([-1,1])
                     if ret_error:
                         final_error = compute_lineq_error(self.inp_features,
                                                           self.bmat,
@@ -284,6 +286,7 @@ class SparseCoding(object):
             return (compute_lineq_error(self.inp_features, self.bmat,
                                         self.sparse_features),
                     singularity_met)
+        self.sparse_features = self.sparse_features.ravel()
         return None, None
 
     def lagrange_dual(self, lbd, ksi, _s_):
@@ -400,7 +403,7 @@ class SparseCoding(object):
 # pylint: enable=no-member
 
     def train_sparse_dictionary(self, data, sp_opt_max_iter=200,
-                                init_traindata_num=20, incr_rate=2,
+                                init_traindata_num=200, incr_rate=2,
                                 min_iterations=3, init_bmat=None):
         '''
         <data> is a numpy array, holding all the features(of single kind) that
@@ -443,12 +446,14 @@ class SparseCoding(object):
             LOG.info('Feature Sign Search maximum iterations allowed:'
                      + str(feat_sign_max_iter))
             try:
+                '''
                 pbar = progressbar.ProgressBar(max_value=train_num - 1,
                                               redirect_stdout=True,
                                                widgets=[progressbar.widgets.Percentage(),
                                                         progressbar.widgets.Bar(),
                                                         progressbar.widgets.DynamicMessage
                                                    ('error')])
+                '''
                 errors=True
                 sum_error = 0
             except UnboundLocalError:
@@ -459,9 +464,11 @@ class SparseCoding(object):
                 fin_error, _ = self.feature_sign_search_algorithm(data[:, sample_count],
                                                    max_iter=feat_sign_max_iter,
                                                    ret_error=errors)
+                '''
                 if pbar is not None:
                     sum_error += fin_error
                     pbar.update(count,error=sum_error/(count+1))
+                '''
                 self.initialize(data.shape[0])
             self.inp_feat_list = np.transpose(np.array(self.inp_feat_list))
             self.sparse_feat_list = np.array(self.sparse_feat_list).T
