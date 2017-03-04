@@ -115,6 +115,12 @@ class Canvas(wx.Panel):
         painter.DrawBitmap(
             getbitmap(self, self.data), 0, 0)
 
+def tag_im(img, text):
+    '''
+    Tag top of img with description in red
+    '''
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(img, text, (0, 20), font, 0.5, (0, 0, 255), 2)
 
 class MainFrame(wx.Frame):
     def __init__(self,parent, id_, title):
@@ -147,27 +153,32 @@ class MainFrame(wx.Frame):
             else:
                 self.depths= self.depths[1:]+[dep]
             dep = np.median(np.array(self.depths))
+        '''
         if dep != 0:
-            self.size = int(5*(11-10*dep/float(self.init_depth)))
+            self.size = int(2*(11-10*dep/float(self.init_depth)))
         self.size = min(self.size, 10)
         self.size = max(self.size , 1)
+        '''
         if self.prev_size != self.size:
             LOG.info('Current Size:'+ str(self.size))
             self.prev_size = self.size
         if self.data.class_name == 'Punch':
-                cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
+            self.size = 5
+            cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
                                             self.data.skel[-1, -1, 0]), self.size,
                            [0,0,0], -1)
         elif self.data.class_name == 'Index':
+            self.size = 2
             cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
                                         self.data.skel[-1, -1, 0]), self.size,
                        [255,255,255], -1)
         inp = inp + self.drawing_im
         inp = inp.astype(np.uint8)
         for link in self.data.skel:
-            cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]), 
+            cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]),
                      [255, 0, 0], 3)
         inp = cv2.flip(inp, -1)
+        tag_im(inp, 'Action:' + self.data.class_name)
 
         if self.canvas is None:
             self.canvas = Canvas(self, inp)

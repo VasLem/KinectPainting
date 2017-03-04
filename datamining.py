@@ -981,7 +981,9 @@ class MainFrame(wx.Frame):
         rosbags = [os.path.splitext(fil)[0] for fil in
                    os.listdir(co.CONST['rosbag_location'])
                    if fil.endswith('.bag')]
-        to_process = [rosbag for rosbag in rosbags if rosbag in ground_truths]
+        to_process = [rosbag for rosbag in rosbags if (rosbag in ground_truths
+                                                       and not
+                                                       rosbag.startswith('test'))]
         ground_truths = [os.path.join(
             co.CONST['ground_truth_fold'],name+'.csv') for name in to_process]
         rosbags = [os.path.join(

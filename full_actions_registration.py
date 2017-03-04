@@ -109,8 +109,6 @@ class ActionFarmingProcedure(object):
         for action, start in zip(self.actions_name, self.actions_start_ind):
             self.actions_path.append(os.path.join(pathname, action))
             makedir(self.actions_path[-1])
-            for count in range(len(start.split(','))):
-                makedir(os.path.join(self.actions_path[-1], str(count)))
 
     def register_action(self, action_ind, inp, show_dlg=False, append=False):
         '''

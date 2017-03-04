@@ -23,7 +23,7 @@ LOG.setLevel(logging.INFO)
 
 class SparseCoding(object):
 
-    def __init__(self, log_lev='DEBUG', des_dim=None, name='',
+    def __init__(self, log_lev='INFO', sparse_dim=None, name='',
                  dist_beta=0.1, dist_sigma=0.005, display=0):
         LOG.setLevel(log_lev)
         self.name = name
@@ -39,11 +39,9 @@ class SparseCoding(object):
         self.prev_err = 0
         self.curr_error = 0
         self.allow_big_vals = False
-        self.des_dim = des_dim
-        if des_dim is None:
-            self.des_dim = co.CONST['des_dim']
-        self.dist_sigma = dist_sigma
-        self.dist_beta = dist_beta
+        self.sparse_dim = sparse_dim
+        if sparse_dim is None:
+            self.sparse_dim = co.CONST['sparse_dim']
         self.theta = None
         self.prev_sparse_feats = None
         self.flush_flag = False
@@ -60,7 +58,7 @@ class SparseCoding(object):
         self.inp_features = None
         self.sparse_features = None
         self.flush_flag = True
-        self.res_lbd = np.ones(self.des_dim, np.float64)
+        self.res_lbd = np.ones(self.sparse_dim, np.float64)
 
     def initialize(self, feat_dim,
                    init_bmat=None):
@@ -69,21 +67,21 @@ class SparseCoding(object):
         '''
         if init_bmat is not None:
             if (init_bmat.shape[0] == feat_dim and
-                    init_bmat.shape[1] == self.des_dim):
+                    init_bmat.shape[1] == self.sparse_dim):
                 self.bmat = init_bmat.copy()
             else:
                 raise Exception('Wrong input of initial B matrix, the dimensions' +
                                 ' should be ' + str(feat_dim) + 'x' +
-                                str(self.des_dim) + ', not ' +
+                                str(self.sparse_dim) + ', not ' +
                                 str(init_bmat.shape[0]) + 'x' +
                                 str(init_bmat.shape[1]))
         if (self.bmat is None) or self.flush_flag:
-            self.bmat = random.random((feat_dim, self.des_dim))
+            self.bmat = random.random((feat_dim, self.sparse_dim))
         if (self.sparse_features is None) or self.flush_flag:
-            self.sparse_features = zeros((self.des_dim, 1))
-        self.theta = zeros(self.des_dim)
-        self.active_set = zeros((self.des_dim), bool)
-        self.sparse_features = zeros((self.des_dim, 1))
+            self.sparse_features = zeros((self.sparse_dim, 1))
+        self.theta = zeros(self.sparse_dim)
+        self.active_set = zeros((self.sparse_dim), bool)
+        self.sparse_features = zeros((self.sparse_dim, 1))
         self.flush_flag = False
         self.is_trained = False
 
@@ -102,7 +100,8 @@ class SparseCoding(object):
                                       ret_error=False,
                                       display_error=False,
                                       max_iter=0,
-                                      single=False, timed=True):
+                                      single=False, timed=True,
+                                      starting_points=None):
         '''
         Returns sparse features representation
         '''
@@ -110,13 +109,20 @@ class SparseCoding(object):
             self.inp_feat_list.append(inp_features.ravel())
         else:
             self.inp_feat_list = [inp_features.ravel()]
-        self.inp_features = np.atleast_2d(inp_features.copy()).T
+        self.inp_features = inp_features.copy().reshape((-1,1))
         # Step 1
         btb = dot(self.bmat.T, self.bmat)
         btf = dot(self.bmat.T, self.inp_features)
         gamma = np.max(np.abs(-2 * btf)) / 100
-        # Set max iterations
-        step2 = 1
+        if starting_points is not None:
+            self.sparse_features = starting_points.reshape((self.sparse_dim,
+                                                            1))
+            self.theta = np.sign(starting_points).reshape((-1, 1))
+            self.active_set[:] = False
+            self.active_set[starting_points!=0] = True
+            step2 = 0
+        else:
+            step2 = 1
         singularity_met = False
         count = 0
         prev_objval = 0
@@ -131,50 +137,48 @@ class SparseCoding(object):
                 zero_coeffs = (self.sparse_features == 0)
                 qp_der_outfeati = 2 * \
                     (dot(btb, self.sparse_features)
-                     - btf) * zero_coeffs.reshape(-1,1)
+                     - btf) * zero_coeffs.reshape((-1,1))
                 i = argmax(npabs(qp_der_outfeati))
                 if npabs(qp_der_outfeati[i]) > gamma:
                     self.theta[i] = -sign(qp_der_outfeati[i])
                     self.active_set[i] = True
-                #elif count == 0:
-                    #gamma = 0.8 * npabs(qp_der_outfeati[i])
-                    #self.theta[i] = -sign(qp_der_outfeati[i])
-                    #self.active_set[i] = True
+                '''
+                elif count == 0:
+                    gamma = 0.8 * npabs(qp_der_outfeati[i])
+                    self.theta[i] = -sign(qp_der_outfeati[i])
+                    self.active_set[i] = True
+                '''
             # Step 3
             bmat_h = self.bmat[:, self.active_set]
-            sparse_feat_h = self.sparse_features[self.active_set]
-            theta_h = self.theta[self.active_set]
+            sparse_feat_h = self.sparse_features[self.active_set].reshape(
+                (-1,1))
+            theta_h = self.theta[self.active_set].reshape((-1,1))
             _q_ = dot(bmat_h.T, self.inp_features) - gamma * theta_h / 2.0
             bmat_h2 = dot(bmat_h.T, bmat_h)
-            try:
+            rank = matrix_rank(bmat_h2)
+            if rank == bmat_h2.shape[0]:
                 new_sparse_f_h = np.linalg.solve(bmat_h2, _q_)
-                if np.max(np.abs(new_sparse_f_h)) > 1000:
-                    raise np.linalg.linalg.LinAlgError
-            except np.linalg.linalg.LinAlgError:
-                rank = matrix_rank(bmat_h2)
-                col_space = qr(bmat_h2.T)[0][:, :rank]
-                dot_prod = np.sum((_q_ * col_space), axis=0)
-                sub_projection = dot_prod / \
-                    np.sum(col_space * col_space, axis=0)
-                projected_q = npsum(sub_projection * col_space, axis=1)
-                if np.allclose(projected_q.ravel(), _q_.ravel(), atol=1e-03):
-                    try:
-                        invbmat_h2 = pinv(bmat_h2)
-                    except:
-                        LOG.debug('PROBLEM with pinv')
-                        self.sparse_features = self.prev_sparse_feats.ravel()
-                        break
+            else:
+                u,s,v = np.linalg.svd(bmat_h2)
+                col_space = u[:, :rank]
+                null_space = u[:, rank:]
+                #check if _q_ belongs to column space of bmat_h2
+                if np.allclose(
+                    dot(dot(dot(col_space,pinv(
+                        dot(col_space.T,col_space))),
+                        col_space.T),_q_),_q_):
+                    new_sparse_f_h = dot(pinv(bmat_h2),_q_)
                 else:
-                    # has not be met with present data, so I just add small
-                    # diagonal quantities
-                    warnings.warn('Weird singularity met')
-                    singularity_met = True
-                    invbmat_h2 = inv(bmat_h2 + 0.001 *
-                                     np.eye(bmat_h2.shape[0]))
-                    if np.max(np.abs(invbmat_h2)) > 1000:
-                        raise Exception('Wrongly computed bmat, try to run' +
-                                        ' again or change input features')
-                new_sparse_f_h = dot(invbmat_h2, _q_)
+                    #direction z in nullspace of bmat_h2 can not be
+                    #perpendicular to _q_, because then _q_ = R(bmat_h2),
+                    #which was proven not to hold.
+                    #I take a random vector and multiply it by a quantity,
+                    #so that to search for zerocrossings
+                    #inside the closed segment constructed
+                    # by x_new and x_old.
+                    new_sparse_f_h = dot(null_space,
+                                         100 * np.random.random(
+                        (null_space.shape[1], 1)))
 
             if np.prod(sign(sparse_feat_h) != sign(new_sparse_f_h)):
                 zero_points_lin_par = sparse_feat_h / (sparse_feat_h -
@@ -245,7 +249,7 @@ class SparseCoding(object):
                         else:
                             self.sparse_feat_list.append(
                                 self.sparse_features.ravel())
-                    self.sparse_features = self.sparse_features.reshape([-1,1])
+                    self.sparse_features = self.sparse_features.reshape((-1,1))
                     if ret_error:
                         final_error = compute_lineq_error(self.inp_features,
                                                           self.bmat,
@@ -428,7 +432,7 @@ class SparseCoding(object):
         LOG.info('Minimum Epochs number after total data is processed:' + str(min_iterations))
         reached_traindata_num = False
         reached_traindata_count = 0
-
+        computed = data.shape[1] * [None]
         while True:
             LOG.info('Epoch: ' + str(iter_count))
             train_num = min(int(init_traindata_num *
@@ -446,14 +450,12 @@ class SparseCoding(object):
             LOG.info('Feature Sign Search maximum iterations allowed:'
                      + str(feat_sign_max_iter))
             try:
-                '''
                 pbar = progressbar.ProgressBar(max_value=train_num - 1,
                                               redirect_stdout=True,
                                                widgets=[progressbar.widgets.Percentage(),
                                                         progressbar.widgets.Bar(),
                                                         progressbar.widgets.DynamicMessage
                                                    ('error')])
-                '''
                 errors=True
                 sum_error = 0
             except UnboundLocalError:
@@ -463,12 +465,15 @@ class SparseCoding(object):
             for count, sample_count in enumerate(ran):
                 fin_error, _ = self.feature_sign_search_algorithm(data[:, sample_count],
                                                    max_iter=feat_sign_max_iter,
-                                                   ret_error=errors)
-                '''
+                                                   ret_error=errors,)
+                                                   #starting_points=computed[sample_count])
+                if iter_count > 0:
+                    #do not trust first iteration sparse features, before
+                    #having trained the codebooks at least once
+                    computed[sample_count] = self.sparse_feat_list[-1]
                 if pbar is not None:
                     sum_error += fin_error
                     pbar.update(count,error=sum_error/(count+1))
-                '''
                 self.initialize(data.shape[0])
             self.inp_feat_list = np.transpose(np.array(self.inp_feat_list))
             self.sparse_feat_list = np.array(self.sparse_feat_list).T
@@ -483,7 +488,7 @@ class SparseCoding(object):
             iter_count += 1
             if curr_error < 0.5 and reached_traindata_num:
                 break
-            if curr_error >= prev_error:
+            if curr_error > prev_error:
                 if prev_error > co.CONST['max_dict_error']:
                     if retry_count == co.CONST['max_retries']:
                         LOG.warning('Training has high final error but' +
@@ -494,6 +499,11 @@ class SparseCoding(object):
                     self.flush_variables()
                     self.initialize(data.shape[0])
                     iter_count = 0
+                elif (np.isclose(prev_error,curr_error,atol=0.1)
+                      and reached_traindata_num and
+                      reached_traindata_count > min_iterations):
+                    break
+
             else:
                 if reached_traindata_num and reached_traindata_count > min_iterations:
                     break
@@ -506,7 +516,7 @@ class SparseCoding(object):
         Requires that the dictionary is already trained
         '''
         if max_iter is None:
-            max_iter = self.des_dim
+            max_iter = self.sparse_dim
         self.initialize(data.size)
         self.feature_sign_search_algorithm(data.ravel(), max_iter=max_iter,
                                            single=True, display_error=errors,
@@ -519,7 +529,7 @@ class SparseCoding(object):
         <data> is assumed to have dimensions [n_features, n_samples]
         output has dimensions [n_sparse, n_samples]
         '''
-        sparse_features = np.zeros((self.des_dim, data.shape[1]))
+        sparse_features = np.zeros((self.sparse_dim, data.shape[1]))
         for count in range(data.shape[1]):
             sparse_features[:, count] = self.code(data[:, count],
                                                   max_iter, errors).ravel()
@@ -551,7 +561,7 @@ def main():
     test2 = cv2.resize(test2, test.shape)
     test_shape = test.shape
     bmat = None
-    sparse_coding = SparseCoding(name='Images', des_dim=2 *
+    sparse_coding = SparseCoding(name='Images', sparse_dim=2 *
                                  test.size, dist_sigma=0.01, dist_beta=0.01,
                                  display=5)
     sparse_coding.train_sparse_dictionary(np.vstack((test.ravel(),

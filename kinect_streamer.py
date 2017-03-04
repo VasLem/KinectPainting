@@ -13,6 +13,7 @@ import time
 import class_objects as co
 import extract_and_process_rosbag as epr
 import classifiers as cs
+import poses_to_actions as p2a
 KINECT = None
 def signal_handler(sig, frame):
     '''
@@ -29,7 +30,6 @@ class Kinect(object):
         #Kinect requirements
         ####
         node = roslaunch.core.Node("kinect2_bridge", "kinect2_bridge")
-        rospy.set_param('fps_limit',10)
         launch = roslaunch.scriptapi.ROSLaunch()
         launch.start()
         self.process = launch.launch(node)
@@ -48,6 +48,7 @@ class Kinect(object):
         self.open_kernel = np.ones((5, 5), np.uint8)
         self.prepare_frame = epr.DataProcess(save=False)
         self.time = []
+        self.used_classifier = p2a.ACTIONS_CLASSIFIER_MIXED
     def callback(self, data):
         '''
         Callback function, <data> is the depth image
@@ -65,15 +66,21 @@ class Kinect(object):
             LOG.info('No hand found')
             return
         self.prepare_frame.data = {}
-        recognized_class = cs.POSES_CLASSIFIER.run_testing(processed,
+        self.used_classifier.run_testing(processed,
                                                            derot_angle=angle,
-                                                           derot_center=center)
+                                                           derot_center=center,
+                                        online=True)
         self.time.append(time.time())
-        if recognized_class is not None:
+        if (self.used_classifier.recognized_classes is not None
+            and len(self.used_classifier.recognized_classes)>0):
             self.image_pub.publish(self.bridge.cv2_to_imgmsg(
                 processed, "passthrough"))
             msg = TimeReference()
-            msg.source = recognized_class
+            try:
+                msg.source = cs.POSES_CLASSIFIER.train_classes[
+                    self.used_classifier.recognized_classes[-1]]
+            except TypeError:
+                msg.source = self.used_classifier.recognized_classes[-1].name
             self.class_pub.publish(msg)
             self.skel_pub.publish(self.bridge.cv2_to_imgmsg(
                 np.array(self.prepare_frame.skeleton.skeleton,np.int32)))

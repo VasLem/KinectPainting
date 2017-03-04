@@ -20,14 +20,15 @@ class MixedClassifier(clfs.Classifier):
     that classifies static actions. During training phase, a confusion matrix
     between random forest predictions and provided ground truth of actions
     (static and dynamic) is constructed, named 'coherence matrix'.
-    The combination is done using a mixed Bayesian-deduced model, which is
-    explained in detail in <run_testing> . It basically uses both classifiers,
-    to produce a better estimation, which is extremely useful in realtime,
-    where the SVMs classifier can not cope well in actions boundaries.
+     The combination is done using a mixed Bayesian-deduced model, which is
+    explained in detail in <run_testing> .It uses both classifiers,
+    to produce a better estimation, which is useful in realtime,
+    where the SVMs classifier can not cope well dut to the increased
+    features dimensionality.
     '''
     def __init__(self, svms_classifier=None, rf_classifier=None,
                  log_lev='INFO',visualize=False,
-                 add_info='without sparse coding'):
+                 add_info=None, *args, **kwargs):
         # matrix rows are poses labels`
         # matrix columns are actions labels
         # matrix entries are coherence probabilities
@@ -39,7 +40,7 @@ class MixedClassifier(clfs.Classifier):
                                  masks_needed=False,
                  buffer_size = self.actions_classifier.buffer_size,
                  ispassive = False, use='mixed', name='actions',
-                                add_info=add_info)
+                                add_info=add_info, *args, **kwargs)
         self.poses_classifier_test = None
         self.actions_classifier_test = None
         self.coherence_matrix = None
@@ -58,7 +59,7 @@ class MixedClassifier(clfs.Classifier):
         self.a2p_match = np.array(match)
         self.train_classes = np.array(
                 self.actions_classifier.train_classes)[self.a2p_match].tolist()
-        # actions ground truth
+        # actions ground truth2
         self.poses_predictions = None
         self.actions_ground_truth = None
 
@@ -92,26 +93,32 @@ class MixedClassifier(clfs.Classifier):
         prev_root = ''
         prev_action = ''
         for root, dirs, filenames in os.walk(co.CONST['actions_path']):
-            for filename in sorted(filenames):
-                if root != prev_root and str.isdigit(
-                    os.path.normpath(
+            separated_root = os.path.normpath(
                         root).split(
-                            os.path.sep)[-1]):
-                    prev_root = root
-                    action = os.path.normpath(
-                            root).split(os.path.sep)[-2]
-                    if action != prev_action:
-                        LOG.info('Processing action: ' + action)
-                        prev_action = action
-                    if action not in self.actions:
-                        raise Exception('Action ' + action +
-                                        'not in trained actions superset')
-                    self.poses_classifier.reset_offline_test()
+                            os.path.sep)
+            if root != prev_root and str.isdigit(
+                separated_root[-1]) and separated_root[
+                    -2] != co.CONST['hnd_mk_fold_name']:
+                prev_root = root
+                if separated_root[-2] == co.CONST['mv_obj_fold_name']:
+                    action = separated_root[-3]
+                    action_path = (os.path.sep).join(separated_root[:-2])
+                else:
+                    action = separated_root[-2]
+                if action not in self.actions:
+                    raise Exception('Action ' + action +
+                                    'not in trained actions superset')
+                self.poses_classifier.reset_offline_test()
+                if action != prev_action:
+                    LOG.info('Processing action: ' + action)
                     actions_ground_truth = (
                         self.actions_classifier.construct_ground_truth(
-                        data=root, ground_truth_type='constant-' +action))
+                        data=action_path, ground_truth_type='constant-' +action))
+                    self.actions_ground_truth += (
+                        actions_ground_truth.tolist())
+                    prev_action = action
                     self.poses_classifier.run_testing(
-                        data=root, online=False,
+                        data=action_path, online=False,
                         construct_gt=False,
                         save=False,load=False,display_scores=False)
                     poses_pred = self.poses_classifier.recognized_classes
@@ -121,12 +128,15 @@ class MixedClassifier(clfs.Classifier):
                     poses_predictions_expanded[self.poses_classifier.test_sync
                                        ] = poses_pred
                     poses_pred = poses_predictions_expanded
-                    fmask = np.isfinite(
-                                poses_pred)*np.isfinite(actions_ground_truth)
-                    self.poses_predictions += (poses_pred[
-                        fmask].astype(int)).tolist()
-                    self.actions_ground_truth += (
-                        actions_ground_truth[fmask].astype(int)).tolist()
+                    self.poses_predictions += poses_pred.tolist()
+        self.poses_predictions = np.array(self.poses_predictions)
+        self.actions_ground_truth = np.array(self.actions_ground_truth)
+        fmask = (np.isfinite(self.poses_predictions) *
+                 np.isfinite(self.actions_ground_truth))>0
+        self.poses_predictions = self.poses_predictions[
+            fmask].astype(int)
+        self.actions_ground_truth = self.actions_ground_truth[
+            fmask].astype(int)
         self.poses_classifier.reset_offline_test()
 
     def construct_coherence(self):
@@ -142,7 +152,6 @@ class MixedClassifier(clfs.Classifier):
             raise Exception(self.construct_coherence.__doc__)
         self.coherence_matrix = np.zeros((len(self.poses),
                                           len(self.actions)))
-        
         for action_truth, pose_pred in zip(self.actions_ground_truth,
                                            self.poses_predictions):
             self.coherence_matrix[pose_pred,
@@ -155,26 +164,25 @@ class MixedClassifier(clfs.Classifier):
         return self.coherence_matrix
 
     def run_training(self, save=True, load=True,
-                     classifiers_savepath=None):
+                     classifier_savename=None):
         '''
         Computes coherence matrix
         Overrides <clfs.run_training>
         '''
-        if classifiers_savepath is None:
-            classifiers_savepath = 'trained_'
-            classifiers_savepath += self.full_name.replace(' ','_').lower()
-            classifiers_savepath += '.pkl'
-        if load and os.path.isfile(classifiers_savepath):
-            with open(classifiers_savepath, 'r') as inp:
-                (self.coherence_matrix,
-                 self.poses,
-                 self.actions) = pickle.load(inp)
-        else:
+        if classifier_savename is None:
+            classifier_savename = 'trained_'
+            classifier_savename += self.full_info.replace(' ', '_').lower()
+        self.classifier_savename = classifier_savename
+        if not classifier_savename in self.trained_classifiers or not load:
             self.extract_pred_and_gt()
             self.construct_coherence()
             if save:
-                with open(classifiers_savepath,'w') as out:
-                    pickle.dump((self.coherence_matrix,self.poses,self.actions), out)
+                self.trained_classifiers[classifier_savename] = (
+                    self.coherence_matrix,self.poses,self.actions)
+        else:
+            (self.coherence_matrix,
+             self.poses,
+             self.actions) = self.trained_classifiers[classifier_savename]
 
         return self.coherence_matrix, self.poses, self.actions
 
@@ -206,7 +214,7 @@ class MixedClassifier(clfs.Classifier):
         ax.set_ylabel(r'Poses', fontsize=16)
         ax.set_title(r'Coherence', fontsize=18)
         plt.xticks(range(len(self.actions)), [r'%s' % action for action in
-                                              self.actions], rotation = 45)
+                                              self.train_classes], rotation = 45)
         plt.yticks(range(len(self.poses)), [r'%s' % pose for pose in
                                             self.poses])
         save_fold = os.path.join(
@@ -219,11 +227,6 @@ class MixedClassifier(clfs.Classifier):
 
     def run_mixer(self, rf_probs, svms_scores=None, img_count=None, save=False,
                   online=True,*args,**kwargs):
-        if not self.testing_initialized:
-            if not online:
-                self.reset_offline_test()
-            else:
-                self.reset_online_test()
         if isinstance(rf_probs, tuple):
             svms_scores= rf_probs[1]
             rf_probs = rf_probs[0]
@@ -325,19 +328,21 @@ class MixedClassifier(clfs.Classifier):
         if online:
             if img_count is not None:
                 self.scores_exist += ((img_count - self.img_count) * [False])
-                if img_count is not None:
-                    self.img_count = img_count
-        self.init_testing(data=data,
-                          online=online,
-                          save=save,
-                          load=load,
-                          testname=testname,
-                          scores_savepath=scores_savepath,
-                          scores_filter_shape=5,
-                          std_small_filter_shape=co.CONST[
-                              'STD_small_filt_window'],
-                          std_big_filter_shape=co.CONST[
-                              'STD_big_filt_window'])
+                self.img_count = img_count
+            else:
+                self.img_count += 1
+        if not self.testing_initialized or not online:
+            self.init_testing(data=data,
+                              online=online,
+                              save=save,
+                              load=load,
+                              testname=testname,
+                              scores_savepath=scores_savepath,
+                              scores_filter_shape=5,
+                              std_small_filter_shape=co.CONST[
+                                  'STD_small_filt_window'],
+                              std_big_filter_shape=co.CONST[
+                                  'STD_big_filt_window'])
         rf_exist,_ = self.poses_classifier.run_testing(data=data,
                                           online=online,
                                           construct_gt=False,
@@ -345,7 +350,7 @@ class MixedClassifier(clfs.Classifier):
                                          save=True,
                                          load=True,
                                          display_scores=True,
-                                         testname = testname,
+                                         testname=testname,
                                          just_scores=True,
                                          derot_angle=derot_angle,
                                              derot_center=derot_center,
@@ -397,6 +402,7 @@ class MixedClassifier(clfs.Classifier):
 
 def main():
     from matplotlib import pyplot as plt
+    '''
     mixedclassifier_simple = MixedClassifier(clfs.ACTIONS_CLASSIFIER_SIMPLE,
                                              clfs.POSES_CLASSIFIER,
                                              add_info='without sparse coding')
@@ -415,7 +421,39 @@ def main():
 
     mixedclassifier_simple.plot_coherence()
     mixedclassifier_simple.visualize_scores()
+    '''
     plt.show()
+
+def construct_mixed_dynamic_actions_classifier(testname='actions', train=False,
+                                 test=True, visualize=True,
+                                 dicts_retrain=False, hog_num=None,
+                                 name='actions', use_dicts=False,
+                                 des_dim=None, test_against_all=False):
+    '''
+    Constructs a mixed classifier
+    '''
+    mixed = MixedClassifier(svms_classifier=clfs.ACTIONS_CLASSIFIER_SIMPLE,
+                            rf_classifier=clfs.POSES_CLASSIFIER)
+    mixed.run_training(load=not train)
+    if test or visualize:
+        if not test:
+            mixed.run_testing(co.CONST['test_' + testname],
+                                    ground_truth_type=co.CONST[
+                'test_' + testname + '_ground_truth'],
+                online=False, load=True)
+        else:
+            if test_against_all:
+                iterat = ['actions','poses']
+            else:
+                iterat = [testname]
+            for name in iterat:
+                mixed.run_testing(co.CONST['test_' + name],
+                                        ground_truth_type=co.CONST[
+                    'test_' + name + '_ground_truth'],
+                                        online=False, load=False)
+                if visualize:
+                    mixed.visualize_scores()
+    return mixed
 
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler(sys.stderr)
@@ -424,7 +462,11 @@ CH.setFormatter(logging.Formatter(
 LOG.handlers = []
 LOG.addHandler(CH)
 LOG.setLevel(logging.INFO)
-
+ACTIONS_CLASSIFIER_MIXED = construct_mixed_dynamic_actions_classifier(
+    train=False,
+    test=True,
+    visualize=True,
+    test_against_all=True)
 if __name__ == '__main__':
     # signal.signal(signal.SIGINT, signal_handler)
     main()

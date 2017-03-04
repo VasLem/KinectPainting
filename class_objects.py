@@ -796,6 +796,27 @@ class PolarOperations(object):
     Class to hold all used  operations on polar coordinates
     '''
 
+    def derotate_points(self, img, points, angle, center):
+        '''
+        <points> should have dimension Nx2
+        '''
+        points = np.atleast_2d(points).T
+        angle = - angle
+        _cos = np.cos(angle)
+        _sin = np.sin(angle)
+        _x1 = img.shape[1] / 2.0
+        _y1 = img.shape[0] / 2.0
+        _x0 = center[1]
+        _y0 = center[0]
+        # Due to the non orthogonal system of the image, it is not
+        #  [[_cos, _sin],[-_sin ,_cos]]
+        M = np.array([[_cos, -_sin, -_x0 * _cos + _y0 * _sin + (_x1)],
+                      [_sin, _cos, - _x0 * _sin - _y0 * _cos + (_y1)]])
+        return np.dot(M,
+                      np.concatenate((points,
+                                      np.ones((1,points.shape[1]))),
+                                     axis=0))
+
     def derotate(self, img, angle, center,in_rads=True):
         #if in_rads:
         #    angle = angle * 180/float(pi)

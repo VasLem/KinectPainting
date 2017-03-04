@@ -17,6 +17,8 @@ path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
 path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
 actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
+mv_obj_fold_name : mv_obj
+hnd_mk_fold_name : hnd_mk
 #rosbag files location
 rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions
 #pathname of calibrated image eges
@@ -59,22 +61,23 @@ bg_ratio : 0.2
 var_thres : 20
 history : 4000
 #Variables necessary for sparse coding
-des_dim: 256
+sparse_dim: 256
 max_dict_error: 100
 max_retries : 2
 fss_max_iter: 100 # set to None if no Feature Sign Search iterations limit is wanted
 #the rosbag for training
 train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
 #Variables for action recognition
-3DHOF_bin_size: 5
+3DHOF_bin_size: 4
 GHOG_bin_size: 64
-3DXYPCA_num: 32 # per dimension
+3DXYPCA_size: 32 # per dimension
 RF_trees: 10
 STD_small_filt_window: 20 #window of buffers, not frames
 STD_big_filt_window: 40 #window of buffers, not frames
 action_separation_thres: 0
 buffer_max_misses: 4
 buffer_size: 10
+kernel : linear #for SVMs classifier
 #Variables for hand segmentation
 max_link_number : 6
 max_hsa_contours_num: 5

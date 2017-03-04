@@ -89,15 +89,15 @@ class Hist4D(object):
         self.slow.set_val(0)
         self.shigh.set_val(maxlim)
     def update(self,val):
-        visible = [v for k, v in self.cubes_info.items() if k >
+        visible = [(k,v) for k, v in self.cubes_info.items() if k >
                    self.slow.val and k<=
                    self.shigh.val]
         invisible = [v for k, v in self.cubes_info.items() if k <=
                      self.slow.val or k>
                      self.shigh.val]
-        print len(visible),len(invisible)
-        for item in [item for sublist in visible for item in sublist]:
-            item.set_alpha(1)
+        for (k,sublist) in visible:
+            for item in sublist:
+                item.set_alpha(k)
         for item in [item for sublist in invisible for item in sublist]:
             item.set_alpha(0)
         total=[v for k,v in self.cubes_info.items()]
@@ -130,7 +130,6 @@ class Hist4D(object):
                                           points[count, :, 2].reshape(2, 2),
                                           color=self.colormap(float(color_ind)),
                                           linewidth=0,
-                                          alpha=0,
                                           antialiased=True,
                                           shade=False))
         return surf
@@ -142,28 +141,45 @@ class Hist4D(object):
         rd = np.concatenate([[X[i, 0], X[i, 0]] for i in xrange(N)])
         gr = np.concatenate([[X[i, 1], X[i, 1]] for i in xrange(N)])
         bl = np.concatenate([[X[i, 2], X[i, 2]] for i in xrange(N)])
+        al = np.concatenate([[X[i, 3], X[i, 3]] for i in xrange(N)])
         rd = tuple([(r[i], rd[i], rd[i]) for i in xrange(2 * N)])
         gr = tuple([(r[i], gr[i], gr[i]) for i in xrange(2 * N)])
         bl = tuple([(r[i], bl[i], bl[i]) for i in xrange(2 * N)])
-        cdict = {'red': rd, 'green': gr, 'blue': bl}
-        return colors.LinearSegmentedColormap('my_colormap', cdict, N)
+        al = tuple([(r[i], al[i], al[i]) for i in xrange(2 * N)])
+        cdict = {'red': rd, 'green': gr, 'blue': bl, 'alpha': al}
+        return colors.LinearSegmentedColormap('my_colormap', cdict)
 
-    def draw_colorbar(self,_axes,unique_vals,cax):
+    def draw_colorbar(self,_axes,unique_vals=None,cax=None):
+        if unique_vals is None:
+            unique_vals = np.linspace(0, 1, 1000)
         xmin, xmax = _axes.get_xlim()
         ymin, ymax = _axes.get_ylim()
         zmin, zmax = _axes.get_zlim()
         invis=_axes.scatter(unique_vals,
                            unique_vals,
-                           c=np.arange(unique_vals.size),
-                           cmap=self.colormap,alpha=1)
+                           c=np.arange(len(unique_vals)),
+                           cmap=self.colormap)
         _axes.set_xlim([xmin,xmax])
         _axes.set_ylim([ymin,ymax])
         _axes.set_zlim([zmin,zmax])
-        cbar=self.fig.colorbar(invis,ax=_axes,cax=cax)
+        cbar=self.fig.colorbar(invis,ax=_axes,cax=cax,drawedges=False)
         cbar.set_ticks(np.linspace(0,np.size(unique_vals),5))
-        cbar.set_ticklabels(np.around(np.linspace(0,np.max(unique_vals),5),2))
+        if unique_vals is not None:
+            cbar.set_ticklabels(np.around(np.linspace(0,np.max(unique_vals),5),2))
 
         invis.set_alpha(0)
+    def create_opacity_colormap(self,principal_rgb_color, scale_size=256):
+        '''
+        Create opacity colormap based on one principal RGB color
+        '''
+        if np.any(principal_rgb_color > 1):
+            raise Exception('principal_rgb_color values should  be in range [0,1]')
+        opac_colormap = np.concatenate((np.tile(principal_rgb_color[None, :],
+                                               (scale_size, 1))[:],
+                                        np.linspace(0, 1, scale_size)[:, None]),
+                                      axis=1)
+        self.colormap=self.array2cmap(opac_colormap)
+
     def create_brightness_colormap(self,principal_rgb_color, scale_size):
         '''
         Create brightness colormap based on one principal RGB color
@@ -203,13 +219,10 @@ class Hist4D(object):
             cax.clear()
             ax1.clear()
             ax2.clear()
-        unique_hist=np.unique(hist)
-        colormap = self.create_brightness_colormap(color,
-                                                 np.size(unique_hist))
-        
+        #unique_hist=np.unique(hist)
+        self.create_opacity_colormap(color)
         self.draw_cubes(_axes, hist, edges)
-        
-        self.draw_colorbar(_axes,unique_hist,cax)
+        self.draw_colorbar(_axes,cax=cax)
         _axes.set_xlim((edges[0].min(),edges[0].max()))
         _axes.set_ylim((edges[1].min(),edges[1].max()))
         _axes.set_zlim((edges[2].min(),edges[2].max()))
@@ -228,6 +241,7 @@ def main():
     '''
     data = np.random.randn(100, 3)
     hist, edges = np.histogramdd(data, bins=(5, 8, 4))
+    hist = hist/float(np.max(hist))
     fig = plt.figure()
     hist4d=Hist4D()
     hist4d.draw(hist,edges,fig)

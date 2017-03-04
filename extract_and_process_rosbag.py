@@ -66,6 +66,7 @@ class DataProcess(object):
         self.farm_key = None
         self.save_path_exists = False
         self.save_path = co.CONST['whole_save_path']
+        self.skeletons = {}
         self.str_len = 0
         self.save = save
         self.data = {}
@@ -83,7 +84,7 @@ class DataProcess(object):
         self.data_append = False
         # Gather first num(=30) frames and find an initial background
         self.init_num = 30
-        if not save:
+        if save:
             try:
                 makedir(self.save_path)
             except:
@@ -121,6 +122,7 @@ class DataProcess(object):
         '''
         self.folder = ''
         self.data = {}
+        self.skeletons = {}
         self.sync_count = -1
         if save_res:
             if isinstance(data, basestring):
@@ -156,6 +158,7 @@ class DataProcess(object):
 
     def reset(self):
         self.data = {}
+        self.skeletons = {}
         self.prev_topic = ''
         self.sync_count = -1
         self.seg_count = 0
@@ -313,20 +316,21 @@ class DataProcess(object):
             # init_check = True : force background initialization from
             # early frames
             if save_res and self.sync_count == 0 and not append:
-                [os.remove(os.path.join(
-                    self.save_path,
-                    str(self.fold_count),
-                    f)) for f in os.listdir(
-                        os.path.join(self.save_path,
-                                     str(0)))
-                 if f.endswith('.png') or
-                 f.endswith('.txt')]
+                for root, directories,filenames in os.walk(self.save_path):
+                    for filename in filenames:
+                        if filename.endswith('.png') or filename.endswith('.txt'):
+                            os.remove(os.path.join(root,filename))
             else:
                 if append:
                     self.append_data = True
             if save_res:
                     makedir(os.path.join(self.save_path,
+                                         co.CONST['mv_obj_fold_name'],
                                  str(self.fold_count)))
+                    makedir(os.path.join(self.save_path,
+                                         co.CONST['hnd_mk_fold_name'],
+                                 str(self.fold_count)))
+
             if check or init_check:
                 filtered_cv_image = cv_image.copy()
                 for _ in range(2):
@@ -359,14 +363,24 @@ class DataProcess(object):
                     else:
                         self.seg_count += 1
                         self.fold_count += 1
-                        if save_res:
-                            makedir(os.path.join(self.save_path,
-                                                 str(self.fold_count)))
+                        if save_res and os.path.isdir(os.path.join(
+                            self.save_path,co.CONST['mv_obj_fold_name'],
+                            str(self.fold_count))):
                             [os.remove(os.path.join(
-                                self.save_path,
+                                self.save_path,co.CONST['mv_obj_fold_name'],
                                 str(self.fold_count),
                                 f)) for f in os.listdir(
                                     os.path.join(self.save_path,
+                                                 co.CONST['mv_obj_fold_name'],
+                                                 str(self.fold_count)))
+                             if f.endswith('.png') or
+                             f.endswith('.txt')]
+                            [os.remove(os.path.join(
+                                self.save_path,co.CONST['hnd_mk_fold_name'],
+                                str(self.fold_count),
+                                f)) for f in os.listdir(
+                                    os.path.join(self.save_path,
+                                                 co.CONST['mv_obj_fold_name'],
                                                  str(self.fold_count)))
                              if f.endswith('.png') or
                              f.endswith('.txt')]
@@ -459,7 +473,7 @@ class DataProcess(object):
                 except:
                     pass
                 if mask is not None:
-                    res =(mask * mog2_res > 0) * frame
+                    res =(mog2_res > 0) * frame
                     # provide invariance to rotation of link
                     last_link = (self.skeleton.skeleton[-1][1] -
                                  self.skeleton.skeleton[-1][0])
@@ -509,18 +523,37 @@ class DataProcess(object):
                         self.data[reg_key].sync.append(frame_sync)
                     else:
                         cv2.imwrite(os.path.join(
-                            self.save_path,
+                            self.save_path,co.CONST['mv_obj_fold_name'],
                             str(self.fold_count),
                             str(frame_sync).zfill(self.str_len)) + '.png',res)
+                        cv2.imwrite(os.path.join(
+                            self.save_path,co.CONST['hnd_mk_fold_name'],
+                            str(self.fold_count),
+                            str(frame_sync).zfill(self.str_len)) + '.png',mask)
+
                         with open(os.path.join(self.save_path,
+                                               co.CONST['mv_obj_fold_name'],
                                                str(self.fold_count),
                                                'angles.txt'), 'a') as out:
                             out.write("%f\n" % derotate_angle)
                         with open(os.path.join(self.save_path,
+                                               co.CONST['mv_obj_fold_name'],
                                                str(self.fold_count),
                                                'centers.txt'), 'a') as out:
                             out.write("%f %f\n" % (derotate_center[0],
                                         derotate_center[1]))
+                        try:
+                            self.skeletons[os.path.join(
+                                self.save_path,co.CONST['mv_obj_fold_name'],
+                                str(self.fold_count))].append(
+                                    [self.skeleton.skeleton,
+                                     self.skeleton.skeleton_widths])
+                        except KeyError:
+                            self.skeletons[os.path.join(
+                                self.save_path,co.CONST['mv_obj_fold_name'],
+                                str(self.fold_count))] = [
+                                    [self.skeleton.skeleton,
+                                     self.skeleton.skeleton_widths]]
 
             if dialog is not None:
                 wx.Yield()
