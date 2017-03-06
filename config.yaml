@@ -77,6 +77,8 @@ STD_big_filt_window: 40 #window of buffers, not frames
 action_separation_thres: 0
 buffer_max_misses: 4
 buffer_size: 10
+buffer_confidence_tol: 0.25
+filt_window_confidence_tol: 0.75
 kernel : linear #for SVMs classifier
 #Variables for hand segmentation
 max_link_number : 6

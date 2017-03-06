@@ -37,6 +37,8 @@ class Classifier(object):
                  buffer_size=co.CONST['buffer_size'],
                  sparse_dim=co.CONST['sparse_dim'],
                  features=['3DXYPCA', 'GHOG', '3DHOF'],
+                 post_pca=False,
+                 post_pca_components=1,
                  ispassive=False,
                  use='svms', num_of_cores=4, name='',
                  num_of_estimators=None,
@@ -54,7 +56,13 @@ class Classifier(object):
             self.num_of_estimators = co.CONST['RF_trees']
         classifier_params = {'kernel': self.kernel,
                              'num_of_estimators': self.num_of_estimators}
-        dynamic_params = {'buffer_size': buffer_size}
+        dynamic_params = {'buffer_size': buffer_size,
+                          'buffer_confidence_tol':co.CONST['buffer_confidence_tol'],
+                          'filt_window':co.CONST['STD_big_filt_window'],
+                          'filt_window_confidence_tol':
+                          co.CONST['filt_window_confidence_tol'],
+                          'post_pca':post_pca,
+                          'post_pca_components':post_pca_components}
         if use_sparse:
             if not isinstance(sparse_dim, list) :
                    sparse_dim = [sparse_dim] * len(features)
@@ -64,13 +72,32 @@ class Classifier(object):
             sparse_params = dict(zip(features,sparse_dim))
         else:
             sparse_params = None
+        testing_params = {'online': None}
+        fil = os.path.join(co.CONST['rosbag_location'],
+                           'gestures_type.csv')
+        self.passive_actions = None
+        self.dynamic_actions = None
+        if os.path.exists(fil):
+            with open(fil, 'r') as inp:
+                for line in inp:
+                    if line.split(':')[0] == 'Passive':
+                        self.passive_actions = line.split(
+                            ':')[1].rstrip('\n').split(',')
+                    elif line.split(':')[0] == 'Dynamic':
+                        self.dynamic_actions = line.split(
+                            ':')[1].rstrip('\n').split(',')
         LOG.info('Extracting: ' + str(features))
         self.parameters = {'classifier': use,
                            'features': features,
+                           'dynamic_params': dynamic_params,
                            'classifier_params': classifier_params,
                            'sparse_params': sparse_params,
                            'passive': ispassive,
-                           'sparsecoded': use_sparse}
+                           'sparsecoded': use_sparse,
+                           'testing': False,
+                           'testing_params':testing_params,
+                           'dynamic_actions':self.dynamic_actions,
+                           'passive_actions':self.passive_actions}
         self.features = features
         self.add_info = add_info
         self.log_lev = log_lev
@@ -101,6 +128,8 @@ class Classifier(object):
             info += ' with buffer size ' + str(self.buffer_size)
         if use_sparse:
             info += ' sparse dimension(s) ' + str(self.sparse_dim)
+        if post_pca:
+            info += ' with post time-pca'
         self.full_info = info.title()
         if self.add_info:
             info += self.add_info
@@ -120,32 +149,14 @@ class Classifier(object):
             self.classifier_type =\
                 RandomForestClassifier(self.num_of_estimators)
 
-        # Core variables
-        self.features_extraction = ara.FeatureExtraction(self.parameters)
-        self.action_recog = ara.ActionRecognition(
-            self.parameters,
-            log_lev=log_lev)
         self.unified_classifier = None
-        self.use_sparse = use_sparse
+        self.sparsecoded = use_sparse
         self.sparse_coders = None  # is loaded from memory
 
         # Training variables
         self.one_v_all_traindata = None
         self.train_ground_truth = None  # is loaded from memory after training
         self.train_classes = None  # is loaded from memory after training
-        self.allowed_train_actions = None
-        if ispassive:
-            fil = os.path.join(co.CONST['rosbag_location'],
-                               'gestures_type.csv')
-            self.allowed_train_actions = []
-            if os.path.exists(fil):
-                with open(fil, 'r') as inp:
-                    for line in inp:
-                        if line.split(':')[0] == 'Static':
-                            self.allowed_train_actions = line.split(
-                                ':')[1].rstrip('\n').split(',')
-            else:
-                self.allowed_train_actions = None
 
         # Testing general variables
         self.scores = None
@@ -217,13 +228,13 @@ class Classifier(object):
                     for count,classifier in enumerate(self.trained_classifiers):
                         out.write(classifier + ':' + str(count)+'\n')
                     self.classifiers_list[classifier] = str(count)
-        self.dicts_to_train = []
-        if self.use_sparse:
+        self.coders_to_train = []
+        if self.sparsecoded:
             self.sparse_coders = [None] * len(
                 self.parameters['features'])
             try:
                 with open('all_sparse_coders.pkl', 'r') as inp:
-                    LOG.info('Loading dictionaries from: ' +
+                    LOG.info('Loading coders from: ' +
                              'sparse_coders.pkl')
                     self.all_sparse_coders = pickle.load(inp)
                     for feat_count,feature in enumerate(
@@ -235,11 +246,22 @@ class Classifier(object):
                                         str(self.parameters['sparse_params'][
                                             feature])]
                         except KeyError:
-                            self.dicts_to_train.append(feat_count)
+                            self.coders_to_train.append(feat_count)
             except (IOError, EOFError):
                 self.all_sparse_coders = {}
+                self.coders_to_train = range(len(self.parameters['features']))
+            self.parameters['sparse_params']['trained_coders'] = len(
+                self.coders_to_train)==0
+        else:
+            self.sparse_coders = None
+        #parameters bound variables
+        self.features_extraction = ara.FeatureExtraction(self.parameters)
+        self.action_recog = ara.ActionRecognition(
+            self.parameters,
+            coders=self.sparse_coders,
+            log_lev=log_lev)
 
-    def initialize_classifier(self, classifier=None):
+    def initialize_classifier(self, classifier):
         self.unified_classifier = classifier
         if self.use == 'svms' or self.use == 'mixed':
             self.decide = self.unified_classifier.decision_function
@@ -301,7 +323,7 @@ class Classifier(object):
         self.testdata = None
         self.testing_initialized = True
 
-    def run_training(self, dict_train_act_num=None, dicts_retrain=False,
+    def run_training(self, dict_train_act_num=None, coders_retrain=False,
                      classifiers_retrain=False, test_against_training=False,
                      training_datapath=None, classifier_savename=None,
                      num_of_cores=4, buffer_size=None, classifier_save=True,
@@ -313,20 +335,25 @@ class Classifier(object):
         For testing:
             If a testing using training data is to be used, then
             <test_against_training> is to be True
-        For dictionaries training:
-            Train dictionaries using <dict_train_act_num>-th action. Do not
-            train dictionaries if save file already exists or <dicts_retrain>
+        For coders training:
+            Train coders using <dict_train_act_num>-th action. Do not
+            train coders if save file already exists or <coders_retrain>
             is False. If <dict_train_act_num> is <None> , then train
-            dictionaries using all available actions
+            coders using all available actions
         For svm training:
             Train ClassifierS with <num_of_cores> and buffer size <buffer_size>.
             Save them if <classifier_save> is True to <classifiers_savepath>. Do not train
             if <classifiers_savepath> already exists and <classifiers_retrain> is False.
         '''
+        self.parameters['testing'] = False
         LOG.info(self.full_info + ':')
-        if self.use_sparse:
-            if dicts_retrain:
-                self.dicts_to_train = range(len(self.parameters['features']))
+        if self.sparsecoded:
+            if coders_retrain:
+                if isinstance(coders_retrain, list):
+                    self.coders_to_train = coders_retrain
+                else:
+                    self.coders_to_train = range(len(self.parameters['features']))
+                self.parameters['sparse_params']['trained_coders'] = False
         if classifier_savename is None:
             classifier_savename = 'trained_'
             classifier_savename += self.full_info.replace(' ', '_').lower()
@@ -338,22 +365,27 @@ class Classifier(object):
             classifiers_retrain = True
         if buffer_size is not None:
             self.buffer_size = buffer_size
-        if classifiers_retrain or self.dicts_to_train or test_against_training:
-            if self.dicts_to_train:
+        if classifiers_retrain or self.coders_to_train or test_against_training:
+            if self.coders_to_train:
                 max_act_samples = None
             self.prepare_training_data(training_datapath, max_act_samples,
                                        visualize_feat=visualize_feat)
-        if self.use_sparse:
-            self.process_dictionaries(train_act_num=dict_train_act_num,
+        if self.sparsecoded:
+            self.process_coders(train_act_num=dict_train_act_num,
                                       min_iterations=min_dict_iterations,
                                       max_act_samples=max_act_samples)
 
-        if self.use_sparse and (classifiers_retrain or test_against_training):
+        if self.sparsecoded and self.coders_to_train and (
+            classifiers_retrain or test_against_training):
+            #Enters only if coders were not initially trained or had to be
+            #retrained. Otherwise, sparse features are computed when
+            #<Action.add_features> is called
             LOG.info('Making Sparse Features..')
             self.action_recog.actions.update_sparse_features(
                 self.sparse_coders,
                 max_act_samples=max_act_samples,
-                fss_max_iter=self.fss_max_iter)
+                fss_max_iter=self.fss_max_iter,
+                last_only=False)
         self.process_training(num_of_cores, classifiers_retrain,
                               classifier_savename, classifier_save,
                               test_against_training)
@@ -370,9 +402,15 @@ class Classifier(object):
             path = co.CONST['actions_path']
         self.train_classes = [name for name in os.listdir(path)
                               if os.path.isdir(os.path.join(path, name))][::-1]
-        if self.allowed_train_actions is not None:
-            self.train_classes = [clas for clas in self.train_classes if clas
-                                  in self.allowed_train_actions]
+        if self.ispassive:
+            if self.passive_actions is not None:
+                self.train_classes = [clas for clas in self.train_classes if clas
+                                      in self.passive_actions]
+        #DEBUGGING
+        if not self.ispassive:
+            if self.dynamic_actions is not None:
+                self.train_classes = [clas for clas in self.train_classes if clas
+                                      in self.dynamic_actions]
         for action in self.train_classes:
             if not isinstance(visualize_feat, bool):
                 try:
@@ -381,33 +419,42 @@ class Classifier(object):
                     visualize = action in visualize_feat
             else:
                 visualize = visualize_feat
-            self.action_recog.add_action(data=os.path.join(path, action),
+            LOG.info('Action:'+action)
+            self.action_recog.add_action(name=action,
+                                         data=os.path.join(path, action),
                                          use_dexter=False,
                                          ispassive=self.ispassive,
                                          max_act_samples=max_act_samples,
                                          fss_max_iter=fss_max_iter,
                                          visualize_=visualize)
 
-    def process_dictionaries(self, train_act_num=None,
-                             dictionaries_savepath=None, min_iterations=3,
+    def process_coders(self, train_act_num=None,
+                             coders_savepath=None, min_iterations=10,
                              max_act_samples=None):
         '''
-        Train dictionaries using <train_act_num>-th action or load them if
+        Train coders using <train_act_num>-th action or load them if
             <retrain> is False and save file exists. <max_act_samples> is the
             number of samples to be sparse coded after the completion of the
             training/loading phase and defines the training data size
             of each action.
         '''
-        if dictionaries_savepath is None:
-            dictionaries_savepath = 'all_sparse_coders.pkl'
-        if self.dicts_to_train is not None and self.dicts_to_train:
-            LOG.info('Training dictionaries..')
-            self.action_recog.train_sparse_dictionaries(
-                dicts_to_train = self.dicts_to_train,
+        if coders_savepath is None:
+            coders_savepath = 'all_sparse_coders.pkl'
+        if self.coders_to_train is not None and self.coders_to_train:
+            LOG.info('Training coders..')
+            self.action_recog.train_sparse_coders(
+                coders_to_train = self.coders_to_train,
                 codebooks_dict=self.all_sparse_coders,
                 min_iterations=min_iterations)
-            with open(dictionaries_savepath, 'w') as out:
+            self.parameters['sparse_params']['trained_coders'] = True
+            with open(coders_savepath, 'w') as out:
                 pickle.dump(self.all_sparse_coders, out)
+            self.sparse_coders[
+                self.coders_to_train] = (
+                    self.action_recog.sparse_helper.sparse_coders[
+                        self.coders_to_train])
+        self.action_recog.sparse_helper.sparse_coders = (
+            self.sparse_coders)
 
     def process_training(self, num_of_cores=4, retrain=False,
                          savepath=None, save=True,
@@ -429,62 +476,24 @@ class Classifier(object):
             else:
                 LOG.info('Preparing Classifiers Train Data..')
             if not self.ispassive:
-                initial_traindata = []
-                if self.use_sparse:
-                    for action in self.action_recog.actions.actions:
-                        initial_traindata.append(np.concatenate(tuple(action.
-                                                                      sparse_features),
-                                                                axis=0))
-                else:
-                    for action in self.action_recog.actions.actions:
-                        initial_traindata.append(np.concatenate(tuple(action.features),
-                                                                axis=0))
+                acts_buffers = [action.retrieve_buffers()
+                               for action in self.action_recog.actions.actions]
 
-                traindata_samples_inds = [
-                    action.samples_indices
-                    for action in self.action_recog.actions.actions]
-                traindata_frames_inds = [
-                    action.sync for action in self.action_recog.actions.actions]
-                acts_buffers = []
-                for data, frames_samples_inds, frames_inds in zip(
-                        initial_traindata, traindata_samples_inds,
-                        traindata_frames_inds):
-                    act_buffers = []
-                    for count in range(data.shape[1] - self.buffer_size):
-                        # Checking if frames that are to get inside the same buffer
-                        # belong to the same sample
-                        # and are not too timespace distant from each other
-                        # If every condition holds then the buffer is generated
-                        if (len(np.unique(
-                            frames_samples_inds[count:count +
-                                                self.buffer_size])) == 1
-                            and
-                            np.all(np.abs(np.diff(frames_inds[count:count +
-                                                              self.buffer_size]))
-                                   <=
-                                   self.buffer_size / 4)):
-                            act_buffers.append(np.atleast_2d(
-                                data[:, count:count + self.buffer_size].ravel()))
-                    acts_buffers.append(act_buffers)
+                acts_buffers = [np.swapaxes(buffers,1,2).reshape(
+                    buffers.shape[0],-1) for buffers in acts_buffers]
                 LOG.info('Train Data has ' + str(len(acts_buffers)) +
                          ' buffer lists. First buffer list has length ' +
                          str(len(acts_buffers[0])) +
                          ' and last buffer has shape ' +
                          str(acts_buffers[0][-1].shape))
-                LOG.info('Joining buffers..')
-                multiclass_traindata = []
-                for act_buffers in acts_buffers:
-                    multiclass_traindata.append(
-                        np.concatenate(tuple(act_buffers), axis=0))
+                multiclass_traindata = acts_buffers
             else:
-                if self.use_sparse:
-                    multiclass_traindata = [np.concatenate(
-                        tuple(action.sparse_features), axis=0).T for
+                if self.sparsecoded:
+                    multiclass_traindata = [action.retrieve_sparse_features() for
                         action in
                         self.action_recog.actions.actions]
                 else:
-                    multiclass_traindata = [np.concatenate(
-                        tuple(action.features), axis=0).T for
+                    multiclass_traindata = [action.retrieve_features() for
                         action in
                         self.action_recog.actions.actions]
 
@@ -546,31 +555,22 @@ class Classifier(object):
         '''
         LOG.info('Processing test data..')
         LOG.info('Extracting features..')
-        features, self.test_sync = self.action_recog.add_action(
+        features, frame_inds = self.action_recog.add_action(
+            name='test',
             data=datapath,
             for_testing=True,
             ispassive=self.ispassive,
             fss_max_iter=100)
-        features = np.concatenate(tuple(features), axis=0)
         if not self.ispassive:
-            act_buffers = []
-            frames_inds = self.action_recog.actions.testing.sync
-            test_buffers_start_inds = []
-            test_buffers_end_inds = []
-            for count in range(features.shape[1] - self.buffer_size):
-                if np.all(np.abs(np.diff(frames_inds[count:count +
-                                                     self.buffer_size])) <=
-                          self.buffer_size / 4):
-
-                    act_buffers.append(np.atleast_2d(features[:, count:count +
-                                                              self.buffer_size].ravel()))
-                    test_buffers_start_inds.append(frames_inds[count])
-                    test_buffers_end_inds.append(frames_inds[count +
-                                                             self.buffer_size])
-            testdata = np.concatenate(tuple(act_buffers), axis=0)
+            self.test_sync = frame_inds[0]
+            test_buffers_start_inds = frame_inds[1]
+            test_buffers_end_inds = frame_inds[2]
+            testdata = np.swapaxes(features,1,2).reshape(
+                    features.shape[0],-1)
             return testdata, test_buffers_start_inds, test_buffers_end_inds
         else:
-            testdata = features.T
+            self.test_sync = frame_inds
+            testdata = features
             return testdata
 
     def construct_ground_truth(self, data=None, ground_truth_type=None,
@@ -855,12 +855,13 @@ class Classifier(object):
         data.
         Built as a convenience method, in case <self.run_testing> gets overriden.
         '''
+        self.parameters['testing'] = True
+        self.parameters['testing_params']['online'] = online
+        self.tester = ara.Action(self.parameters,name='test',coders=self.sparse_coders)
         if online:
             self.reset_online_test()
         else:
             self.reset_offline_test()
-        if self.use_sparse:
-            self.action_recog.dictionaries.sparse_dicts = self.sparse_coders
         self.scores_filter_shape = scores_filter_shape
         self.std_small_filter_shape = std_small_filter_shape
         self.std_big_filter_shape = std_big_filter_shape
@@ -975,7 +976,8 @@ class Classifier(object):
                             data)
                     self.testdata = testdata
                     LOG.info(self.full_info + ':')
-                    LOG.info('Testing Classifiers..')
+                    LOG.info('Testing Classifiers using testdata with size: '
+                             +str(testdata.shape))
                     self.scores = self.decide(
                         testdata)
                     if not self.ispassive:
@@ -1056,29 +1058,33 @@ class Classifier(object):
                 times_mat.append(preproc_t)
                 orient.append('bot')
                 ver_labels.append('Preprocessing')
-            _t_ = np.atleast_2d(np.array(
-                self.action_recog.actions.sparse_time)) * 1000
-            if len(_t_[0]) > 0:
-                sparse_t = np.concatenate([np.mean(_t_, axis=1)[:, None],
-                                           np.max(_t_, axis=1)[
-                    :, None],
-                    np.min(_t_, axis=1)[
-                    :, None],
-                    np.median(_t_, axis=1)[:,
-                                           None]], axis=1)
-                LOG.info('Mean sparse coding time ' +
-                         str(sparse_t[:, 0]) + 'ms')
-                LOG.info('Max sparse coding time ' +
-                         str(sparse_t[:, 1]) + ' ms')
-                LOG.info('Min sparse coding time ' +
-                         str(sparse_t[:, 2]) + ' ms')
-                LOG.info('Median sparse coding time ' +
-                         str(sparse_t[:, 3]) + ' ms')
-                times_mat.append(sparse_t)
-                orient.append('bot')
-                ver_labels += ['Sparse Coding '
-                               + feature for feature in
-                               self.parameters['features']]
+            try:
+                _t_ = np.atleast_2d(np.array(
+                    self.action_recog.actions.sparse_time)) * 1000
+                _t_ = np.array(_t_).T
+                if len(_t_[0]) > 0:
+                    sparse_t = np.concatenate([np.mean(_t_, axis=1)[:, None],
+                                               np.max(_t_, axis=1)[
+                        :, None],
+                        np.min(_t_, axis=1)[
+                        :, None],
+                        np.median(_t_, axis=1)[:,
+                                               None]], axis=1)
+                    LOG.info('Mean sparse coding time ' +
+                             str(sparse_t[:, 0]) + 'ms')
+                    LOG.info('Max sparse coding time ' +
+                             str(sparse_t[:, 1]) + ' ms')
+                    LOG.info('Min sparse coding time ' +
+                             str(sparse_t[:, 2]) + ' ms')
+                    LOG.info('Median sparse coding time ' +
+                             str(sparse_t[:, 3]) + ' ms')
+                    times_mat.append(sparse_t)
+                    orient.append('bot')
+                    ver_labels += ['Sparse Coding '
+                                   + feature for feature in
+                                   self.parameters['features']]
+            except TypeError:
+                pass
             _t_ = np.array(self.action_recog.actions.
                            features_extract.extract_time) * 1000
             if len(_t_) > 0:
@@ -1161,65 +1167,18 @@ class Classifier(object):
                                         img_count=self.img_count,
                                         isderotated=False)
         features = self.features_extraction.extract_features()
-        if not self.ispassive:
-            if features is not None:
-                self.frame_exists.append(True)
-                if self.use_sparse:
-                    sparse = []
-                    for count,(feat_name, sparse_dim) in enumerate(zip(
-                        self.parameters['features'],
-                        self.parameters['sparse_dim'])):
-                        sparse.append(self.sparse_coders[count].
-                                      code(features[count]))
-                    features = np.atleast_2d(
-                        np.concatenate(tuple(sparse),
-                            axis=0).ravel())
-                else:
-                    features = np.atleast_2d(np.concatenate(
-                        tuple(features), axis=0).ravel())
-                if len(self._buffer) < self.buffer_size:
-                    self._buffer = self._buffer + [features]
-                    self.buffer_exists.append(False)
-                    self.scores_exist.append(False)
-                    return False, np.array([[None] *
-                                            len(self.train_classes)]).astype(
-                        np.float64)
-                else:
-                    self._buffer = self._buffer[1:] + [features]
-            else:
-                self.frame_exists.append(False)
-            # require that buffer is compiled by frames that are approximately
-            #   continuous
-            if (sum(self.frame_exists[-(self.buffer_size
-                                        + co.CONST['buffer_max_misses']):])
-                    >= self.buffer_size):
-                self.buffer_exists.append(True)
-            else:
-                self.buffer_exists.append(False)
-                self.scores_exist.append(False)
-                return False, np.array([[None] *
-                                        len(self.train_classes)]).astype(
-                    np.float64)
-            # require that buffers' window is contiguous in order to compute
-            # mean STD
-            existence = self.buffer_exists[
-                - min(self.mean_from,
-                      co.CONST['STD_big_filt_window']
-                      + self.buffer_size):]
-            if sum(existence) < 3 * len(existence) / 4:
-                self.scores_exist.append(False)
-                return False, np.array([[None] *
-                                        len(self.train_classes)]).astype(
-                    np.float64)
-            elif sum(existence) == 3 * len(existence) / 4:
-                self.mean_from = 0
-            inp = np.concatenate(tuple(self._buffer), axis=0).T.reshape(1, -1)
-            # scores can be computed if and only if current buffer exists and
-            #   buffers' window for mean STD exists and is approximately
-            #   continuous
-            self.scores_exist.append(True)
+        valid = False
+        if features is not None:
+            valid, _ = self.tester.add_features_group(self.img_count, features=features)
+        if not valid or features is None:
+            self.scores_exist.append(False)
+            return False, np.array([None]*len(self.train_classes))
         else:
-            inp = features[0].reshape(1, -1)
+            self.scores_exist.append(True)
+        if not self.sparsecoded:
+            inp = self.tester.retrieve_features()
+        else:
+            inp = self.tester.retrieve_sparse_features()
         score = (self.decide(inp))
         self.scores.append(score)
         if not just_scores:
@@ -1672,11 +1631,12 @@ def signal_handler(sig, frame):
 
 def construct_dynamic_actions_classifier(testname='actions', train=False,
                                          test=True, visualize=True,
-                                         dicts_retrain=False, hog_num=None,
+                                         coders_retrain=False, hog_num=None,
                                          name='actions', use_sparse=False,
                                          sparse_dim=None, test_against_all=False,
                                          visualize_feat=False, kernel=None,
-                                         features=['GHOG']):
+                                         features=['GHOG'], post_pca=False,
+                                         post_pca_components=1):
     '''
     Constructs an SVMs classifier with input 3DHOF and GHOG features
     '''
@@ -1687,9 +1647,10 @@ def construct_dynamic_actions_classifier(testname='actions', train=False,
                              name=name, sparse_dim=sparse_dim,
                              use_sparse=use_sparse,
                              features=features,
-                             kernel=kernel)
+                             kernel=kernel, post_pca=post_pca,
+                             post_pca_components=post_pca_components)
     actions_svm.run_training(classifiers_retrain=train,
-                             dicts_retrain=dicts_retrain,
+                             coders_retrain=coders_retrain,
                              visualize_feat=visualize_feat)
     if test or visualize:
         if test_against_all:
@@ -1773,43 +1734,63 @@ CH.setFormatter(logging.Formatter(
 LOG.handlers = []
 LOG.addHandler(CH)
 LOG.setLevel(logging.INFO)
+TRAIN_ALL_SPARSE = construct_dynamic_actions_classifier(
+    train=True,features=['GHOG', 'ZHOF', '3DHOF', '3DXYPCA'],
+    use_sparse=True)
 POSES_CLASSIFIER = construct_passive_actions_classifier(train=False, test=False,
                                                         visualize=False,
                                                         test_against_all=False)
+ACTIONS_CLASSIFIER_SIMPLE = construct_dynamic_actions_classifier(
+    train=False,
+    test=False,
+    visualize=False,
+    use_sparse=False,
+    test_against_all=True)
 ACTIONS_CLASSIFIER_SPARSE = construct_dynamic_actions_classifier(train=False,
-                                                                 dicts_retrain=False,
+                                                                 coders_retrain=False,
                                                                  test=False,
                                                                  visualize=False,
                                                                  test_against_all=True,
                                                                  use_sparse=True)
-
-'''
-ACTIONS_CLASSIFIER_SIMPLE_WITH_3DHOF_RBF = construct_dynamic_actions_classifier(
+ACTIONS_CLASSIFIER_SIMPLE_WITH_ZHOF = construct_dynamic_actions_classifier(
+    train=False, test=False, visualize=False, test_against_all=False,
+    features=['GHOG','ZHOF'])
+ACTIONS_CLASSIFIER_SPARSE_WITH_ZHOF = construct_dynamic_actions_classifier(
+    train=False, test=False, visualize=False, test_against_all=True,
+    features=['GHOG','ZHOF'], coders_retrain=False, use_sparse=True,
+    kernel='linear')
+ACTIONS_CLASSIFIER_SIMPLE_WITH_ZHOF_POST_PCA = construct_dynamic_actions_classifier(
     train=True, test=True, visualize=True, test_against_all=True,
-    features=['GHOG','3DHOF'], kernel='rbf')
-'''
+    features=['GHOG','ZHOF'],post_pca=True, post_pca_components=4)
+
+
+ACTIONS_CLASSIFIER_SIMPLE_POST_PCA = construct_dynamic_actions_classifier(
+    train=False,
+    test=False,
+    visualize=False,
+    use_sparse=False,
+    test_against_all=False,
+    post_pca=True,
+    post_pca_components=2)
+
 ACTIONS_CLASSIFIER_SIMPLE_WITH_3DHOF = construct_dynamic_actions_classifier(
     train=False, test=False, visualize=False, test_against_all=False,
     features=['GHOG','3DHOF'], kernel='linear')
 ACTIONS_CLASSIFIER_SPARSE_WITH_3DHOF = construct_dynamic_actions_classifier(
-    train=True, test=True, visualize=True, test_against_all=True,
-    features=['GHOG','3DHOF'], dicts_retrain=False, use_sparse=True,
+    train=False, test=False, visualize=False, test_against_all=True,
+    features=['GHOG','3DHOF'], coders_retrain=False, use_sparse=True,
     kernel='linear')
-ACTIONS_CLASSIFIER_SIMPLE_WITH_ZHOF = construct_dynamic_actions_classifier(
+ACTIONS_CLASSIFIER_SIMPLE_WITH_3DHOF_POST_PCA = construct_dynamic_actions_classifier(
     train=True, test=True, visualize=True, test_against_all=True,
-    features=['GHOG','ZHOF'])
-ACTIONS_CLASSIFIER_SPARSE_WITH_ZHOF = construct_dynamic_actions_classifier(
-    train=True, test=True, visualize=True, test_against_all=True,
-    features=['GHOG','ZHOF'], dicts_retrain=False, use_sparse=True,
-    kernel='linear')
+    features=['GHOG','3DHOF'],post_pca=True, post_pca_components=2)
 '''
 ACTIONS_CLASSIFIER_SPARSE_WITH_ZHOF_RBF = construct_dynamic_actions_classifier(
     train=True, test=True, visualize=True, test_against_all=True,
-    features=['GHOG','ZHOF'], dicts_retrain=False, use_sparse=True,
+    features=['GHOG','ZHOF'], coders_retrain=False, use_sparse=True,
     kernel='rbf')
 ACTIONS_CLASSIFIER_SIMPLE_WITH_ZHOF_RBF = construct_dynamic_actions_classifier(
     train=True, test=True, visualize=True, test_against_all=True,
-    features=['GHOG','ZHOF'], dicts_retrain=False, use_sparse=False,
+    features=['GHOG','ZHOF'], coders_retrain=False, use_sparse=False,
     kernel='rbf')
 ACTIONS_CLASSIFIER_SIMPLE_RBF = construct_dynamic_actions_classifier(
     train=False,
@@ -1819,12 +1800,6 @@ ACTIONS_CLASSIFIER_SIMPLE_RBF = construct_dynamic_actions_classifier(
     test_against_all=True,
     kernel='rbf')
 '''
-ACTIONS_CLASSIFIER_SIMPLE = construct_dynamic_actions_classifier(
-    train=False,
-    test=False,
-    visualize=False,
-    use_sparse=False,
-    test_against_all=True)
 
 #    visualize_feat=True)
 #    visualize_feat=['Fingerwave in'])

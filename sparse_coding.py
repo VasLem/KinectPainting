@@ -101,7 +101,8 @@ class SparseCoding(object):
                                       display_error=False,
                                       max_iter=0,
                                       single=False, timed=True,
-                                      starting_points=None):
+                                      starting_points=None,
+                                      training=False):
         '''
         Returns sparse features representation
         '''
@@ -123,7 +124,6 @@ class SparseCoding(object):
             step2 = 0
         else:
             step2 = 1
-        singularity_met = False
         count = 0
         prev_objval = 0
         if max_iter == 0:
@@ -131,6 +131,10 @@ class SparseCoding(object):
         else:
             self.max_iter = max_iter
         self.prev_sparse_feats = None
+        prev_error = 0
+        initial_energy = compute_lineq_error(inp_features, 0,
+                                                              0)
+        LOG.debug('Initial Signal Energy: ' + str(initial_energy))
         for count in range(self.max_iter):
             # Step 2    
             if step2:
@@ -258,40 +262,55 @@ class SparseCoding(object):
                                   'output vector correction: ' + str(final_error))
                         if display_error:
                             LOG.debug('Final Error' + str(final_error))
-                        return final_error, singularity_met
-                    return None, None
+                        return final_error, True
+                    return None, True
                 else:
                     # go to step 2
                     step2 = 1
             else:
                 # go to step 3
                 step2 = 0
-            if count % 100 == 0:
+            if count % 20 == 0:
                 interm_error = compute_lineq_error(
                     self.inp_features, self.bmat,
                     self.sparse_features)
+                if interm_error == prev_error or interm_error > initial_energy:
+                    break
+                else:
+                    prev_error = interm_error
                 LOG.debug('\t Epoch:' + str(count))
                 LOG.debug('\t\t Intermediate Error=' +
                           str(interm_error))
                 if interm_error < 0.001:
                     LOG.debug('Too small error, asssuming  convergence')
                     break
-        LOG.debug('Algorithm did not converge' +
+        if initial_energy <= interm_error:
+            if not training:
+                LOG.warning('FSS Algorithm did not converge, using pseudoinverse' +
+                            ' of provided codebook instead')
+                self.sparse_features=dot(pinv(self.bmat),self.inp_features).ravel()
+            else:
+                LOG.warning('FSS Algorithm did not converge,' +
+                            ' removing sample from training dataset...')
+                self.sparse_features = None
+            return (interm_error), False
+        else:
+            LOG.debug('FSS Algorithm did not converge' +
                   ' in the given iterations with' +
                   ' error ' + str(interm_error) +
                   ', you might want to change' +
                   ' tolerance or increase iterations')
-        if not single:
-            if self.sparse_feat_list is None:
-                self.sparse_feat_list = [self.sparse_features.ravel()]
-            else:
-                self.sparse_feat_list.append(self.sparse_features.ravel())
-        if ret_error:
-            return (compute_lineq_error(self.inp_features, self.bmat,
-                                        self.sparse_features),
-                    singularity_met)
-        self.sparse_features = self.sparse_features.ravel()
-        return None, None
+            if not single:
+                if self.sparse_feat_list is None:
+                    self.sparse_feat_list = [self.sparse_features.ravel()]
+                else:
+                    self.sparse_feat_list.append(self.sparse_features.ravel())
+            if ret_error:
+                return (compute_lineq_error(self.inp_features, self.bmat,
+                                            self.sparse_features),
+                        True)
+            self.sparse_features = self.sparse_features.ravel()
+            return None, True
 
     def lagrange_dual(self, lbd, ksi, _s_):
         '''
@@ -299,7 +318,7 @@ class SparseCoding(object):
         <ksi> is input, <_s_> is sparse,
         <lbd> is the lasso constraint coefficient
         '''
-        ksi = self.inp_feat_list
+        ksi = self.are_sparsecoded_inp
         ksist = dot(ksi, _s_.T)
         self.res_lbd = np.array(lbd)
         try:
@@ -368,10 +387,6 @@ class SparseCoding(object):
         '''
         Function to train nxm matrix using truncated newton method
         '''
-        self.prev_err = compute_lineq_error(self.inp_feat_list, self.bmat,
-                                            self.sparse_feat_list)
-        LOG.debug('Reconstruction error before dictionary training: ' +
-                  str(self.prev_err))
         fmin_tnc(self.lagrange_dual,
                  (self.res_lbd).tolist(),
                  fprime=self.lagrange_dual_grad,
@@ -385,24 +400,21 @@ class SparseCoding(object):
                  ftol=0.1,
                  xtol=0.001,
                  rescale=1.5,
-                 args=(self.inp_feat_list.copy(),
+                 args=(self.are_sparsecoded_inp.copy(),
                        self.sparse_feat_list.copy()))
 
         try:
-            bmat = dot(dot(self.inp_feat_list, self.sparse_feat_list.T),
+            bmat = dot(dot(self.are_sparsecoded_inp, self.sparse_feat_list.T),
                        inv(dot(self.sparse_feat_list,
                                self.sparse_feat_list.T) + diag(self.res_lbd)))
         except np.linalg.linalg.LinAlgError:
             LOG.warning('Singularity met while training dictionary')
-            bmat = dot(dot(self.inp_feat_list, self.sparse_feat_list.T),
+            bmat = dot(dot(self.are_sparsecoded_inp, self.sparse_feat_list.T),
                        inv(dot(self.sparse_feat_list,
                                self.sparse_feat_list.T) +
                            diag(self.res_lbd) +
                            0.01 * self.basis_constraint *
                            np.eye(self.res_lbd.shape[0])))
-        LOG.debug('Reconstruction error after dictionary correction: ' +
-                  str(compute_lineq_error(self.inp_feat_list,
-                                          bmat, self.sparse_feat_list)))
         return bmat
 # pylint: enable=no-member
 
@@ -462,26 +474,36 @@ class SparseCoding(object):
                 bar = None
                 errors = False
                 pass
+            are_sparsecoded = [] 
             for count, sample_count in enumerate(ran):
-                fin_error, _ = self.feature_sign_search_algorithm(data[:, sample_count],
+                fin_error, valid = self.feature_sign_search_algorithm(data[:, sample_count],
                                                    max_iter=feat_sign_max_iter,
-                                                   ret_error=errors,)
+                                                   ret_error=errors,training=True)
                                                    #starting_points=computed[sample_count])
-                if iter_count > 0:
-                    #do not trust first iteration sparse features, before
-                    #having trained the codebooks at least once
-                    computed[sample_count] = self.sparse_feat_list[-1]
+                are_sparsecoded.append(valid)
+                try:
+                    if iter_count > 0:
+                        #do not trust first iteration sparse features, before
+                        #having trained the codebooks at least once
+                        computed[sample_count] = self.sparse_feat_list[-1]
+                except (TypeError,AttributeError):
+                    pass
                 if pbar is not None:
                     sum_error += fin_error
                     pbar.update(count,error=sum_error/(count+1))
                 self.initialize(data.shape[0])
             self.inp_feat_list = np.transpose(np.array(self.inp_feat_list))
             self.sparse_feat_list = np.array(self.sparse_feat_list).T
-            prev_error = compute_lineq_error(self.inp_feat_list, self.bmat,
-                                             self.sparse_feat_list)
+            are_sparsecoded = np.array(
+                are_sparsecoded).astype(bool)
+            self.are_sparsecoded_inp = self.inp_feat_list[:, are_sparsecoded]
+            prev_error = compute_lineq_error(self.are_sparsecoded_inp, self.bmat,
+                self.sparse_feat_list)
             dictionary = self.conj_grad_dict_compute()
             curr_error = compute_lineq_error(
-                self.inp_feat_list, dictionary, self.sparse_feat_list)
+                self.are_sparsecoded_inp,
+                dictionary,
+                self.sparse_feat_list)
             self.sparse_feat_list = None
             self.inp_feat_list = None
             LOG.info('Reconstruction Error: ' + str(curr_error))

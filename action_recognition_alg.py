@@ -121,55 +121,197 @@ class Action(object):
     Class to hold an action
     '''
 
-    def __init__(self):
-        self.features = None
-        self.sparse_features = None
-        self.memory = None
+    def __init__(self, parameters, name, coders=None):
+        self.name = name
+        self.features = [[] for i in range(len(parameters['features']))]
+        self.sparse_features = [[] for i in range(len(parameters['features']))]
+        self.testing = parameters['testing']
+        self.online = parameters['testing_params']['online']
+        self.sparsecoded = parameters['sparsecoded']
+        self.passive = parameters['passive']
+        self.isdynamic = name not in parameters['passive_actions']
+        self.trained_coders = True
+        if self.sparsecoded:
+            self.trained_coders = parameters['sparse_params']['trained_coders']
+        if self.sparsecoded and coders is None:
+            raise Exception('Sparse Coders required')
+        self.coders = coders
+        if not self.passive and self.trained_coders:
+            self.buffer_size = parameters['dynamic_params']['buffer_size']
+            try:
+                self.bbuffer_size = parameters['dynamic_params'][
+                    'filt_window']
+                self.buffer_confidence_tol = parameters['dynamic_params'][
+                    'buffer_confidence_tol']
+                self.bbuffer_confidence_tol = parameters['dynamic_params'][
+                    'filt_window_confidence_tol']
+                self.post_pca = parameters['dynamic_params']['post_pca']
+                self.post_pca_components = parameters['dynamic_params'][
+                    'post_pca_components']
+            except (KeyError,IndexError,TypeError):
+                self.bbuffer_size = None
+                self.buffer_confidence_tol = None
+                self.bbuffer_confidence_tol = None
+            self.bbuffer = [[] for i in range(len(parameters['features']))]
+            self.bbbuffer = [[] for i in range(len(parameters['features']))]
+            self.buffer_exists = []
+            self.bbuffer_start_inds = []
+            self.bbuffer_end_inds = []
+            self.pca_features = []
+            if self.post_pca and not self.isdynamic:
+                self.buffer_size = self.post_pca_components
+        else:
+            if self.testing and self.online:
+                self.buffer_size = 1
+            else:
+                self.buffer_size = None
         self.sync = []
-        self.samples_indices = None
+        self.frames_inds = []
+        self.samples_inds = []
         self.angles = None
         self.name = ''
 
+    def add_buffer(self, buffer):
+        '''
+        <buffer> should have always the same size.
+        <self.bbuffer> is a list of buffers with a size limit, after which it
+        acts as a buffer (useful for shifting window
+        operations (filtering etc.))
+        '''
+        inp = buffer[:]
+        #check buffer contiguousness
+        check_cont = np.all(np.abs(np.diff(self.frames_inds[-self.buffer_size:])) <=
+                  self.buffer_size * self.buffer_confidence_tol)
+        #check if buffer frames belong to the same sample, in case of training
+        check_sam = self.testing or len(np.unique(
+                    self.samples_inds[-self.buffer_size:])) == 1
+        if check_cont and check_sam:
+            for count in range(len(inp)):
+                if self.post_pca and self.isdynamic:
+                    mean,inp[count] = cv2.PCACompute(
+                        np.array(inp[count]),
+                        np.array([]),
+                        maxComponents=self.post_pca_components)
+                    inp[count] = np.array(inp[count]) + mean
+                self.bbuffer[count] = (self.bbuffer[count][-self.bbuffer_size +
+                                                          1:] +
+                                       [inp[count][:]])
+            self.bbuffer_start_inds.append(self.frames_inds[-self.buffer_size])
+            self.bbuffer_end_inds.append(self.frames_inds[-1])
+            self.buffer_exists = self.buffer_exists[
+                -self.bbuffer_size + 1:] + [True]
+            if not self.online:
+                for count in range(len(inp)):
+                    self.bbbuffer[count] += [inp[count][:]]
+        else:
+            self.buffer_exists = self.buffer_exists[
+                -self.bbuffer_size + 1:] + [False]
+        if sum(self.buffer_exists) < len(self.bbuffer[0]) * self.bbuffer_confidence_tol:
+            self.bbuffer = [[]]*len(inp)
+        return self.buffer_exists[-1]
 
-    def add_features(self, features=None, sparse_features=None):
+    def add_features(self, features_group, features, update_buffer=False):
+        if features is not None:
+            for count, feature in enumerate(features):
+                features_group[count].append(feature.ravel()[:])
+                if self.buffer_size is not None:
+                    del features_group[count][:-self.buffer_size]
+            if (update_buffer and not self.passive):
+                if len(features_group[0])<self.buffer_size:
+                    self.buffer_exists.append(False)
+                    return False
+                else:
+                    return self.add_buffer(features_group)
+            return True
+        else:
+            return False
+
+
+    def add_features_group(self, frame_ind, sample_ind=0, features=None,
+                           sparse_features=None):
         '''
         Add frame features to action
         '''
-        if features is not None:
+        self.frames_inds.append(frame_ind)
+        self.samples_inds.append(sample_ind)
+        if not self.passive:
             try:
-                for count, feature in enumerate(sparse_features):
-                    self.features[count].append(feature)
-            except TypeError:
-                self.features[0].append(feature)
-        if sparse_features is not None:
-            try:
-                for count, feature in enumerate(sparse_features):
-                    self.sparse_features[count].append(feature)
-            except TypeError:
-                self.sparse_features[0].append(feature)
-    def retrieve_features(self):
-        return [np.array(np.atleast_2d(np.array(features)).T) for features in
-                self.features]
-    def retrieve_sparse_features(self):
-        return [np.array(np.atleast_2d(np.array(sparse_features)).T) for
-                sparse_features in self.sparse_features]
-
-    def update_sparse_features(self, coders, max_act_samples=None,
-                               fss_max_iter=None):
-        '''
-        Update sparse features using trained dictionaries
-        '''
-        self.flush_sparse_features()
-        self.sparse_features = []
-        for feature, coder in zip(self.features, coders):
-            if max_act_samples is not None:
-                self.sparse_features.append(coder.multicode(
-                    self.retrieve_features()[:, :max_act_samples],
-                    max_iter=fss_max_iter).T)
+                self.buffer_exists += (self.frames_inds[-1] -
+                                       self.frames_inds[-2] - 1) * [False]
+            except (IndexError,AttributeError) :
+                pass
+        valid = self.add_features(self.features, features, not self.sparsecoded)
+        sparse_time = None
+        if self.sparsecoded and self.trained_coders:
+            if sparse_features is None:
+                if self.trained_coders:
+                    sparse_valid, sparse_time = self.update_sparse_features(self.coders,
+                                                              last_only=True)
             else:
-                self.sparse_features.append(coder.multicode(
-                    self.retrieve_features(),
-                    max_iter=fss_max_iter).T)
+                sparse_valid = self.add_features(self.sparse_features,
+                                             sparse_features, self.sparsecoded)
+            return sparse_valid, sparse_time
+        else:
+            return valid, None
+
+    def retrieve_buffers(self):
+        '''
+        Returns a 3d numpy array, which has as first dimension the number of
+        saved buffers inside <self.bbuffer>, as second dimension the number of frames
+        inside buffer and as third dimension the features shape of each frame.
+        '''
+        if len(self.bbuffer) > 1:
+            return np.concatenate(tuple([np.array(feat_type_buffer)
+                                         for feat_type_buffer in
+                  self.bbbuffer]), axis=2)
+        else:
+            res = np.atleast_3d(np.array(self.bbbuffer).squeeze())
+            return res
+    def retrieve_features(self):
+        if len(self.features)>1:
+            return np.concatenate(tuple([np.atleast_2d(np.array(features)) for features in
+                    self.features]),axis=1)
+        else:
+            return np.atleast_2d(np.array(self.features).squeeze())
+
+    def retrieve_sparse_features(self):
+        if len(self.sparse_features)>1:
+            return np.concatenate(tuple([np.atleast_2d(np.array(sparse_features)) for
+                    sparse_features in self.sparse_features]),axis=1)
+        else:
+            return np.atleast_2d(np.array(self.sparse_features).squeeze())
+    def update_sparse_features(self, coders, max_act_samples=None,
+                               fss_max_iter=None, last_only=False):
+        '''
+        Update sparse features using trained coders.
+        If <last_only>, the sparse features list is not erased, but the new
+        sparse features coming from the last entry of <self.features> are added
+        to the list.
+        '''
+        if not last_only:
+            self.flush_sparse_features()
+            self.sparse_features = []
+            iterat = range(self.features[0])
+        else:
+            iterat = [-1]
+            sparse_time= []
+        for count in iterat:
+            if last_only:
+                t1 = time.time()
+            sparse_features = [coders[type_count].code(
+                                  self.features[type_count][count],
+                                  max_iter=fss_max_iter) for type_count in
+                                  range(len(self.features))]
+            valid = self.add_features(self.sparse_features,
+                              sparse_features,
+                              self.sparsecoded)
+            if last_only:
+                sparse_time.append(time.time() - t1)
+        if last_only:
+            return valid,sparse_time
+        else:
+            return None
+
 
     def flush_sparse_features(self):
         '''
@@ -189,11 +331,11 @@ class Actions(object):
     Class to hold multiple actions
     '''
 
-    def __init__(self, parameters):
+    def __init__(self, parameters, coders=None):
         self.parameters = parameters
+        self.sparsecoded = parameters['sparsecoded']
         self.actions = []
-        self.testing = Action()
-        self.testing.name = 'Testing'
+        self.coders= coders
         self.save_path = (os.getcwd() +
                           os.sep + 'saved_actions.pkl')
         self.features_extract = None
@@ -210,8 +352,7 @@ class Actions(object):
         else:
             self.actions = self.actions[act_num:] + self.actions[:act_num]
 
-    def add_action(self, dictionaries=None,
-                   data=None,
+    def add_action(self, data=None,
                    mv_obj_fold_name=None,
                    hnd_mk_fold_name=None,
                    masks_needed=True,
@@ -223,14 +364,14 @@ class Actions(object):
                    max_act_samples=None,
                    fss_max_iter=None,
                    derot_centers=None,
-                   derot_angles=None):
+                   derot_angles=None,
+                   name=None):
         '''
         parameters=dictionary having at least a 'features' key, which holds
             a sublist of ['3DXYPCA', 'GHOG', '3DHOF', 'ZHOF']. It can have a
             'feature_params' key, which holds specific parameters for the
             features to be extracted.
         features_extract= FeatureExtraction Class
-        dictionaries= SparseDictionaries Class
         data= (Directory with depth frames) OR (list of depth frames)
         use_dexter= True if Dexter 1 TOF Dataset is used
         visualize= True to visualize features extracted from frames
@@ -240,11 +381,13 @@ class Actions(object):
                                                   visualize_=visualize_)
         if data is None:
             raise Exception("Depth data frames are at least  needed")
+        if isinstance(data, basestring) and name is None:
+            name = os.path.basename(data)
         if for_testing:
-            self.testing = Action()
+            self.testing = Action(self.parameters,name='test',coders=self.coders)
             action = self.testing
         else:
-            self.actions.append(Action())
+            self.actions.append(Action(self.parameters,name=name,coders=self.coders))
             action = self.actions[-1]
         if masks_needed:
             if mv_obj_fold_name is None:
@@ -336,7 +479,6 @@ class Actions(object):
                 angles = derot_angles
                 derot_info = True
 
-        feat_count = 0
         img_len = len(imgs)
         for img_count, img in enumerate(imgs):
             if img_count > 0:
@@ -366,48 +508,40 @@ class Actions(object):
             if features is not None:
                 if visualize_:
                     self.features_extract.visualize()
-                if not self.parameters['sparsecoded']:
-                    action.add_features(features=features)
-                else:
-                    sparse_features = []
-                    count = 0
-                    for sparse_coder, feature in zip(dictionaries.sparse_dicts,
-                                                     features):
-                        t1 = time.time()
-                        sparse_features.append(sparse_coder.code(feature,
-                                                                 max_iter=fss_max_iter))
-                        t2 = time.time()
-                        try:
-                            self.sparse_time[count].append(t2 - t1)
-                        except IndexError,AttributeError:
-                            self.sparse_time.append([])
-                            self.sparse_time[count].append(t2 - t1)
-                        count += 1
-                    action.add_features(features=features,
-                                        sparse_features=sparse_features)
-                feat_count += 1
+                valid, sparse_time = action.add_features_group(
+                    action.sync[img_count],
+                    sample_ind=action.samples_indices[img_count],
+                    features=features)
+                self.sparse_time += [sparse_time]
                 if max_act_samples is not None:
-                    if feat_count == max_act_samples:
+                    if img_count == max_act_samples:
                         break
         # DEBUGGING
         # print np.min(self.sparse_time,axis=1) ,\
         #np.max(self.sparse_time,axis=1), np.mean(self.sparse_time,axis=1)\
         #        ,np.median(self.sparse_time,axis=1)
         if for_testing:
-            if self.parameters['sparsecoded']:
-                return self.testing.retrieve_sparse_features(), self.testing.sync
+            if not ispassive:
+                return (self.testing.retrieve_buffers(),
+                        [self.testing.sync,
+                         self.testing.bbuffer_start_inds,
+                        self.testing.bbuffer_end_inds])
             else:
-                return self.testing.retrieve_features(), self.testing.sync
+                if self.sparsecoded:
+                    return self.testing.retrieve_sparse_features(), self.testing.sync
+                else:
+                    return self.testing.retrieve_features(), self.testing.sync
         return 0
 
     def update_sparse_features(self, coders,
                                act_num='all',
                                max_act_samples=None,
-                               fss_max_iter=None):
+                               fss_max_iter=None,
+                               last_only=False):
         '''
         Update sparse features for all Actions or a single one, specified by
         act_num.
-        Requirement is that existent dictionaries have been trained
+        Requirement is that existent coders have been trained
         '''
         if any([(coder is None) for coder in coders]):
             raise Exception('Dictionaries for existent features must' +
@@ -419,7 +553,8 @@ class Actions(object):
         for action in iter_quant:
             action.update_sparse_features(coders,
                                           max_act_samples=max_act_samples,
-                                          fss_max_iter=fss_max_iter)
+                                          fss_max_iter=fss_max_iter,
+                                          last_only=last_only)
 
     def save(self, save_path=None):
         '''
@@ -435,9 +570,9 @@ class Actions(object):
             pickle.dump(self.actions, output, -1)
 
 
-class SparseDictionaries(object):
+class ActionsSparseCoding(object):
     '''
-    Class to hold sparse coding dictionaries
+    Class to hold sparse coding coders
     '''
 
     def __init__(self, parameters):
@@ -448,34 +583,35 @@ class SparseDictionaries(object):
                 self.sparse_dim.append(parameters['sparse_params'][feat])
         except (KeyError, TypeError):
             self.sparse_dim = [None] * len(self.features)
-        self.sparse_dicts = []
-        self.dicts = []
+        self.sparse_coders = []
+        self.codebooks = []
         self.initialized = True
         self.save_path = (os.getcwd() +
-                          os.sep + 'saved_dictionaries.pkl')
+                          os.sep + 'saved_coders.pkl')
 
     def train(self, data, feat_count, bmat=None, display=0, min_iterations=10):
         '''
         feat_count: features position inside
                     actions.actions[act_num].features list
         '''
-        self.sparse_dicts[feat_count].display = display
-        self.sparse_dicts[feat_count].train_sparse_dictionary(data,
+        self.sparse_coders[feat_count].display = display
+        self.sparse_coders[feat_count].train_sparse_dictionary(data,
                                                            sp_opt_max_iter=200,
                                                            init_bmat=bmat,
                                                            min_iterations=min_iterations)
-        self.dicts[feat_count] = (pinv(self.sparse_dicts[feat_count].bmat))
+        self.codebooks[feat_count] = (pinv(self.sparse_coders[feat_count].bmat))
 
     def initialize(self):
         '''
         initialize / reset all codebooks that refer to the given <sparse_dim>
         and feature combination
         '''
+        self.sparse_coders = []
         for count,feature in enumerate(self.features):
-            self.sparse_dicts.append(sc.SparseCoding(
+            self.sparse_coders.append(sc.SparseCoding(
                                   sparse_dim=self.sparse_dim[count],
                                   name=str(count)))
-            self.dicts.append(None)
+            self.codebooks.append(None)
         self.initialized = True
 
     def flush(self, feat_count='all'):
@@ -483,10 +619,10 @@ class SparseDictionaries(object):
         Reinitialize all or one dictionary
         '''
         if feat_count == 'all':
-            iter_quant = self.sparse_dicts
+            iter_quant = self.sparse_coders
             iter_range = range(len(self.features))
         else:
-            iter_quant = [self.sparse_dicts[feat_count]]
+            iter_quant = [self.sparse_coders[feat_count]]
             iter_range = [feat_count]
         feat_dims = []
         for feat_count, inv_dict in zip(iter_range, iter_quant):
@@ -496,29 +632,29 @@ class SparseDictionaries(object):
                 feat_dims[feat_count] = feat_dim
             except AttributeError:
                 feat_dims[feat_count]= None
-        for feature in self.sparse_dicts:
+        for feature in self.sparse_coders:
             if feat_dims[feature] is not None:
-                self.sparse_dicts[feat_count].flush_variables()
-                self.sparse_dicts[feat_count].initialize(feat_dims[feature])
+                self.sparse_coders[feat_count].flush_variables()
+                self.sparse_coders[feat_count].initialize(feat_dims[feature])
 
     def save(self, save_dict=None, save_path=None):
         '''
-        Save dictionaries to file
+        Save coders to file
         '''
         if save_dict is not None:
             for feat_count, feature in enumerate(self.features):
                 save_dict[feature+' '+
                           str(self.sparse_dim[feat_count])] = \
-                self.sparse_dicts[feat_count]
+                self.sparse_coders[feat_count]
             return
         if save_path is None:
-            dictionaries_path = self.save_path
+            coders_path = self.save_path
         else:
-            dictionaries_path = save_path
+            coders_path = save_path
 
-        LOG.info('Saving Dictionaries to ' + dictionaries_path)
-        with open(dictionaries_path, 'wb') as output:
-            pickle.dump((self.sparse_dicts, self.dicts), output, -1)
+        LOG.info('Saving Dictionaries to ' + coders_path)
+        with open(coders_path, 'wb') as output:
+            pickle.dump((self.sparse_coders, self.codebooks), output, -1)
 
 
 def grad_angles(patch):
@@ -553,7 +689,7 @@ class FeatureExtraction(object):
         if self.with_zhof:
             self.zhof_ind = self.parameters['features'].index('ZHOF')
         self.ispassive = parameters['passive']
-        self.use_dicts = parameters['sparsecoded']
+        self.use_coders = parameters['sparsecoded']
         self.feature_params = {}
         if self.with_hof3d or self.with_zhof:
             self.hof3d_bin_size = co.CONST['3DHOF_bin_size']
@@ -656,9 +792,12 @@ class FeatureExtraction(object):
         return uint8
 
     def find_outliers(self, data, m=2.):
+        '''
+        median of data must not be 0
+        '''
         d = np.abs(data - np.median(data))
         mdev = np.median(d)
-        s = d / mdev if mdev else 0.
+        s = d / mdev if mdev>0 else 0
         return s > m
 
     def compute_scene_flow(self, prev_depth_im, curr_depth_im):
@@ -755,13 +894,6 @@ class FeatureExtraction(object):
         dz_coords[dz_coords>200] = 0
         dz_coords[dz_coords<-200] = 0
         yx_coords_in_space = yx_coords * dz_coords / float(FLNT)
-        '''
-        '''
-        print ' '
-        print y_true_old.max(), y_true_old.min()
-        print y_true_new.max(), y_true_new.min()
-        print x_true_old.max(), x_true_old.min()
-        print x_true_new.max(), x_true_new.min()
         '''
         dx = x_true_new - x_true_old
         dy = y_true_new - y_true_old
@@ -865,7 +997,7 @@ class FeatureExtraction(object):
             self.hoghist.bin_size = ghog_bin_size
         self.hoghist.range = [[0, pi]]
         gradients = grad_angles(im_patch)
-        hist, ghog_edges = self.hoghist.hist_data(gradients[gradients != 0])
+        hist, ghog_edges = self.hoghist.hist_data(gradients)
         self.ghog_edges = ghog_edges
         #hist[0] = max(0, hist[0] - np.sum(im_patch==0))
         hist = hist / float(np.sum(hist))
@@ -896,8 +1028,10 @@ class FeatureExtraction(object):
                                                           None].astype(float)
         dz_coords = (curr_z_coords - prev_z_coords).astype(float)
         #invariance to environment height variance:
-        dz_coords = dz_coords[self.find_outliers(dz_coords, 2)==0]
-        yx_coords_in_space = yx_coords * dz_coords / FLNT
+        dz_outliers = self.find_outliers(dz_coords, 3.).ravel()
+        dz_coords = dz_coords[dz_outliers==0]
+        yx_coords = yx_coords[dz_outliers==0,:]
+        yx_coords_in_space = (yx_coords * dz_coords / FLNT)
         return np.concatenate((yx_coords_in_space,
                                dz_coords), axis=1)
 
@@ -1164,11 +1298,13 @@ class ActionRecognition(object):
     <parameters> must be a dictionary.
     '''
 
-    def __init__(self, parameters, log_lev='INFO'):
+    def __init__(self, parameters, coders=None, log_lev='INFO'):
         self.parameters = parameters
-        self.dictionaries = SparseDictionaries(parameters)
-        self.dict_names = self.dictionaries.features
-        self.actions = Actions(parameters)
+        self.sparse_helper = ActionsSparseCoding(parameters)
+        self.sparse_helper.sparse_coders = coders
+        self.dict_names = self.sparse_helper.features
+        self.actions = Actions(parameters,
+                               coders=self.sparse_helper.sparse_coders)
         self.log_lev = log_lev
         LOG.setLevel(log_lev)
 
@@ -1176,15 +1312,14 @@ class ActionRecognition(object):
         '''
         actions.add_action alias
         '''
-        res = self.actions.add_action(dictionaries=self.dictionaries,
-                                      *args, **kwargs)
+        res = self.actions.add_action(*args, **kwargs)
         return res
 
-    def train_sparse_dictionaries(self,
-                                  use_dexter=False,
-                                  dicts_to_train = None,
-                                  codebooks_dict = None,
-                                  min_iterations=10):
+    def train_sparse_coders(self,
+                          use_dexter=False,
+                          coders_to_train = None,
+                          codebooks_dict = None,
+                          min_iterations=10):
         '''
         Add Dexter 1 TOF Dataset or depthdata + binarymaskdata and
         set use_dexter to False (directory with .png or list accepted)
@@ -1192,26 +1327,28 @@ class ActionRecognition(object):
             act_num: action number to use for training
             use_dexter: true if Dexter 1 dataset is used
             iterations: training iterations
-            save_trained: save dictionaries after training
+            save_trained: save sparse coders after training
         '''
         if len(self.actions.actions) == 0:
             raise Exception('Run add_action first and then call ' +
-                            'train_sparse_dictionaries')
+                            'train_sparse_coders')
         feat_num = len(self.parameters['features'])
-        # Train dictionaries
-        self.dictionaries.initialize()
+        # Train coders
+        self.sparse_helper.initialize()
         for count,feat_name in enumerate(self.parameters['features']):
-            if count in dicts_to_train:
+            if count in coders_to_train:
+                data = [np.array(self.actions.actions[ind].features[count]) for ind in
+                     range(len(self.actions.actions))]
                 data = np.concatenate(
-                    [self.actions.actions[ind].retrieve_features()[count] for ind in
-                     range(len(self.actions.actions))], axis=1)
+                    data, axis=0).T
                 frames_num = data.shape[1]
                 LOG.info('Frames number: ' + str(frames_num))
-                LOG.info('Creating dictionaries..')
-                self.dictionaries.train(data,
+                LOG.info('Creating coders..')
+                self.sparse_helper.train(data,
                                         count,
                                         display=1,
                                         min_iterations=min_iterations)
+        self.parameters['sparse_params']['trained_coders'] = True
         if codebooks_dict is not None:
-            self.dictionaries.save(codebooks_dict)
-        return(self.dictionaries.dicts)
+            self.sparse_helper.save(codebooks_dict)
+        return(self.sparse_helper.codebooks)
