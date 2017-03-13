@@ -1,3 +1,4 @@
+import os, errno
 import numpy as np
 import cv2
 from math import pi
@@ -14,9 +15,76 @@ LOG.addHandler(CH)
 LOG.setLevel('INFO')
 
 
+def timeit(method):
+
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+
+        print method.__name__, (te-ts)*1000, 'ms'
+        return result
+
+    return timed
+
+
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
 
+def makedir(path):
+    try:
+        os.makedirs(path)
+    except OSError as exception:
+        if exception.errno != errno.EEXIST:
+            raise
+
+
+def tag_im(img, msg, loc='top left', in_place=True,
+           font=cv2.FONT_HERSHEY_SIMPLEX,
+           fontscale=0.5,
+           vspace=0.5,
+           thickness=1,
+           centered=False,
+           color=(0, 0, 255)):
+    locs = loc.split(' ')
+    if len(locs)==1:
+        locs.append('mid')
+    t_x_shapes = []
+    t_y_shapes = []
+    t_lens = []
+    lines = msg.split('\n')
+    for line in lines:
+        text_shape,text_len = cv2.getTextSize(line, font,
+                                              fontscale, thickness)
+        t_x_shapes.append(text_shape[0])
+        t_y_shapes.append(text_shape[1])
+        t_lens.append(text_len)
+    line_height = max(t_y_shapes)
+    text_shape = (max(t_x_shapes), int((line_height) *
+                                       (1 + vspace) *
+                  len(lines)))
+    vpos = {'top':0,
+            'mid':img.shape[0] / 2 - text_shape[1] / 2,
+            'bot':img.shape[0] - text_shape[1] - 10}
+    hpos = {'left':text_shape[0] / 2 + 5,
+            'mid':img.shape[1] / 2,
+            'right':img.shape[1] - text_shape[0] / 2}
+    if in_place:
+        cop = img
+    else:
+        cop = img.copy()
+
+    for count,line in enumerate(lines):
+        xpos = hpos[locs[1]]
+        if  not centered:
+            xpos -= text_shape[0] / 2
+        else:
+            xpos -= t_x_shapes[count] / 2
+        ypos = (vpos[locs[0]] +
+                int(line_height * (1 + vspace)
+                    * (1 + count)))
+        cv2.putText(cop, line, (xpos, ypos),
+                    font, fontscale, color, thickness)
 
 class CircularOperations(object):
     '''

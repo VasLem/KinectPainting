@@ -10,6 +10,7 @@ from sensor_msgs.msg import Image, TimeReference
 import threading
 import message_filters as mfilters
 from math import exp
+import class_objects as co
 LOG = logging.getLogger(__name__)
 FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
 CH = logging.StreamHandler()
@@ -50,10 +51,12 @@ class Data(object):
         self.hand = None
         self.skel = None
         self.class_name = None
-    def add(self, hand, skel, class_name):
+        self.fps = None
+    def add(self, hand, skel, class_name,fps):
         self.hand = hand
         self.skel = skel
         self.class_name = class_name
+        self.fps = fps
 
 class ROSThread(threading.Thread):
     def __init__(self, parent, data):
@@ -96,7 +99,8 @@ class ROSSubscriber(object):
         skel = self.bridge.imgmsg_to_cv2(skel,
                                               desired_encoding=
                                               'passthrough')
-        self._data.add(hand, skel, class_name.source)
+        self._data.add(hand, skel, class_name.source,
+                       class_name.time_ref.secs)
         evt = ReadyEvent(EVT_READY_TYPE, -1)
         wx.PostEvent(self._parent, evt)
 
@@ -145,8 +149,11 @@ class MainFrame(wx.Frame):
         if self.init_depth == 0:
             self.init_depth = self.data.hand[self.data.skel[-1, -1, 0],
                                              self.data.skel[-1, -1, 1]]
-        dep = self.data.hand[self.data.skel[-1,-1,0],
+        try:
+            dep = self.data.hand[self.data.skel[-1,-1,0],
                              self.data.skel[-1,-1,1]]
+        except IndexError:
+            print self.data.skel
         if dep!=0:
             if len(self.depths)<20:
                 self.depths.append(dep)
@@ -178,7 +185,9 @@ class MainFrame(wx.Frame):
             cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]),
                      [255, 0, 0], 3)
         inp = cv2.flip(inp, -1)
-        tag_im(inp, 'Action:' + self.data.class_name)
+        co.tag_im(inp, 'Action: ' + self.data.class_name)
+        co.tag_im(inp, 'FPS: ' + str(self.data.fps),loc='bot right',
+                  fontscale=0.4, color=(255,255,255))
 
         if self.canvas is None:
             self.canvas = Canvas(self, inp)

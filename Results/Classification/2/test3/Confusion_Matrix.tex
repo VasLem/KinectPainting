@@ -1,0 +1,15 @@
+\documentclass{standalone} 
+\usepackage{array, multirow, hhline, rotating}
+\begin{document} 
+ \begin{tabular}{|c |c |c |c |c |c |c |c |c |}
+\cline{3-9}\multicolumn{2}{c|}{} & \multicolumn{7}{c|}{Predicted} \\ 
+\cline{3-9} \multicolumn{2}{c |}{ } & Pinch & Handflip out & Handflip in & Punchflip in & Punchflip out & Fingerwave in & Fingerwave out\\ 
+\cline{1-9}\multirow{7}{*}{\rotatebox[origin=c]{90}{Actual}} & Pinch & 128 & 0 & 49 & 0 & 0 & 39 & 0\\ 
+ \cline{2-9} & Handflip out & 10 & 121 & 112 & 0 & 0 & 0 & 0\\ 
+ \cline{2-9} & Handflip in & 7 & 18 & 198 & 0 & 0 & 0 & 0\\ 
+ \cline{2-9} & Punchflip in & 6 & 0 & 100 & 23 & 111 & 0 & 0\\ 
+ \cline{2-9} & Punchflip out & 61 & 0 & 0 & 27 & 325 & 0 & 0\\ 
+ \cline{2-9} & Fingerwave in & 149 & 0 & 21 & 0 & 0 & 272 & 18\\ 
+ \cline{2-9} & Fingerwave out & 168 & 0 & 24 & 0 & 0 & 74 & 0\\ 
+ \cline{2-9}\hline \end{tabular}
+ \end{document}

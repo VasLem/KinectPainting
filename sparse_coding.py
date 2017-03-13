@@ -32,6 +32,7 @@ class SparseCoding(object):
         self.inp_features = None
         self.sparse_features = None
         self.basis_constraint = 1
+        self.inv_bmat = None
         self.res_lbd = None
         self.max_iter = 500
         self.dict_max_iter = 300
@@ -288,7 +289,9 @@ class SparseCoding(object):
             if not training:
                 LOG.warning('FSS Algorithm did not converge, using pseudoinverse' +
                             ' of provided codebook instead')
-                self.sparse_features=dot(pinv(self.bmat),self.inp_features).ravel()
+                if self.inv_bmat is None:
+                    self.inv_bmat = pinv(self.bmat)
+                self.sparse_features=dot(self.inv_bmat,self.inp_features).ravel()
             else:
                 LOG.warning('FSS Algorithm did not converge,' +
                             ' removing sample from training dataset...')
@@ -332,7 +335,7 @@ class SparseCoding(object):
                                 diag(lbd) +
                                 0.01 * self.basis_constraint *
                                 np.eye(lbd.shape[0]))
-        res = (dot(dot(ksist, interm_result), ksist.T).trace() +
+        res = (dot(dot(ksist, interm_result), ksist.T).trace() -
                (self.basis_constraint * diag(lbd)).trace())
         return res
 
@@ -357,7 +360,7 @@ class SparseCoding(object):
                                     np.eye(lbds.shape[0])))
         res = zeros_like(lbds)
         for count in range(res.shape[0]):
-            res[count] = -(np.dot(interm_result[:, count].T,
+            res[count] = (np.dot(interm_result[:, count].T,
                                   interm_result[:, count]) -
                            self.basis_constraint)
         return res.reshape(lbds.shape)
@@ -488,14 +491,19 @@ class SparseCoding(object):
                         computed[sample_count] = self.sparse_feat_list[-1]
                 except (TypeError,AttributeError):
                     pass
+                sum_error += fin_error
+                mean_error = sum_error/float(count+1)
                 if pbar is not None:
-                    sum_error += fin_error
-                    pbar.update(count,error=sum_error/(count+1))
+                    pbar.update(count,error=mean_error)
                 self.initialize(data.shape[0])
             self.inp_feat_list = np.transpose(np.array(self.inp_feat_list))
             self.sparse_feat_list = np.array(self.sparse_feat_list).T
             are_sparsecoded = np.array(
                 are_sparsecoded).astype(bool)
+            if np.sum(are_sparsecoded) < 1 / 3.0 * (are_sparsecoded).size:
+                retry = True
+            else:
+                retry = False
             self.are_sparsecoded_inp = self.inp_feat_list[:, are_sparsecoded]
             prev_error = compute_lineq_error(self.are_sparsecoded_inp, self.bmat,
                 self.sparse_feat_list)
@@ -508,10 +516,9 @@ class SparseCoding(object):
             self.inp_feat_list = None
             LOG.info('Reconstruction Error: ' + str(curr_error))
             iter_count += 1
-            if curr_error < 0.5 and reached_traindata_num:
-                break
-            if curr_error > prev_error:
-                if prev_error > co.CONST['max_dict_error']:
+            if curr_error > prev_error or mean_error>1000 or retry:
+                if (prev_error > co.CONST['max_dict_error'] or mean_error>1000
+                    or retry):
                     if retry_count == co.CONST['max_retries']:
                         LOG.warning('Training has high final error but' +
                                     ' reached maximum retries')
@@ -521,13 +528,17 @@ class SparseCoding(object):
                     self.flush_variables()
                     self.initialize(data.shape[0])
                     iter_count = 0
+                    reached_traindata_count = 0 
+                    reached_traindata_num = False
                 elif (np.isclose(prev_error,curr_error,atol=0.1)
                       and reached_traindata_num and
                       reached_traindata_count > min_iterations):
                     break
-
-            else:
-                if reached_traindata_num and reached_traindata_count > min_iterations:
+            if curr_error < 0.5 and reached_traindata_num:
+                break
+            if (reached_traindata_num and
+                reached_traindata_count > min_iterations and
+                iter_count > 0):
                     break
             self.bmat = dictionary
         self.is_trained = True

@@ -28,7 +28,7 @@ cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 save_depth: Depth
 save_color: Color
 #folders to save datasets and ground truths
-whole_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
+test_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
 test_actions : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test2
 test_actions_ground_truth : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test2.csv
 test_poses: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test1

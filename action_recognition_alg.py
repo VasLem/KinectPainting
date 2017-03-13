@@ -81,7 +81,11 @@ def prepare_dexter_im(img):
         hand_patch, hand_patch_pos
 
 
-def prepare_im(img, contour=None):
+def prepare_im(img, contour=None, square=False):
+    '''
+    <square> for display reasons, it returns a square patch of the hand, with
+    the hand centered inside.
+    '''
     if img is None:
         return None, None, None
     if contour is None:
@@ -92,7 +96,17 @@ def prepare_im(img, contour=None):
     hand_contour = contour.squeeze()
     if hand_contour.size == 2:
         return None, None, None
-    hand_patch = img[np.min(hand_contour[:, 1]):np.max(hand_contour[:, 1]),
+    if square:
+        edge_size = max(np.max(hand_contour[:,1]) - np.min(hand_contour[:,1]),
+                        np.max(hand_contour[:,0]) - np.min(hand_contour[:,0]))
+        center = np.mean(hand_contour,axis=0).astype(int)
+        hand_patch = img[center[1] - edge_size/2:
+                         center[1] + edge_size/2,
+                         center[0] - edge_size/2:
+                         center[0] + edge_size/2
+                         ]
+    else:
+        hand_patch = img[np.min(hand_contour[:, 1]):np.max(hand_contour[:, 1]),
                      np.min(hand_contour[:, 0]):np.max(hand_contour[:, 0])]
     hand_patch_pos = np.array(
         [np.min(hand_contour[:, 1]), np.min(hand_contour[:, 0])])
@@ -123,6 +137,7 @@ class Action(object):
 
     def __init__(self, parameters, name, coders=None):
         self.name = name
+        self.parameters = parameters
         self.features = [[] for i in range(len(parameters['features']))]
         self.sparse_features = [[] for i in range(len(parameters['features']))]
         self.testing = parameters['testing']
@@ -133,82 +148,100 @@ class Action(object):
         self.trained_coders = True
         if self.sparsecoded:
             self.trained_coders = parameters['sparse_params']['trained_coders']
+
         if self.sparsecoded and coders is None:
             raise Exception('Sparse Coders required')
+
+        if not self.passive:
+            self.post_pca = parameters['dynamic_params']['post_PCA']
+            self.post_pca_components = parameters['dynamic_params'][
+                'post_PCA_components']
         self.coders = coders
-        if not self.passive and self.trained_coders:
+        self.filter_from = [[] for i in range(len(parameters['features']))]
+        self.bbuffer = [[] for i in range(len(parameters['features']))]
+        if not self.passive :
             self.buffer_size = parameters['dynamic_params']['buffer_size']
             try:
-                self.bbuffer_size = parameters['dynamic_params'][
-                    'filt_window']
+                self.filter_size = parameters['dynamic_params'][
+                    'filter_window_size']
                 self.buffer_confidence_tol = parameters['dynamic_params'][
                     'buffer_confidence_tol']
-                self.bbuffer_confidence_tol = parameters['dynamic_params'][
-                    'filt_window_confidence_tol']
-                self.post_pca = parameters['dynamic_params']['post_pca']
+                self.filter_confidence_tol = parameters['dynamic_params'][
+                    'filter_window_confidence_tol']
+                self.post_pca = parameters['dynamic_params']['post_PCA']
                 self.post_pca_components = parameters['dynamic_params'][
-                    'post_pca_components']
+                    'post_PCA_components']
             except (KeyError,IndexError,TypeError):
-                self.bbuffer_size = None
+                self.filter_size = None
                 self.buffer_confidence_tol = None
-                self.bbuffer_confidence_tol = None
-            self.bbuffer = [[] for i in range(len(parameters['features']))]
-            self.bbbuffer = [[] for i in range(len(parameters['features']))]
+                self.filter_confidence_tol = None
             self.buffer_exists = []
-            self.bbuffer_start_inds = []
-            self.bbuffer_end_inds = []
+            self.buffer_start_inds = []
+            self.buffer_end_inds = []
             self.pca_features = []
             if self.post_pca and not self.isdynamic:
                 self.buffer_size = self.post_pca_components
         else:
-            if self.testing and self.online:
-                self.buffer_size = 1
-            else:
-                self.buffer_size = None
+            self.buffer_size = 1
+        if self.sparsecoded and not self.trained_coders and not self.post_pca:
+            self.buffer_size = None
         self.sync = []
         self.frames_inds = []
         self.samples_inds = []
         self.angles = None
         self.name = ''
-
     def add_buffer(self, buffer):
         '''
         <buffer> should have always the same size.
-        <self.bbuffer> is a list of buffers with a size limit, after which it
+        <self.bbuffer> is a list of buffers. It can have a size limit, after which it
         acts as a buffer (useful for shifting window
         operations (filtering etc.))
         '''
         inp = buffer[:]
         #check buffer contiguousness
-        check_cont = np.all(np.abs(np.diff(self.frames_inds[-self.buffer_size:])) <=
-                  self.buffer_size * self.buffer_confidence_tol)
-        #check if buffer frames belong to the same sample, in case of training
-        check_sam = self.testing or len(np.unique(
-                    self.samples_inds[-self.buffer_size:])) == 1
+        if not self.passive:
+            check_cont = np.all(np.abs(np.diff(self.frames_inds[-self.buffer_size:])) <=
+                      self.buffer_size * self.buffer_confidence_tol)
+            #check if buffer frames belong to the same sample, in case of training
+            check_sam = self.testing or len(np.unique(
+                        self.samples_inds[-self.buffer_size:])) == 1
+        else:
+            check_cont = True
+            check_sam= True
         if check_cont and check_sam:
             for count in range(len(inp)):
-                if self.post_pca and self.isdynamic:
+                if not self.passive and self.isdynamic and self.post_pca:
                     mean,inp[count] = cv2.PCACompute(
                         np.array(inp[count]),
                         np.array([]),
                         maxComponents=self.post_pca_components)
-                    inp[count] = np.array(inp[count]) + mean
-                self.bbuffer[count] = (self.bbuffer[count][-self.bbuffer_size +
-                                                          1:] +
-                                       [inp[count][:]])
-            self.bbuffer_start_inds.append(self.frames_inds[-self.buffer_size])
-            self.bbuffer_end_inds.append(self.frames_inds[-1])
-            self.buffer_exists = self.buffer_exists[
-                -self.bbuffer_size + 1:] + [True]
-            if not self.online:
-                for count in range(len(inp)):
-                    self.bbbuffer[count] += [inp[count][:]]
+                    inp[count] = (np.array(inp[count]) + mean).ravel()
+                    if self.sparsecoded and self.trained_coders:
+                        inp[count]= self.coders[count].code(
+                            inp[count]).ravel()
+                    inp[count] = [inp[count]]
+                if not self.passive:
+                    self.filter_from[count] = (self.filter_from[count][-self.filter_size +
+                                                          1:] + [True])
+            if not self.passive:
+                self.buffer_start_inds.append(self.frames_inds[-self.buffer_size])
+                self.buffer_end_inds.append(self.frames_inds[-1])
+                self.buffer_exists = self.buffer_exists[
+                    -self.filter_size + 1:] + [True]
+            for count in range(len(inp)):
+                if not self.online:
+                    self.bbuffer[count] += [inp[count][:]]
+                else:
+                    self.bbuffer[count] = [inp[count][:]]
         else:
             self.buffer_exists = self.buffer_exists[
-                -self.bbuffer_size + 1:] + [False]
-        if sum(self.buffer_exists) < len(self.bbuffer[0]) * self.bbuffer_confidence_tol:
-            self.bbuffer = [[]]*len(inp)
-        return self.buffer_exists[-1]
+                -self.filter_size + 1:] + [False]
+        if not self.passive:
+            if sum(self.buffer_exists) < len(self.filter_from[0]) * self.filter_confidence_tol:
+                self.filter_from = [[] for i in range(len(inp))]
+            return self.buffer_exists[-1]
+        else:
+            return True
 
     def add_features(self, features_group, features, update_buffer=False):
         if features is not None:
@@ -216,7 +249,7 @@ class Action(object):
                 features_group[count].append(feature.ravel()[:])
                 if self.buffer_size is not None:
                     del features_group[count][:-self.buffer_size]
-            if (update_buffer and not self.passive):
+            if (update_buffer):
                 if len(features_group[0])<self.buffer_size:
                     self.buffer_exists.append(False)
                     return False
@@ -240,9 +273,12 @@ class Action(object):
                                        self.frames_inds[-2] - 1) * [False]
             except (IndexError,AttributeError) :
                 pass
-        valid = self.add_features(self.features, features, not self.sparsecoded)
+        update_buffer = ((not self.sparsecoded)
+                         or (self.post_pca and
+                             self.sparsecoded))
+        valid = self.add_features(self.features, features, update_buffer)
         sparse_time = None
-        if self.sparsecoded and self.trained_coders:
+        if self.sparsecoded and self.trained_coders and not self.post_pca:
             if sparse_features is None:
                 if self.trained_coders:
                     sparse_valid, sparse_time = self.update_sparse_features(self.coders,
@@ -254,44 +290,39 @@ class Action(object):
         else:
             return valid, None
 
-    def retrieve_buffers(self):
+    def retrieve_features(self):
         '''
         Returns a 3d numpy array, which has as first dimension the number of
-        saved buffers inside <self.bbuffer>, as second dimension the number of frames
-        inside buffer and as third dimension the features shape of each frame.
+        saved features sets inside <self.bbuffer>,
+        as second dimension the number of frames from which each features set
+        was taken and as third dimension the features shape of each frame. The
+        features of each frame are a vector, including concatenated features
+        coming from different descriptors.
         '''
-        if len(self.bbuffer) > 1:
+        print np.array(self.bbuffer[0]).shape
+        if len(self.features) > 1:
             return np.concatenate(tuple([np.array(feat_type_buffer)
                                          for feat_type_buffer in
-                  self.bbbuffer]), axis=2)
+                  self.bbuffer]), axis=2)
         else:
-            res = np.atleast_3d(np.array(self.bbbuffer).squeeze())
+            res = np.atleast_3d(np.array(self.bbuffer).squeeze())
             return res
-    def retrieve_features(self):
-        if len(self.features)>1:
-            return np.concatenate(tuple([np.atleast_2d(np.array(features)) for features in
-                    self.features]),axis=1)
-        else:
-            return np.atleast_2d(np.array(self.features).squeeze())
 
-    def retrieve_sparse_features(self):
-        if len(self.sparse_features)>1:
-            return np.concatenate(tuple([np.atleast_2d(np.array(sparse_features)) for
-                    sparse_features in self.sparse_features]),axis=1)
-        else:
-            return np.atleast_2d(np.array(self.sparse_features).squeeze())
     def update_sparse_features(self, coders, max_act_samples=None,
                                fss_max_iter=None, last_only=False):
         '''
         Update sparse features using trained coders.
         If <last_only>, the sparse features list is not erased, but the new
         sparse features coming from the last entry of <self.features> are added
-        to the list.
+        to the list. 
         '''
+
+
         if not last_only:
             self.flush_sparse_features()
             self.sparse_features = []
-            iterat = range(self.features[0])
+            self.bbuffer = [[] for i in range(len(self.parameters['features']))]
+            iterat = range(len(self.bbuffer[0]))
         else:
             iterat = [-1]
             sparse_time= []
@@ -304,7 +335,7 @@ class Action(object):
                                   range(len(self.features))]
             valid = self.add_features(self.sparse_features,
                               sparse_features,
-                              self.sparsecoded)
+                              True)
             if last_only:
                 sparse_time.append(time.time() - t1)
         if last_only:
@@ -365,7 +396,8 @@ class Actions(object):
                    fss_max_iter=None,
                    derot_centers=None,
                    derot_angles=None,
-                   name=None):
+                   name=None,
+                   feature_extraction_method=None):
         '''
         parameters=dictionary having at least a 'features' key, which holds
             a sublist of ['3DXYPCA', 'GHOG', '3DHOF', 'ZHOF']. It can have a
@@ -521,16 +553,14 @@ class Actions(object):
         #np.max(self.sparse_time,axis=1), np.mean(self.sparse_time,axis=1)\
         #        ,np.median(self.sparse_time,axis=1)
         if for_testing:
-            if not ispassive:
-                return (self.testing.retrieve_buffers(),
-                        [self.testing.sync,
-                         self.testing.bbuffer_start_inds,
-                        self.testing.bbuffer_end_inds])
+            if ispassive:
+                return (self.testing.retrieve_features().squeeze(),
+                        self.testing.sync)
             else:
-                if self.sparsecoded:
-                    return self.testing.retrieve_sparse_features(), self.testing.sync
-                else:
-                    return self.testing.retrieve_features(), self.testing.sync
+                return (self.testing.retrieve_features(),
+                        [self.testing.sync,
+                         self.testing.buffer_start_inds,
+                        self.testing.buffer_end_inds])
         return 0
 
     def update_sparse_features(self, coders,
@@ -577,6 +607,7 @@ class ActionsSparseCoding(object):
 
     def __init__(self, parameters):
         self.features = parameters['features']
+        self.parameters = parameters
         self.sparse_dim = []
         try:
             for feat in self.features:
@@ -589,14 +620,25 @@ class ActionsSparseCoding(object):
         self.save_path = (os.getcwd() +
                           os.sep + 'saved_coders.pkl')
 
-    def train(self, data, feat_count, bmat=None, display=0, min_iterations=10):
+    def train(self, data, feat_count, bmat=None, display=0, min_iterations=10,
+              init_traindata_num=200, incr_rate=2, sp_opt_max_iter=200):
         '''
         feat_count: features position inside
                     actions.actions[act_num].features list
         '''
-        self.sparse_coders[feat_count].display = display
+        try:
+            self.sparse_coders[feat_count].display = display
+        except:
+            self.sparse_coders[feat_count] = sc.SparseCoding(
+                                  sparse_dim=self.sparse_dim[feat_count],
+                                  name=str(feat_count))
+            self.sparse_coders[feat_count].display = display
+
         self.sparse_coders[feat_count].train_sparse_dictionary(data,
-                                                           sp_opt_max_iter=200,
+                                                           init_traindata_num=
+                                                               init_traindata_num,
+                                                           incr_rate=incr_rate,
+                                                           sp_opt_max_iter=sp_opt_max_iter,
                                                            init_bmat=bmat,
                                                            min_iterations=min_iterations)
         self.codebooks[feat_count] = (pinv(self.sparse_coders[feat_count].bmat))
@@ -643,9 +685,17 @@ class ActionsSparseCoding(object):
         '''
         if save_dict is not None:
             for feat_count, feature in enumerate(self.features):
-                save_dict[feature+' '+
-                          str(self.sparse_dim[feat_count])] = \
-                self.sparse_coders[feat_count]
+                if not self.parameters['dynamic_params']['post_PCA']:
+                    save_dict[feature+' '+
+                              str(self.sparse_dim[feat_count])] = \
+                    self.sparse_coders[feat_count]
+                else:
+                    save_dict[feature+' '+
+                              str(self.sparse_dim[feat_count])+
+                              ' PCA ' +
+                              str(self.parameters['dynamic_params'][
+                              'post_PCA_components'])] = \
+                    self.sparse_coders[feat_count]
             return
         if save_path is None:
             coders_path = self.save_path
@@ -663,7 +713,7 @@ def grad_angles(patch):
     '''
     grady, gradx = np.gradient(patch.astype(float))
     ang = np.arctan2(grady, gradx)
-    ang[ang < 0] = ang[ang < 0] + pi
+    #ang[ang < 0] = ang[ang < 0] + pi
 
     return ang.ravel()  # returns values 0 to pi
 
@@ -701,7 +751,7 @@ class FeatureExtraction(object):
             self.pca_resize_size = co.CONST['3DXYPCA_size']
             self.feature_params['3DXYPCA'] = self.pca_resize_size
         parameters['feature_params'] = self.feature_params
-        self.skeleton = hsa.FindArmSkeleton()
+        self.skeleton = None
         self.extract_time = []
         self.features = np.zeros(0)
         self.prev_projection = np.zeros(0)
@@ -742,6 +792,7 @@ class FeatureExtraction(object):
         self.curr_cnt = None
         self.angle = None
         self.center = None
+        self.hand_img = None
 
         if visualize_:
             self.view = FeatureVisualization()
@@ -995,7 +1046,8 @@ class FeatureExtraction(object):
             self.hoghist.bin_size = self.ghog_bin_size
         else:
             self.hoghist.bin_size = ghog_bin_size
-        self.hoghist.range = [[0, pi]]
+        #DEBUGGING: added -pi (check grad_agnels too)
+        self.hoghist.range = [[-pi, pi]]
         gradients = grad_angles(im_patch)
         hist, ghog_edges = self.hoghist.hist_data(gradients)
         self.ghog_edges = ghog_edges
@@ -1034,7 +1086,6 @@ class FeatureExtraction(object):
         yx_coords_in_space = (yx_coords * dz_coords / FLNT)
         return np.concatenate((yx_coords_in_space,
                                dz_coords), axis=1)
-
     def extract_features(self):
         '''
         Returns 3DHOF and GHOG . ispassive to return 3DXYPCA.
@@ -1100,17 +1151,21 @@ class FeatureExtraction(object):
                 if masks_needed and mask is None:
                     mask1 = cv2.morphologyEx(
                         img.copy(), cv2.MORPH_OPEN, self.kernel)
-                    _, cnts, _ = cv2.findContours(mask1,
+                    _, cnts, _ = cv2.findContours(mask1.astype(np.uint8),
                                                   cv2.RETR_EXTERNAL,
                                                   cv2.CHAIN_APPROX_NONE)
                     cnts_areas = [cv2.contourArea(cnts[i]) for i in
                                   xrange(len(cnts))]
                     cnt = cnts[np.argmax(cnts_areas)]
-                    self.skeleton.run(frame=img, contour=cnt)
+                    if self.skeleton is None:
+                        self.skeleton = hsa.FindArmSkeleton(img.copy())
+                    if not self.skeleton.run(img, cnt,
+                                         'longest_ray'):
+                        return False
                     mask = self.skeleton.hand_mask
 
                     if mask is None:
-                        return
+                        return False
                     last_link = (self.skeleton.skeleton[-1][1] -
                                  self.skeleton.skeleton[-1][0])
                     angle = np.arctan2(
@@ -1128,14 +1183,14 @@ class FeatureExtraction(object):
                     imgs = [self.prev_full_depth_im,
                             img]
                     if self.prev_full_depth_im is None:
-                        return
+                        return False
                 else:
                     imgs = [img]
                 for img in imgs:
-                    if mask is not None:
-                        if np.sum(mask > 0) == 0:
-                            return
-                        img = img * (mask > 0)
+                    if np.sum(mask > 0) == 0:
+                        return False
+                    img = img * (mask > 0)
+                    self.hand_img = img
                     if not isderotated:
                         if angle is not None and center is not None:
                             self.angle = angle
@@ -1145,41 +1200,42 @@ class FeatureExtraction(object):
                                 angle, center)
                     else:
                         processed_img = img
-                    # DEBUGGING
-                    # cv2.imshow('test',((processed_img)%255).astype(np.uint8))
-                    # cv2.waitKey(10)
-                    (hand_patch_original,
-                     hand_patch_pos_original,
-                     self.hand_contour_original) = prepare_im(
-                        img)
                     hand_patch, hand_patch_pos, self.hand_contour = prepare_im(
                         processed_img)
+                    # DEBUGGING
+                    #cv2.imshow('test',((hand_patch)%255).astype(np.uint8))
+                    #cv2.waitKey(10)
                     if hand_patch is None:
-                        return
+                        return False
                     (self.prev_depth_im,
                      self.curr_depth_im) = (self.curr_depth_im,
                                             processed_img)
                     (self.curr_count,
                      self.prev_count) = (img_count,
                                          self.curr_count)
-                    (self.prev_patch_original,
-                     self.curr_patch_original) = (self.curr_patch_original,
-                                                  hand_patch_original)
                     (self.prev_patch,
                      self.curr_patch) = (self.curr_patch,
                                          hand_patch)
-                    (self.prev_patch_pos_original,
-                     self.curr_patch_pos_original) = (
-                         self.curr_patch_pos_original,
-                         hand_patch_pos_original)
-
                     (self.prev_patch_pos,
                      self.curr_patch_pos) = (self.curr_patch_pos,
                                              hand_patch_pos)
+                    if not self.ispassive:
+                        (hand_patch_original,
+                         hand_patch_pos_original,
+                         self.hand_contour_original) = prepare_im(
+                            img)
+                        (self.prev_patch_original,
+                         self.curr_patch_original) = (self.curr_patch_original,
+                                                      hand_patch_original)
+                        (self.prev_patch_pos_original,
+                         self.curr_patch_pos_original) = (
+                             self.curr_patch_pos_original,
+                             hand_patch_pos_original)
+
 
             except ValueError:
-                return
-        return
+                return False
+        return True
 
 
 class FeatureVisualization(object):
@@ -1316,10 +1372,14 @@ class ActionRecognition(object):
         return res
 
     def train_sparse_coders(self,
-                          use_dexter=False,
-                          coders_to_train = None,
-                          codebooks_dict = None,
-                          min_iterations=10):
+                            use_dexter=False,
+                            trained_coders_list = None,
+                            coders_to_train = None,
+                            codebooks_dict = None,
+                            min_iterations=10,
+                            incr_rate=2,
+                            sp_opt_max_iter=200,
+                            init_traindata_num=200):
         '''
         Add Dexter 1 TOF Dataset or depthdata + binarymaskdata and
         set use_dexter to False (directory with .png or list accepted)
@@ -1335,20 +1395,33 @@ class ActionRecognition(object):
         feat_num = len(self.parameters['features'])
         # Train coders
         self.sparse_helper.initialize()
+        for ind,coder in enumerate(trained_coders_list):
+            self.sparse_helper.sparse_coders[ind] = coder
         for count,feat_name in enumerate(self.parameters['features']):
             if count in coders_to_train:
-                data = [np.array(self.actions.actions[ind].features[count]) for ind in
+                if self.parameters['dynamic_params']['post_PCA']:
+                    data = [np.array(self.actions.actions[ind].
+                                     bbuffer[count]).reshape(
+                                        np.array(self.actions.actions[ind].
+                                         bbuffer[count]).shape[0], -1) for ind in
+                         range(len(self.actions.actions))]
+                else:
+                    data = [np.array(self.actions.actions[ind].features[count]) for ind in
                      range(len(self.actions.actions))]
                 data = np.concatenate(
                     data, axis=0).T
                 frames_num = data.shape[1]
                 LOG.info('Frames number: ' + str(frames_num))
-                LOG.info('Creating coders..')
+                LOG.info('Creating coder for ' + feat_name)
+
                 self.sparse_helper.train(data,
                                         count,
                                         display=1,
+                                        init_traindata_num=init_traindata_num,
+                                        incr_rate=incr_rate,
+                                        sp_opt_max_iter=sp_opt_max_iter,
                                         min_iterations=min_iterations)
+                if codebooks_dict is not None:
+                    self.sparse_helper.save(save_dict=codebooks_dict)
         self.parameters['sparse_params']['trained_coders'] = True
-        if codebooks_dict is not None:
-            self.sparse_helper.save(codebooks_dict)
-        return(self.sparse_helper.codebooks)
+        return

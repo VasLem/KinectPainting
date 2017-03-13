@@ -65,7 +65,7 @@ class DataProcess(object):
         self.reg_key = None
         self.farm_key = None
         self.save_path_exists = False
-        self.save_path = co.CONST['whole_save_path']
+        self.save_path = co.CONST['test_save_path']
         self.skeletons = {}
         self.str_len = 0
         self.save = save
@@ -507,10 +507,10 @@ class DataProcess(object):
                     if not save_res:
                         try:
                             self.data[reg_key].frames.append(
-                                (res))
+                                (res*(mask>0)))
                         except (AttributeError, KeyError):
                             self.data[reg_key] = DataStruct(reg_key)
-                            self.data[reg_key].frames.append(res)
+                            self.data[reg_key].frames.append(res*(mask>0))
                         self.data[reg_key].info.append([derotate_angle,
                                                         derotate_center])
                         '''

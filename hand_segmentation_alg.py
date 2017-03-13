@@ -422,7 +422,7 @@ class FindArmSkeleton(object):
         if method == 'rectangle_approx':
             self.run_rectangle_approx()
         elif method == 'longest_ray':
-            self.run_longest_ray()
+            return self.run_longest_ray()
         else:
             raise Exception(self.run.__doc__)
         return 1
@@ -486,8 +486,11 @@ class FindArmSkeleton(object):
                                               [0, 0],
                                               self.skeleton[-1][1])
             count += 1
+        if not self.surrounding_skel:
+            return False
         self.surrounding_skel[-1][self.filter_mask] = True
         self.approx_hand()
+        return True
 
     def detect_longest_ray_inside_contour(self, polar=None,
                                           detect_width_end=True):
@@ -508,8 +511,10 @@ class FindArmSkeleton(object):
             np.min(polar[:, 0]), np.max(polar[:, 0]) + 2, 2)
         p_bins_edges = np.linspace(np.min(polar[:, 1]), np.max(
             polar[:, 1]) + 0.01, self.angle_bin_num)
-        r_d_ind = np.digitize(polar[:, 0], r_bins_edges)
-        p_d_ind = np.digitize(polar[:, 1], p_bins_edges)
+        r_d_ind = np.minimum(np.digitize(polar[:, 0],
+                                  r_bins_edges),len(r_bins_edges)-1)
+        p_d_ind = np.minimum(np.digitize(polar[:, 1],
+                                  p_bins_edges),len(p_bins_edges)-1)
 
         r_d = r_bins_edges[r_d_ind]
         p_d = p_bins_edges[p_d_ind]
@@ -1654,7 +1659,7 @@ def picture_box(binarm3d, points):
 
 def tag_im(img, text):
     '''
-    Tag top of img with description in red
+    Tag top right of img with description in red
     '''
     font = cv2.FONT_HERSHEY_SIMPLEX
     cv2.putText(img, text, (0, 20), font, 0.5, (0, 0, 255), 2)

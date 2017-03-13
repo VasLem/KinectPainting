@@ -13,8 +13,13 @@ import time
 import class_objects as co
 import extract_and_process_rosbag as epr
 import classifiers as cs
-import poses_to_actions as p2a
+import moving_object_detection_alg as moda
+#import poses_to_actions as p2a
 KINECT = None
+class Time(object):
+    def __init__(self):
+        self.secs = 0
+        self.nsecs = 0
 def signal_handler(sig, frame):
     '''
     Signal handler for CTRL-C interrupt (SIGINT)
@@ -28,6 +33,13 @@ class Kinect(object):
 
     def __init__(self):
         #Kinect requirements
+        # Hand action recognition
+        self.mog2 = moda.Mog2()
+        self.used_classifier = cs.construct_passive_actions_classifier(train=False, test=False,
+                                                        visualize=False,
+                                                        test_against_all=True)
+        self.open_kernel = np.ones((5, 5), np.uint8)
+        self.time = []
         ####
         node = roslaunch.core.Node("kinect2_bridge", "kinect2_bridge")
         launch = roslaunch.scriptapi.ROSLaunch()
@@ -44,47 +56,49 @@ class Kinect(object):
         rospy.init_node('kinect_stream', anonymous=True)
         self.bridge = CvBridge()
         ###
-        # Hand action recognition
-        self.open_kernel = np.ones((5, 5), np.uint8)
-        self.prepare_frame = epr.DataProcess(save=False)
-        self.time = []
-        self.used_classifier = p2a.ACTIONS_CLASSIFIER_MIXED
+
     def callback(self, data):
         '''
         Callback function, <data> is the depth image
         '''
+        time1 = time.time()
         try:
             frame = self.bridge.imgmsg_to_cv2(data, desired_encoding="passthrough")
         except CvBridgeError as err:
             print err
             return
-        data = self.prepare_frame.process(frame, low_ram=False, derotate=False)
-        try:
-            processed = data['hand'].frames[0]
-            [angle,center]=data['hand'].info[0]
-        except (KeyError, IndexError):
-            LOG.info('No hand found')
+        mog2_res = self.mog2.run(False,
+                                 frame.astype(np.float32))
+        mask1 = cv2.morphologyEx(mog2_res.copy(), cv2.MORPH_OPEN, self.open_kernel)
+        check_sum = np.sum(mask1 > 0)
+        if not check_sum or check_sum == np.sum(frame > 0):
             return
-        self.prepare_frame.data = {}
-        self.used_classifier.run_testing(processed,
-                                                           derot_angle=angle,
-                                                           derot_center=center,
+        frame = frame * mog2_res
+        scores_exist,_ = self.used_classifier.run_testing(frame,
                                         online=True)
-        self.time.append(time.time())
+        #DEBUGGING
+        #cv2.imshow('test',(frame%256).astype(np.uint8))
+        #cv2.waitKey(10)
+        time2 = time.time()
+        self.time.append(np.mean(self.time[-9:]+[(time2-time1)]))
         if (self.used_classifier.recognized_classes is not None
-            and len(self.used_classifier.recognized_classes)>0):
+            and len(self.used_classifier.recognized_classes)>0
+            and scores_exist):
             self.image_pub.publish(self.bridge.cv2_to_imgmsg(
-                processed, "passthrough"))
+                self.used_classifier.features_extraction.hand_img, "passthrough"))
             msg = TimeReference()
             try:
-                msg.source = cs.POSES_CLASSIFIER.train_classes[
+                msg.source = self.used_classifier.train_classes[
                     self.used_classifier.recognized_classes[-1]]
             except TypeError:
                 msg.source = self.used_classifier.recognized_classes[-1].name
+            msg.time_ref = Time()
+            msg.time_ref.secs = int(1/float(self.time[-1]) if self.time[-1]
+                                    else 0)
             self.class_pub.publish(msg)
             self.skel_pub.publish(self.bridge.cv2_to_imgmsg(
-                np.array(self.prepare_frame.skeleton.skeleton,np.int32)))
-KINECT = Kinect()
+                         np.atleast_2d(np.array(self.used_classifier.
+                         features_extraction.skeleton.skeleton,np.int32))))
 
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler()
@@ -93,6 +107,7 @@ CH.setFormatter(logging.Formatter(
 LOG.handlers = []
 LOG.addHandler(CH)
 LOG.setLevel('INFO')
+KINECT = Kinect()
 def main():
     rospy.spin()
 if __name__=='__main__':
