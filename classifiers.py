@@ -81,7 +81,7 @@ class Classifier(object):
                     elif line.split(':')[0] == 'Dynamic':
                         self.dynamic_actions = line.split(
                             ':')[1].rstrip('\n').split(',')
-        LOG.info('Extracting: ' + str(features))
+        LOG.debug('Extracting: ' + str(features))
         self.parameters = {'classifier': use,
                            'features': features,
                            'dynamic_params': dynamic_params,
@@ -303,28 +303,42 @@ class Classifier(object):
         prev_root = ''
         prev_action = ''
         res = []
-        for root, dirs, filenames in os.walk(co.CONST['actions_path']):
-            separated_root = os.path.normpath(
-                        root).split(
-                            os.path.sep)
-            if root != prev_root and str.isdigit(
-                separated_root[-1]) and separated_root[
-                    -2] != co.CONST['hnd_mk_fold_name']:
-                prev_root = root
-                if separated_root[-2] == co.CONST['mv_obj_fold_name']:
-                    action = separated_root[-3]
-                    action_path = (os.path.sep).join(separated_root[:-2])
-                else:
-                    action = separated_root[-2]
-                if excluded_actions is not None:
-                    if action in excluded_actions:
-                        continue
-                if action != prev_action:
-                    LOG.info('Processing action: ' + action)
-                    res.append(method(action_path=action_path,
-                                      action=action,
-                                      *args, **kwargs))
-                    prev_action = action
+        actions = (self.passive_actions+
+                        self.dynamic_actions)
+        if excluded_actions is not None:
+            for action in excluded_actions:
+                actions.remove(action)
+        paths = os.listdir(co.CONST['actions_path'])
+        for action in actions:
+            if action not in paths:
+                actions.remove(action)
+        if not actions:
+            raise('Badly given actions_path in config.yaml')
+        dirs = [os.path.join(co.CONST['actions_path'], action) for action in
+                actions]
+        for direc in dirs:
+            for root,dirs, filenames in os.walk(direc):
+                separated_root = os.path.normpath(
+                            root).split(
+                                os.path.sep)
+                if root != prev_root and str.isdigit(
+                    separated_root[-1]) and separated_root[
+                        -2] != co.CONST['hnd_mk_fold_name']:
+                    prev_root = root
+                    if separated_root[-2] == co.CONST['mv_obj_fold_name']:
+                        action = separated_root[-3]
+                        action_path = (os.path.sep).join(separated_root[:-2])
+                    else:
+                        action = separated_root[-2]
+                    if excluded_actions is not None:
+                        if action in excluded_actions:
+                            continue
+                    if action != prev_action:
+                        LOG.info('Processing action: ' + action)
+                        res.append(method(action_path=action_path,
+                                          action=action,
+                                          *args, **kwargs))
+                        prev_action = action
         try:
             return map(list, zip(*res))
         except TypeError:
@@ -950,6 +964,20 @@ class Classifier(object):
                 filename = os.path.join(*self.save_fold.split(os.sep)[:-1] +
                                          ['Total', testname+'.pdf'])
             else:
+                if self.testname is None:
+                    self.testname = (self.name + ' ' + self.use).title()
+                if self.save_fold is None:
+                    fold_name = str(
+                        self.classifiers_list[self.classifier_savename])
+                    self.save_fold = os.path.join(
+                        co.CONST['results_fold'], 'Classification', fold_name)
+                    if self.add_info is not None:
+                        self.save_fold = os.path.join(
+                            self.save_fold, self.add_info.replace(' ', '_').lower())
+                    self.save_fold = os.path.join(self.save_fold, self.testdataname)
+                    co.makedir(self.save_fold)
+
+
                 if info is not None:
                     filename = os.path.join(
                        self.save_fold, self.testname + ' ' + info + '.pdf')
@@ -1003,7 +1031,7 @@ class Classifier(object):
                 self.classifier_folder = str(self.classifiers_list[
                     self.classifier_savename])
             except KeyError:
-                LOG.warning('No trained coder:' + self.classifier_savename +
+                LOG.warning('No trained classifier:' + self.classifier_savename +
                             ', not proceeding to testing')
                 return False
             fold_name = self.classifier_folder
@@ -1033,7 +1061,7 @@ class Classifier(object):
                     img_count=None, save=True, scores_savepath=None,
                     load=False, testname=None, display_scores=True,
                     construct_gt=True, just_scores=False, testdatapath=None,
-                    features_given=False):
+                    compute_perform=True, features_given=False):
         '''
         Test Classifiers using data (.png files) located in <data>. If <online>, the
         testing is online, with <data> being a numpy array, which has been
@@ -1054,6 +1082,7 @@ class Classifier(object):
         <testdatapath> is not <None> and <online> is True, then it will be
         assumed that a pseudoonline testing is taking place
         '''
+        loaded = False
         if not online:
             LOG.info('Testing:' + data)
         if isinstance(data, tuple):
@@ -1078,12 +1107,13 @@ class Classifier(object):
             if (load and (self.classifier_savename in self.all_test_scores)
              and (self.testdataname in
              self.all_test_scores[self.classifier_savename])):
-                LOG.info('Loading saved scores, created by'
+                LOG.info('Loading saved scores, created by '
                          +'testing \'' + self.full_info + '\' with \'' +
                          self.testdataname + '\'')
                 (self.scores, self.test_sync) = self.all_test_scores[self.classifier_savename][
                     self.testdataname]
-            else:
+                loaded = True
+            if not loaded:
                 if self.use == 'SVMs':
                     LOG.info('Classifier contains ' +
                              str(len(self.unified_classifier.estimators_)) + ' estimators')
@@ -1118,7 +1148,7 @@ class Classifier(object):
                                                      test_buffers_end_inds):
                             expanded_scores[start:end + 1, :] = score[None, :]
                         self.scores = expanded_scores
-                    if save:
+                    if save and not loaded:
                         LOG.info(
                             'Saving scores to all scores dictionary')
                         try:
@@ -1137,7 +1167,8 @@ class Classifier(object):
                 self.test_ground_truth, self.test_classes = self.construct_ground_truth(
                     data, ground_truth_type)
             if not just_scores:
-                self.classify_offline(save=save)
+                self.classify_offline(save=save, display=display_scores,
+                                      compute_perform=compute_perform)
                 if display_scores:
                     self.display_scores_and_time(save=save)
             return True, self.scores
@@ -1411,7 +1442,7 @@ class Classifier(object):
             return self.train_classes[self.recognized_classes[-1]]
 
     def classify_offline(self, display=True,
-                         save=True):
+                         save=True, compute_perform=True):
         '''
         To be used after offline have been computed. It is a convenience
         function to allow the modification of the scores, if this is wanted,
@@ -1562,7 +1593,8 @@ class Classifier(object):
                         self.recognized_classes[-1])
             self.recognized_classes = np.array(self.recognized_classes)
             #self.recognized_classes = self.scores.argmax(axis=1)
-        self.correlate_with_ground_truth(save=save)
+        self.correlate_with_ground_truth(save=save, display=display,
+                                         compute_perform=compute_perform)
         return self.recognized_classes
 
     def put_legend_outside_plot(self, axes):
@@ -1580,6 +1612,9 @@ class Classifier(object):
     def compute_performance_measures(self, recognized_classes, fmask, save=True):
         from sklearn import metrics
         from scipy.linalg import block_diag
+        LOG.info('Computing performance measures for ' +
+                 self.classifier_savename + ' with dataset:' +
+                 self.testdataname)
         if self.use == 'Double':
             y_true_pas = np.array(self.test_ground_truth[fmask[0]])
             y_true_dyn = np.array(self.test_ground_truth[fmask[1]])
@@ -1595,9 +1630,12 @@ class Classifier(object):
             self.confusion_matrix = block_diag(*tuple([
                 metrics.confusion_matrix(*tuple(inp)) for
                 inp in separated]))
-            self.accuracy = np.mean([metrics.accuracy_score(*tuple(inp))
-                                     for inp in separated])
-
+            self.accuracy = [metrics.accuracy_score(*tuple(inp))
+                                     for inp in separated]
+            self.accuracy = ((self.accuracy[0] * len(self.passive_actions) +
+                              self.accuracy[1] * len(self.dynamic_actions)) /
+                             (len(self.passive_actions) +
+                              len(self.dynamic_actions)))
         else:
             y_true = np.array(self.test_ground_truth[fmask]).astype(int)
             y_pred = np.array(recognized_classes[fmask]).astype(int)
@@ -1768,7 +1806,7 @@ class Classifier(object):
 
 
     def correlate_with_ground_truth(self, save=True, display=False,
-                                    display_all=False):
+                                    display_all=False, compute_perform=True):
         '''
         Plot results with title <title>
         <display_all> if a plot of all the classifiers results is wanted
@@ -1803,9 +1841,11 @@ class Classifier(object):
                         recognized_classes_expanded)
             else:
                 expanded_recognized_classes = self.recognized_classes
+                print type(self.recognized_classes)
+                print type(self.test_ground_truth)
                 fmask = (np.isfinite(self.recognized_classes) * np.isfinite(
                     self.test_ground_truth)).astype(bool)
-        if fmask is not None:
+        if fmask is not None and compute_perform:
             self.compute_performance_measures(expanded_recognized_classes,
                                               fmask, save=save)
             while True:
@@ -1843,10 +1883,14 @@ class Classifier(object):
                 higher_acc = sorted(range(len(iterat)), key = lambda
                                   l: l[1][0],reverse=True)
             else:
-                iterat = [self.classified_dict[self.classifier_savename][
-                    self.testdataname][0:1]]
-                name_iterat = [self.classifiers_list[self.classifier_savename]]
-                higher_acc = [0]
+                try:
+                    iterat = [self.classified_dict[self.classifier_savename][
+                        self.testdataname][0:1]]
+                    name_iterat = [self.classifiers_list[self.classifier_savename]]
+                    higher_acc = [0]
+                except KeyError as e:
+                    LOG.warning(str(e) + ' is missing from the tested datasets')
+                    return False
             plots = []
             linewidths = []
             labels = []
@@ -1899,6 +1943,7 @@ class Classifier(object):
                              linewidths=linewidths,
                              alphas=alphas,
                              xlabel='Frames', save=save)
+            return True
 
 
 class ClassObject(object):
@@ -2138,7 +2183,6 @@ def main():
     tmp.construct_classifiers_matrix()
     sys.exit(0)
     '''
-
     '''
     POSES_CLASSIFIER = construct_passive_actions_classifier(train=True,
                                                             test=True,
@@ -2161,7 +2205,7 @@ def main():
                                                                      use_sparse=True)
     '''
     ACTIONS_CLASSIFIER_SIMPLE_WITH_ZHOF = construct_dynamic_actions_classifier(
-        train=False, test=True, visualize=True, test_against_all=True,
+        train=True, test=True, visualize=True, test_against_all=True,
         features=['GHOG','ZHOF'])
     '''
     ACTIONS_CLASSIFIER_SPARSE_WITH_ZHOF = construct_dynamic_actions_classifier(

@@ -18,28 +18,41 @@ def makedir(path):
 class MixedClassifier(clfs.Classifier):
     def __init__(self, svms_classifier=None,
                  rf_classifier=None,log_lev='INFO',
-                 visualize=False, add_info=None, *args,**kwargs):
+                 visualize=False, add_info=None, train_all=False,
+                 *args,**kwargs):
         clfs.Classifier.__init__(self,log_lev=log_lev, visualize=visualize,
                                  masks_needed=False,
                  ispassive = False, use='Mixed', name='',
                                 add_info=add_info, *args, **kwargs)
         from sklearn.ensemble import RandomForestClassifier
-        self.classifier = RandomForestClassifier(self.num_of_estimators)
+        self.classifier = RandomForestClassifier(100)
         self.enhanced_dyn = EnhancedDynamicClassifier(svms_classifier,
                                                       rf_classifier)
+        self.enhanced_dyn.run_training(load=not train_all)
         self.train_classes = np.hstack((self.passive_actions,
-                                        self.dynamic_actions))
+                                        self.dynamic_actions)).tolist()
         self.classifier_savename = 'trained_'
         self.classifier_savename += self.full_info.replace(' ', '_').lower()
+        self.train_inds = np.arange(len(self.train_classes))
+        if self.classifier_savename not in self.classifiers_list:
+            with open('trained_classifiers_list.yaml','a') as out:
+                out.write(self.classifier_savename+': '+
+                          str(len(self.classifiers_list))+'\n')
+            self.classifiers_list[self.classifier_savename] = str(
+                len(self.classifiers_list))
     def single_run_training(self,action_path, action):
-            traindata = np.concatenate(
-                self.enhanced_dyn.run_testing(action_path,
-                                              online=False,
-                                              just_scores=True),axis=1)
-            ground_truth,_ = (self.construct_ground_truth(
-                data=action_path,
-                ground_truth_type='constant-' + action))
-            return traindata, ground_truth
+        self.enhanced_dyn.testing_initialized = False
+        rf_scores, en_scores = self.enhanced_dyn.run_testing(action_path,
+                                          online=False,
+                                          just_scores=True,
+                                          display_scores=False,
+                                          compute_perform=False,
+                                          construct_gt=False)
+        traindata = np.concatenate((rf_scores, en_scores), axis=1)
+        ground_truth,_ = (self.construct_ground_truth(
+            data=action_path,
+            ground_truth_type='constant-' + action))
+        return traindata, ground_truth
 
     def run_training(self, save=True, load=True,
                      classifier_savename=None):
@@ -48,9 +61,13 @@ class MixedClassifier(clfs.Classifier):
         if (self.classifier_savename not in
             self.trained_classifiers or not load):
             traindata,ground_truth = self.apply_to_training(self.single_run_training)
-            fmask = np.isfinite(traindata[:,0])
-            self.classifier = self.classifier.fit(np.concatenate(traindata[fmask,:],axis=0),
-                                np.concatenate(ground_truth[fmask,:],axis=0))
+            traindata = np.concatenate(traindata, axis=0)
+            ground_truth = np.concatenate(ground_truth, axis=0)
+            fmask = (np.isfinite(np.sum(traindata,axis=1)).astype(int) *
+                     np.isfinite(ground_truth).astype(int)).astype(bool)
+            self.classifier = self.classifier.fit(traindata[fmask,:],
+                                ground_truth[fmask])
+            LOG.info('Saving classifier: '+ self.classifier_savename)
             self.trained_classifiers[self.classifier_savename] = self.classifier
             with open('trained_classifiers.pkl','w') as out:
                 pickle.dump(self.trained_classifiers, out)
@@ -67,27 +84,63 @@ class MixedClassifier(clfs.Classifier):
                     load=False, testname=None, display_scores=True,
                     derot_angle=None, derot_center=None,
                     construct_gt=True, just_scores=False):
-        testdata =np.hstack(
-            self.enhanced_dyn.run_testing(data,online=online,just_scores=True))
-        self.scores = self.classifier.predict_proba(testdata)
+        if not self.testing_initialized or not online:
+            self.init_testing(data=data,
+                              online=online,
+                              save=save,
+                              load=load,
+                              testname=testname,
+                              scores_savepath=scores_savepath,
+                              scores_filter_shape=5,
+                              std_small_filter_shape=co.CONST[
+                                  'STD_small_filt_window'],
+                              std_big_filter_shape=co.CONST[
+                                  'STD_big_filt_window'])
+        loaded=False
+        if not online:
+            if (load and (self.classifier_savename in self.all_test_scores)
+             and (self.testdataname in
+             self.all_test_scores[self.classifier_savename])):
+                LOG.info('Loading saved scores, created by '
+                         +'testing \'' + self.full_info + '\' with \'' +
+                         self.testdataname + '\'')
+                (rf_scores, svms_scores) = self.all_test_scores[self.classifier_savename][
+                    self.testdataname]
+                loaded = True
+
+        if not loaded:
+            testdata =np.hstack(
+                self.enhanced_dyn.run_testing(data,online=online,just_scores=True,
+                                              compute_perform=False))
+            self.scores = np.zeros_like(testdata)
+            self.scores[:] = None
+            fmask = np.isfinite(np.sum(testdata,axis=1))
+            self.scores[fmask] = self.classifier.predict_proba(testdata[fmask,:])
+        self.filtered_scores = self.scores
         recognized_classes = []
         for score in self.scores:
             if np.sum(score) is None:
                 recognized_classes.append(None)
                 continue
-            if (np.max(score) >= 0 or len(
+            if (np.max(score) >= 0.7 or len(
                 recognized_classes) == 0 or
                 recognized_classes[-1] is None):
                 recognized_classes.append(score.argmax())
             else:
                 recognized_classes.append(
                     recognized_classes[-1])
+        self.recognized_classes = np.array(recognized_classes)
         if not online:
-            self.test_ground_truth = self.construct_ground_truth(
+            self.test_ground_truth, _ = self.construct_ground_truth(
                 data=data,
                 ground_truth_type=ground_truth_type)
         self.correlate_with_ground_truth(save=save,
                                          display=display_scores)
+        self.plot_result(self.filtered_scores,
+                         labels=self.train_classes,
+                         info='Filtered Scores',
+                         xlabel='Frames',
+                         save=save)
 
 
 
@@ -160,8 +213,8 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             data=action_path,
             online=False,
             construct_gt=False,
-            save=False,
-            load=False,
+            save=True,
+            load=True,
             display_scores=False)
         poses_pred = self.passive_actions_classifier.recognized_classes
         poses_predictions_expanded = np.zeros(
@@ -175,9 +228,11 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             data=action_path,
             online=False,
             construct_gt=False,
-            save=False,
-            load=False,
-            display_scores=False)
+            save=True,
+            load=True,
+            display_scores=False,
+            just_scores=True,
+            compute_perform=False)
         self.dynamic_scores.append(self.dynamic_actions_classifier.scores)
         return None
 
@@ -260,7 +315,9 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             self.classifier_savename = classifier_savename
         if not self.classifier_savename in self.trained_classifiers or not load:
             LOG.info('Training ' + self.classifier_savename)
+            LOG.info('Gathering passive actions classifier traindata..')
             self.extract_pred_and_gt()
+            LOG.info('Constructing coherence matrix...')
             self.construct_coherence()
             self.plot_coherence()
             if save:
@@ -268,6 +325,7 @@ class EnhancedDynamicClassifier(clfs.Classifier):
                     self.coherence_matrix, self.min, self.max,
                     self.passive_actions,self.dynamic_actions)
             with open('trained_classifiers.pkl', 'w') as out:
+                LOG.info('Saving ' + self.classifier_savename)
                 pickle.dump(self.trained_classifiers, out)
         else:
             (self.coherence_matrix,
@@ -323,7 +381,9 @@ class EnhancedDynamicClassifier(clfs.Classifier):
 
 
     def run_mixer(self, rf_probs, svms_scores=None, img_count=None, save=False,
-                  online=True,scores_only=False,*args,**kwargs):
+                  online=True,just_scores=False,compute_perform=True,
+                  display=True,
+                  *args,**kwargs):
         self.rf_probs = rf_probs.copy()
         if isinstance(rf_probs, tuple):
             svms_scores= rf_probs[1]
@@ -387,10 +447,16 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         self.scores = np.zeros((svms_scores.shape))
         self.scores[:] = np.NaN
         self.scores[total, :] = fin_scores
+        return self.classify(just_scores, online, compute_perform, display,
+                             save)
+
+    def classify(self, just_scores, online, compute_perform, display, save):
         #pylint: disable=no-member
-        if not scores_only:
+        if not just_scores:
             if not online:
-                self.recognized_classes = self.classify_offline(display=True)
+                self.recognized_classes = self.classify_offline(display=display,
+                                                                compute_perform
+                                                                =compute_perform)
                 self.display_scores_and_time(save=save)
             else:
                 self.classify_online(self.scores.ravel(),
@@ -405,16 +471,16 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             return self.rf_probs, self.scores
 
 
-
     def run_testing(self, data=None, online=True, against_training=False,
                     scores_filter_shape=5,
                     std_small_filter_shape=co.CONST['STD_small_filt_window'],
                     std_big_filter_shape=co.CONST['STD_big_filt_window'],
                     ground_truth_type=co.CONST['test_actions_ground_truth'],
                     img_count=None, save=True, scores_savepath=None,
-                    load=False, testname=None, display_scores=True,
+                    load=True, testname=None, display_scores=True,
                     derot_angle=None, derot_center=None,
-                    construct_gt=True, just_scores=False):
+                    construct_gt=True, just_scores=False,
+                    compute_perform=True):
         '''
         Mixed bayesian model, meant to provide unified action scores.
         P(p_i|a_j) = c_ij in Coherence Map C
@@ -431,6 +497,7 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         Overrides <clfs.Classifier.run_testing>, but the input arguments are
         the same, so for help consult <classifiers.Classifiers>
         '''
+        loaded = False
         if online:
             if img_count is not None:
                 self.scores_exist += ((img_count - self.img_count) * [False])
@@ -449,101 +516,129 @@ class EnhancedDynamicClassifier(clfs.Classifier):
                                   'STD_small_filt_window'],
                               std_big_filter_shape=co.CONST[
                                   'STD_big_filt_window'])
-        rf_exist,_ = self.passive_actions_classifier.run_testing(data=data,
-                                          online=online,
-                                          construct_gt=False,
-                                          ground_truth_type=ground_truth_type,
-                                         save=True,
-                                         load=True,
-                                         display_scores=True,
-                                         testname=testname,
-                                         just_scores=True,
-                                         derot_angle=derot_angle,
-                                             derot_center=derot_center,
-                                            img_count=self.img_count)
-        svms_scores_exist, _ = self.dynamic_actions_classifier.run_testing(data=data,
-                                            derot_angle=derot_angle,
-                                               derot_center=derot_center,
-                                            online=online,
-                                            construct_gt=False,
-                                            ground_truth_type=ground_truth_type,
-                                            save=True,
-                                            load=True,
-                                            display_scores=True,
-                                            testname = testname,
-                                            just_scores=True,
-                                              img_count=self.img_count)
-        if svms_scores_exist:
-            if online:
-                self.scores_exist.append(True)
-                svms_scores = self.dynamic_actions_classifier.scores[-1]
-                if self.a2p_match is not None:
-                    svms_scores = svms_scores[:, self.a2p_match]
-            else:
-                svms_scores = self.dynamic_actions_classifier.scores
-                if self.a2p_match is not None:
-                    svms_scores = svms_scores[:, self.a2p_match]
-        else: #only in online mode
-            self.scores_exist.append(False)
-            return False
-        if online:
-            rf_probs = self.passive_actions_classifier.scores[-1]
-        else:
-            rf_probs = self.passive_actions_classifier.scores
-            probs_expanded = np.zeros((1+self.passive_actions_classifier.test_sync[-1],
-                                        len(self.passive_actions)))
-            probs_expanded[:] = np.nan
-            probs_expanded[self.passive_actions_classifier.test_sync, :
-                                        ] = rf_probs
-            rf_probs = probs_expanded
         if not online:
+            if (load and (self.classifier_savename in self.all_test_scores)
+             and (self.testdataname in
+             self.all_test_scores[self.classifier_savename])):
+                LOG.info('Loading saved scores, created by '
+                         +'testing \'' + self.full_info + '\' with \'' +
+                         self.testdataname + '\'')
+                (rf_probs, svms_scores) = self.all_test_scores[self.classifier_savename][
+                    self.testdataname]
+                loaded = True
+        if not loaded:
+            rf_exist,_ = self.passive_actions_classifier.run_testing(data=data,
+                                              online=online,
+                                              construct_gt=False,
+                                              ground_truth_type=ground_truth_type,
+                                             save=True,
+                                             load=load,
+                                             display_scores=False,
+                                             testname=testname,
+                                             just_scores=True,
+                                             derot_angle=derot_angle,
+                                                 derot_center=derot_center,
+                                                img_count=self.img_count)
+            svms_scores_exist, _ = self.dynamic_actions_classifier.run_testing(data=data,
+                                                derot_angle=derot_angle,
+                                                   derot_center=derot_center,
+                                                online=online,
+                                                construct_gt=False,
+                                                ground_truth_type=ground_truth_type,
+                                                save=True,
+                                                load=load,
+                                                display_scores=False,
+                                                testname = testname,
+                                                just_scores=True,
+                                                  img_count=self.img_count)
+            if svms_scores_exist:
+                if online:
+                    self.scores_exist.append(True)
+                    svms_scores = self.dynamic_actions_classifier.scores[-1]
+                    if self.a2p_match is not None:
+                        svms_scores = svms_scores[:, self.a2p_match]
+                else:
+                    svms_scores = self.dynamic_actions_classifier.scores
+                    if self.a2p_match is not None:
+                        svms_scores = svms_scores[:, self.a2p_match]
+            else: #only in online mode
+                self.scores_exist.append(False)
+                return None, None
+            if online:
+                rf_probs = self.passive_actions_classifier.scores[-1]
+            else:
+                rf_probs = self.passive_actions_classifier.scores
+                probs_expanded = np.zeros((1+self.passive_actions_classifier.test_sync[-1],
+                                            len(self.passive_actions)))
+                probs_expanded[:] = np.nan
+                probs_expanded[self.passive_actions_classifier.test_sync, :
+                                            ] = rf_probs
+                rf_probs = probs_expanded
+        if not online and construct_gt:
             self.test_ground_truth,_ = self.construct_ground_truth(data, ground_truth_type)
         if just_scores:
-            rf_probs, svms_scores = self.run_mixer(rf_probs, svms_scores,
-                                                   save=save, online=online,
-                                                   just_scores=just_scores)
-            return rf_probs, svms_scores
+            if loaded:
+                output = (rf_probs,svms_scores)
+            else:
+                output = self.run_mixer(rf_probs, svms_scores,
+                                                       save=save, online=online,
+                                                       just_scores=just_scores,
+                                                       compute_perform=compute_perform,
+                                        display=display_scores)
         else:
-            recognized_classes, scores = self.run_mixer(rf_probs, svms_scores,
+            if loaded:
+                output = self.classify(just_scores, online, compute_perform,
+                                       display_scores, save)
+            else:
+                output = self.run_mixer(rf_probs, svms_scores,
                                                    save=save, online=online,
-                                                   just_scores=just_scores)
-            return recognized_classes, scores
+                                                   just_scores=just_scores,
+                                                   compute_perform=compute_perform,
+                                     display=display_scores)
+        if save and not online and not loaded:
+            LOG.info(
+                'Saving scores that were produced by testing '+
+                 self.classifier_savename+ ' with ' +
+                 self.testdataname +
+                ' to all scores dictionary'
+                )
+            try:
+                self.all_test_scores[self.classifier_savename][
+                    self.testdataname] = (rf_probs,
+                                          svms_scores)
+            except (KeyError, TypeError):
+                self.all_test_scores[self.classifier_savename] = {}
+                self.all_test_scores[self.classifier_savename][
+                    self.testdataname] = (rf_probs,
+                                          svms_scores)
+            with open('all_test_scores.pkl', 'w') as out:
+                pickle.dump(self.all_test_scores, out)
+        return output
 
-def main():
-    from matplotlib import pyplot as plt
-    construct_enhanced_dynamic_actions_classifier(
-        train=True,
-        test=False,
-        visualize=False,
-        test_against_all=True)
-    construct_mixed_classifier(
-        train=True,
-        test=True,
-        visualize=True,
-        test_against_all=True)
 
-    plt.show()
 
 
 def construct_mixed_classifier(testname='actions', train=False,
                                  test=True, visualize=True,
                                  dicts_retrain=False, hog_num=None,
                                  name='actions', use_dicts=False,
-                                 des_dim=None, test_against_all=False):
+                                 des_dim=None, test_against_all=False,
+                                 train_all=False):
     '''
     Constructs a enhanced classifier
     '''
     svms_classifier = clfs.construct_dynamic_actions_classifier(
-        train=False, test=False, visualize=False, test_against_all=False,
+        train=train_all, test=False, visualize=False, test_against_all=False,
         features=['GHOG','ZHOF'])
-    rf_classifier = clfs.construct_passive_actions_classifier(train=False,
+    rf_classifier = clfs.construct_passive_actions_classifier(train=train_all,
                                                             test=False,
                                                             visualize=False,
                                                             test_against_all=False)
 
     mixed = MixedClassifier(
         svms_classifier=svms_classifier,
-        rf_classifier=rf_classifier)
+        rf_classifier=rf_classifier,
+        train_all=train_all)
     mixed.run_training(load=not train)
     if test or visualize:
         if test_against_all:
@@ -551,6 +646,7 @@ def construct_mixed_classifier(testname='actions', train=False,
         else:
             iterat = [testname]
         for name in iterat:
+            mixed.testing_initialized = False
             if test:
                 mixed.run_testing(os.path.join(
                     co.CONST['test_save_path'],name),
@@ -595,6 +691,7 @@ def construct_enhanced_dynamic_actions_classifier(testname='actions', train=Fals
             iterat = [testname]
         for name in iterat:
             if test:
+                enhanced.testing_initialized = False
                 enhanced.run_testing(os.path.join(
                     co.CONST['test_save_path'],name),
                     ground_truth_type=os.path.join(
@@ -609,6 +706,23 @@ def construct_enhanced_dynamic_actions_classifier(testname='actions', train=Fals
                         name+'.csv'),
                     online=False, load=False)
     return enhanced
+
+def main():
+    from matplotlib import pyplot as plt
+    '''
+    construct_enhanced_dynamic_actions_classifier(
+        train=True,
+        test=True,
+        visualize=False,
+        test_against_all=True)
+    '''
+    construct_mixed_classifier(
+        train=True,
+        test=True,
+        visualize=True,
+        test_against_all=True)
+
+    plt.show()
 
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler(sys.stderr)

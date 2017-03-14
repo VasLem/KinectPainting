@@ -299,7 +299,6 @@ class Action(object):
         features of each frame are a vector, including concatenated features
         coming from different descriptors.
         '''
-        print np.array(self.bbuffer[0]).shape
         if len(self.features) > 1:
             return np.concatenate(tuple([np.array(feat_type_buffer)
                                          for feat_type_buffer in
