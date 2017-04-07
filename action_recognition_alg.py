@@ -80,7 +80,6 @@ def prepare_dexter_im(img):
     return img * binmask,\
         hand_patch, hand_patch_pos
 
-
 def prepare_im(img, contour=None, square=False):
     '''
     <square> for display reasons, it returns a square patch of the hand, with
@@ -143,23 +142,25 @@ class Action(object):
         self.testing = parameters['testing']
         self.online = parameters['testing_params']['online']
         self.sparsecoded = parameters['sparsecoded']
-        self.passive = parameters['passive']
+        self.action_type = parameters['action_type']
         self.isdynamic = name not in parameters['passive_actions']
         self.trained_coders = True
+        self.buffer_start_inds = []
+        self.buffer_end_inds = []
         if self.sparsecoded:
             self.trained_coders = parameters['sparse_params']['trained_coders']
 
         if self.sparsecoded and coders is None:
             raise Exception('Sparse Coders required')
 
-        if not self.passive:
+        if not self.action_type=='Passive':
             self.post_pca = parameters['dynamic_params']['post_PCA']
             self.post_pca_components = parameters['dynamic_params'][
                 'post_PCA_components']
         self.coders = coders
         self.filter_from = [[] for i in range(len(parameters['features']))]
         self.bbuffer = [[] for i in range(len(parameters['features']))]
-        if not self.passive :
+        if not self.action_type=='Passive' :
             self.buffer_size = parameters['dynamic_params']['buffer_size']
             try:
                 self.filter_size = parameters['dynamic_params'][
@@ -176,8 +177,6 @@ class Action(object):
                 self.buffer_confidence_tol = None
                 self.filter_confidence_tol = None
             self.buffer_exists = []
-            self.buffer_start_inds = []
-            self.buffer_end_inds = []
             self.pca_features = []
             if self.post_pca and not self.isdynamic:
                 self.buffer_size = self.post_pca_components
@@ -199,7 +198,7 @@ class Action(object):
         '''
         inp = buffer[:]
         #check buffer contiguousness
-        if not self.passive:
+        if not self.action_type=='Passive':
             check_cont = np.all(np.abs(np.diff(self.frames_inds[-self.buffer_size:])) <=
                       self.buffer_size * self.buffer_confidence_tol)
             #check if buffer frames belong to the same sample, in case of training
@@ -210,7 +209,7 @@ class Action(object):
             check_sam= True
         if check_cont and check_sam:
             for count in range(len(inp)):
-                if not self.passive and self.isdynamic and self.post_pca:
+                if not self.action_type=='Passive' and self.isdynamic and self.post_pca:
                     mean,inp[count] = cv2.PCACompute(
                         np.array(inp[count]),
                         np.array([]),
@@ -220,10 +219,10 @@ class Action(object):
                         inp[count]= self.coders[count].code(
                             inp[count]).ravel()
                     inp[count] = [inp[count]]
-                if not self.passive:
+                if not self.action_type=='Passive':
                     self.filter_from[count] = (self.filter_from[count][-self.filter_size +
                                                           1:] + [True])
-            if not self.passive:
+            if not self.action_type=='Passive':
                 self.buffer_start_inds.append(self.frames_inds[-self.buffer_size])
                 self.buffer_end_inds.append(self.frames_inds[-1])
                 self.buffer_exists = self.buffer_exists[
@@ -236,7 +235,7 @@ class Action(object):
         else:
             self.buffer_exists = self.buffer_exists[
                 -self.filter_size + 1:] + [False]
-        if not self.passive:
+        if not self.action_type=='Passive':
             if sum(self.buffer_exists) < len(self.filter_from[0]) * self.filter_confidence_tol:
                 self.filter_from = [[] for i in range(len(inp))]
             return self.buffer_exists[-1]
@@ -267,7 +266,7 @@ class Action(object):
         '''
         self.frames_inds.append(frame_ind)
         self.samples_inds.append(sample_ind)
-        if not self.passive:
+        if not self.action_type=='Passive':
             try:
                 self.buffer_exists += (self.frames_inds[-1] -
                                        self.frames_inds[-2] - 1) * [False]
@@ -326,17 +325,21 @@ class Action(object):
             iterat = [-1]
             sparse_time= []
         for count in iterat:
+            sparse_features = []
             if last_only:
-                t1 = time.time()
-            sparse_features = [coders[type_count].code(
+                sparse_time.append([])
+            for type_count in range(len(self.features)):
+                if last_only:
+                    t1 = time.time()
+                sparse_features.append(coders[type_count].code(
                                   self.features[type_count][count],
-                                  max_iter=fss_max_iter) for type_count in
-                                  range(len(self.features))]
+                                  max_iter=fss_max_iter))
+                if last_only:
+                    sparse_time[-1].append(time.time() - t1)
+
             valid = self.add_features(self.sparse_features,
                               sparse_features,
                               True)
-            if last_only:
-                sparse_time.append(time.time() - t1)
         if last_only:
             return valid,sparse_time
         else:
@@ -361,7 +364,7 @@ class Actions(object):
     Class to hold multiple actions
     '''
 
-    def __init__(self, parameters, coders=None):
+    def __init__(self, parameters, coders=None, feat_filename=None):
         self.parameters = parameters
         self.sparsecoded = parameters['sparsecoded']
         self.actions = []
@@ -371,6 +374,10 @@ class Actions(object):
         self.features_extract = None
         self.sparse_time = []
         self.preproc_time = []
+        self.extract_time = []
+        self.features_db = None
+        self.candid_d_actions = None
+        self.feat_filename = feat_filename
 
     def remove_action(self, act_num):
         '''
@@ -382,6 +389,99 @@ class Actions(object):
         else:
             self.actions = self.actions[act_num:] + self.actions[:act_num]
 
+    def save_action_features_to_mem(self,filename,
+                                    data):
+        '''
+        features_db has tree structure, with the following order:
+            features type->list of instances dicts ->[params which are used to
+            identify the features, data of each instance->actions]
+        This order allows to search only once for each descriptor and get all
+        actions corresponding to a matching instance, as it is assumed that
+        descriptors are fewer than actions.
+        <data> is a list of length same as the descriptors number
+        '''
+        if filename is None:
+            return
+        if self.candid_d_actions is None:
+            self.candid_d_actions = [None]* len(self.parameters[
+                'features'])
+        for dcount,descriptor in enumerate(
+            self.parameters['features']):
+            if self.instance_ind[dcount] is None:
+                feat_params = self.parameters['features_params'][descriptor]
+                if not isinstance(self.features_db, dict):
+                    self.features_db = {}
+                if descriptor not in self.features_db:
+                    self.features_db[descriptor] = []
+                    self.features_db[descriptor].append(
+                        {'params':feat_params,
+                         'data':{}})
+                self.instance_ind[dcount] = -1
+            self.features_db[descriptor][
+                self.instance_ind[dcount]]['data'][self.name] = data[dcount]
+        co.file_oper.save_using_ujson(self.features_db, filename)
+
+
+    def load_action_features_from_mem(self, filename):
+        '''
+        features_db has tree structure, with the following order:
+            features type->list of instances dicts ->[params which are used to
+            identify the features, data of each instance->actions]
+        This order allows to search only once for each descriptor and get all
+        actions corresponding to a matching instance, as it is assumed that
+        descriptors are fewer than actions
+        '''
+        features_to_extract = self.parameters['features'][:]
+        data = [None] * len(features_to_extract)
+        if filename is None:
+            return features_to_extract, data
+        try:
+            self.features_db = co.file_oper.load_using_ujson(
+                filename)
+        except Exception as e:
+            pass
+        self.instance_ind = [None] * len(features_to_extract)
+        if self.features_db is not None:
+            if self.candid_d_actions is None or not self.candid_d_actions:
+                self.candid_d_actions = [None]*len(self.parameters['features'])
+                for dcount,descriptor in enumerate(
+                    self.parameters['features']):
+                    try:
+                        saved_instances = self.features_db[
+                            descriptor]
+                        feat_params = self.parameters['features_params'][
+                            descriptor]
+                        for inst_count,instance in enumerate(saved_instances):
+                            found_instance = True
+                            for key in feat_params:
+                                if isinstance(feat_params[key],dict):
+                                    if any([feat_params[key][sub_key]!=
+                                            instance['params'][key][sub_key]
+                                            for sub_key in feat_params[key]]):
+                                        found_instance = False
+                                        break
+                                else:
+                                    if feat_params[key] != instance['params'][key]:
+                                        found_instance = False
+                                        break
+                            if found_instance:
+                                self.instance_ind[dcount] = inst_count
+                                self.candid_d_actions[dcount] = instance['data']
+                    except KeyError:
+                        pass
+            '''
+            Result is <self.candid_d_actions>, a list which holds matching
+            instances of actions for each descriptor, or None if not found.
+            '''
+            for dcount,descriptor in enumerate(self.candid_d_actions):
+                if self.candid_d_actions[dcount] is not None:
+                    if self.name in self.candid_d_actions[dcount]:
+                        data[dcount] = self.candid_d_actions[dcount][self.name]
+                        features_to_extract.remove(self.parameters['features']
+                                                   [dcount])
+
+        return features_to_extract, data
+
     def add_action(self, data=None,
                    mv_obj_fold_name=None,
                    hnd_mk_fold_name=None,
@@ -390,17 +490,19 @@ class Actions(object):
                    visualize_=False,
                    for_testing=False,
                    isderotated=False,
-                   ispassive=False,
+                   action_type='Dynamic',
                    max_act_samples=None,
                    fss_max_iter=None,
                    derot_centers=None,
                    derot_angles=None,
                    name=None,
-                   feature_extraction_method=None):
+                   feature_extraction_method=None,
+                   save=True,
+                   feat_filename=None):
         '''
         parameters=dictionary having at least a 'features' key, which holds
             a sublist of ['3DXYPCA', 'GHOG', '3DHOF', 'ZHOF']. It can have a
-            'feature_params' key, which holds specific parameters for the
+            'features_params' key, which holds specific parameters for the
             features to be extracted.
         features_extract= FeatureExtraction Class
         data= (Directory with depth frames) OR (list of depth frames)
@@ -408,151 +510,190 @@ class Actions(object):
         visualize= True to visualize features extracted from frames
         for_testing = True if input data is testing data
         '''
-        self.features_extract = FeatureExtraction(parameters=self.parameters,
-                                                  visualize_=visualize_)
         if data is None:
             raise Exception("Depth data frames are at least  needed")
         if isinstance(data, basestring) and name is None:
             name = os.path.basename(data)
+        if save:
+            if data[:(-len(name)-2)] == co.CONST['test_save_path']:
+                feat_filename = name+'_feats'
+            else:
+                feat_filename = 'train_feats'
+        self.name = name
+        features_to_extract, feat_data = self.load_action_features_from_mem(
+            feat_filename)
+        found_feats = []
+        found_sync = None
+        for feat_datum in feat_data:
+            if feat_datum is None:
+                found_feats.append(None)
+            else:
+                found_feats.append(feat_datum[0])
+                found_sync = feat_datum[1]
+                found_buffer_start_inds = feat_datum[2]
+                found_buffer_end_inds = feat_datum[3]
         if for_testing:
             self.testing = Action(self.parameters,name='test',coders=self.coders)
             action = self.testing
         else:
             self.actions.append(Action(self.parameters,name=name,coders=self.coders))
             action = self.actions[-1]
-        if masks_needed:
-            if mv_obj_fold_name is None:
-                mv_obj_fold_name = co.CONST['mv_obj_fold_name']
-            if hnd_mk_fold_name is None:
-                hnd_mk_fold_name = co.CONST['hnd_mk_fold_name']
-        if isinstance(data, basestring):
-            files = []
-            masks = []
-            samples_indices = []
-            angles = []
-            centers = []
-            action.sync = []
-            derot_info = False
-            if (os.path.isdir(os.path.join(data, '0')) or
-                    os.path.isdir(os.path.join(data, mv_obj_fold_name, '0'))):
-                action.name = os.path.basename(data)
-                for root, dirs, filenames in os.walk(data):
-                    for filename in sorted(filenames):
-                        fil = os.path.join(root, filename)
-                        folder_sep = os.path.normpath(fil).split(os.sep)
-                        if filename.endswith('.png'):
-                            ismask = False
-                            if masks_needed:
-                                ismask = folder_sep[-3] == hnd_mk_fold_name
-                            par_folder = folder_sep[-2]
-                            try:
-                                ind = int(par_folder)
-                                if ismask:
+        if features_to_extract:
+            self.features_extract = FeatureExtraction(parameters=self.parameters,
+                                                      visualize_=visualize_)
+            if masks_needed:
+                if mv_obj_fold_name is None:
+                    mv_obj_fold_name = co.CONST['mv_obj_fold_name']
+                if hnd_mk_fold_name is None:
+                    hnd_mk_fold_name = co.CONST['hnd_mk_fold_name']
+            if isinstance(data, basestring):
+                files = []
+                masks = []
+                samples_indices = []
+                angles = []
+                centers = []
+                action.sync = []
+                derot_info = False
+                if (os.path.isdir(os.path.join(data, '0')) or
+                        os.path.isdir(os.path.join(data, mv_obj_fold_name, '0'))):
+                    action.name = os.path.basename(data)
+                    for root, dirs, filenames in os.walk(data):
+                        for filename in sorted(filenames):
+                            fil = os.path.join(root, filename)
+                            folder_sep = os.path.normpath(fil).split(os.sep)
+                            if filename.endswith('.png'):
+                                ismask = False
+                                if masks_needed:
+                                    ismask = folder_sep[-3] == hnd_mk_fold_name
+                                par_folder = folder_sep[-2]
+                                try:
+                                    ind = int(par_folder)
+                                    if ismask:
+                                        masks.append(fil)
+                                    else:
+                                        files.append(fil)
+                                        action.sync.append(int(filter(
+                                            str.isdigit, os.path.basename(fil))))
+                                        samples_indices.append(ind)
+                                except ValueError:
+                                    pass
+                            elif filename.endswith('angles.txt'):
+                                derot_info = True
+                                fil = os.path.join(root, filename)
+                                with open(fil, 'r') as inpf:
+                                    angles += map(float, inpf)
+                            elif filename.endswith('centers.txt'):
+                                derot_info = True
+                                fil = os.path.join(root, filename)
+                                with open(fil, 'r') as inpf:
+                                    for line in inpf:
+                                        center = [
+                                            float(num) for num
+                                            in line.split(' ')]
+                                        centers += [center]
+                else:
+                    for root, dirs, filenames in os.walk(data):
+                        folder_sep = os.path.normpath(root).split(os.sep)
+                        for filename in sorted(filenames):
+                            if filename.endswith('.png'):
+                                fil = os.path.join(root, filename)
+                                if (masks_needed and
+                                        folder_sep[-2] == mv_obj_fold_name):
                                     masks.append(fil)
                                 else:
                                     files.append(fil)
                                     action.sync.append(int(filter(
                                         str.isdigit, os.path.basename(fil))))
-                                    samples_indices.append(ind)
-                            except ValueError:
-                                pass
-                        elif filename.endswith('angles.txt'):
-                            derot_info = True
-                            fil = os.path.join(root, filename)
-                            with open(fil, 'r') as inpf:
-                                angles += map(float, inpf)
-                        elif filename.endswith('centers.txt'):
-                            derot_info = True
-                            fil = os.path.join(root, filename)
-                            with open(fil, 'r') as inpf:
-                                for line in inpf:
-                                    center = [
-                                        float(num) for num
-                                        in line.split(' ')]
-                                    centers += [center]
-            else:
-                for root, dirs, filenames in os.walk(data):
-                    folder_sep = os.path.normpath(root).split(os.sep)
-                    for filename in sorted(filenames):
-                        if filename.endswith('.png'):
-                            fil = os.path.join(root, filename)
-                            if (masks_needed and
-                                    folder_sep[-2] == mv_obj_fold_name):
-                                masks.append(fil)
-                            else:
-                                files.append(fil)
-                                action.sync.append(int(filter(
-                                    str.isdigit, os.path.basename(fil))))
-                                samples_indices.append(0)
-                        elif filename.endswith('angles.txt'):
-                            derot_info = True
-                            fil = os.path.join(root, filename)
-                            with open(fil, 'r') as inpf:
-                                angles += map(float, inpf)
-                        elif filename.endswith('centers.txt'):
-                            derot_info = True
-                            fil = os.path.join(root, filename)
-                            with open(fil, 'r') as inpf:
-                                for line in inpf:
-                                    center = [
-                                        float(num) for num
-                                        in line.split(' ')]
-                                    centers += [center]
-            action.samples_indices = np.array(samples_indices)
-            action.angles = angles
-            imgs = [cv2.imread(filename, -1) for filename
-                    in files]
-            if masks_needed:
-                masks = [cv2.imread(filename, -1) for filename in masks]
-        if not derot_info:
-            if derot_angles is not None and derot_centers is not None:
-                centers = derot_centers
-                angles = derot_angles
-                derot_info = True
+                                    samples_indices.append(0)
+                            elif filename.endswith('angles.txt'):
+                                derot_info = True
+                                fil = os.path.join(root, filename)
+                                with open(fil, 'r') as inpf:
+                                    angles += map(float, inpf)
+                            elif filename.endswith('centers.txt'):
+                                derot_info = True
+                                fil = os.path.join(root, filename)
+                                with open(fil, 'r') as inpf:
+                                    for line in inpf:
+                                        center = [
+                                            float(num) for num
+                                            in line.split(' ')]
+                                        centers += [center]
+                action.samples_indices = np.array(samples_indices)
+                action.angles = angles
+                imgs = [cv2.imread(filename, -1) for filename
+                        in files]
+                if masks_needed:
+                    masks = [cv2.imread(filename, -1) for filename in masks]
+            if not derot_info:
+                if derot_angles is not None and derot_centers is not None:
+                    centers = derot_centers
+                    angles = derot_angles
+                    derot_info = True
 
-        img_len = len(imgs)
-        for img_count, img in enumerate(imgs):
-            if img_count > 0:
-                if samples_indices[
-                        img_count] != samples_indices[img_count - 1]:
-                    self.features_extract.reset()
+            img_len = len(imgs)
+            for img_count, img in enumerate(imgs):
+                if img_count > 0:
+                    if samples_indices[
+                            img_count] != samples_indices[img_count - 1]:
+                        self.features_extract.reset()
+                # DEBUGGING
+                # cv2.imshow('test',(imgs[img_count]%255).astype(np.uint8))
+                # cv2.waitKey(10)
+                t1 = time.time()
+                if isderotated:
+                    angles.append([None])
+                    centers.append([None])
+                if not masks_needed:
+                    masks.append([None])
+                self.features_extract.update(imgs[img_count],
+                                             action.sync[img_count],
+                                             mask=masks[img_count],
+                                             angle=angles[img_count],
+                                             center=centers[img_count])
+                t2 = time.time()
+                self.preproc_time.append(t2 - t1)
+
+                # Extract Features
+                features = self.features_extract.extract_features()
+                # Save action to actions object
+                if features is not None:
+                    if visualize_:
+                        self.features_extract.visualize()
+                    valid, sparse_time = action.add_features_group(
+                        action.sync[img_count],
+                        sample_ind=action.samples_indices[img_count],
+                        features=features)
+                    self.sparse_time += [sparse_time]
+                    if max_act_samples is not None:
+                        if img_count == max_act_samples:
+                            break
+            self.extract_time += self.features_extract.extract_time
             # DEBUGGING
-            # cv2.imshow('test',(imgs[img_count]%255).astype(np.uint8))
-            # cv2.waitKey(10)
-            t1 = time.time()
-            if isderotated:
-                angles.append([None])
-                centers.append([None])
-            if not masks_needed:
-                masks.append([None])
-            self.features_extract.update(imgs[img_count],
-                                         action.sync[img_count],
-                                         mask=masks[img_count],
-                                         angle=angles[img_count],
-                                         center=centers[img_count])
-            t2 = time.time()
-            self.preproc_time.append(t2 - t1)
-
-            # Extract Features
-            features = self.features_extract.extract_features()
-            # Save action to actions object
-            if features is not None:
-                if visualize_:
-                    self.features_extract.visualize()
-                valid, sparse_time = action.add_features_group(
-                    action.sync[img_count],
-                    sample_ind=action.samples_indices[img_count],
-                    features=features)
-                self.sparse_time += [sparse_time]
-                if max_act_samples is not None:
-                    if img_count == max_act_samples:
-                        break
-        # DEBUGGING
-        # print np.min(self.sparse_time,axis=1) ,\
-        #np.max(self.sparse_time,axis=1), np.mean(self.sparse_time,axis=1)\
-        #        ,np.median(self.sparse_time,axis=1)
+            # print np.min(self.sparse_time,axis=1) ,\
+            #np.max(self.sparse_time,axis=1), np.mean(self.sparse_time,axis=1)\
+            #        ,np.median(self.sparse_time,axis=1)
+        count = 0
+        for feat_count in range(len(feat_data)):
+            if feat_data[feat_count] is None:
+                found_feats[feat_count] = action.bbuffer[count]
+                count+=1
+        count = 0
+        for feat_count in range(len(feat_data)):
+            if feat_data[feat_count] is None:
+                feat_data[feat_count] = [np.array(action.bbuffer[count]).tolist()
+                                         ,action.sync,
+                                     action.buffer_start_inds,
+                                     action.buffer_end_inds]
+                count += 1
+        self.save_action_features_to_mem(feat_filename, feat_data)
+        action.bbuffer = found_feats
+        if found_sync is not None:
+            action.sync = found_sync
+            action.buffer_start_inds = found_buffer_start_inds
+            action.buffer_end_inds = found_buffer_end_inds
         if for_testing:
-            if ispassive:
+            if action_type=='Passive':
                 return (self.testing.retrieve_features().squeeze(),
                         self.testing.sync)
             else:
@@ -560,6 +701,7 @@ class Actions(object):
                         [self.testing.sync,
                          self.testing.buffer_start_inds,
                         self.testing.buffer_end_inds])
+
         return 0
 
     def update_sparse_features(self, coders,
@@ -620,7 +762,8 @@ class ActionsSparseCoding(object):
                           os.sep + 'saved_coders.pkl')
 
     def train(self, data, feat_count, bmat=None, display=0, min_iterations=10,
-              init_traindata_num=200, incr_rate=2, sp_opt_max_iter=200):
+              init_traindata_num=200, incr_rate=2, sp_opt_max_iter=200,
+              debug=False):
         '''
         feat_count: features position inside
                     actions.actions[act_num].features list
@@ -638,10 +781,10 @@ class ActionsSparseCoding(object):
                                                                init_traindata_num,
                                                            incr_rate=incr_rate,
                                                            sp_opt_max_iter=sp_opt_max_iter,
-                                                           init_bmat=bmat,
                                                            min_iterations=min_iterations)
-        self.codebooks[feat_count] = (pinv(self.sparse_coders[feat_count].bmat))
-
+        self.codebooks[feat_count] = (
+            pinv(self.sparse_coders[feat_count].bmat))
+        return 1
     def initialize(self):
         '''
         initialize / reset all codebooks that refer to the given <sparse_dim>
@@ -722,12 +865,18 @@ class FeatureExtraction(object):
     Features computation class
     '''
 
-    def __init__(self, parameters, visualize_=False):
+    def __init__(self, parameters, visualize_=False,
+                 features_to_extract=None):
         self.parameters = parameters
         self.with_hof3d = '3DHOF' in parameters['features']
         self.with_pca = '3DXYPCA' in parameters['features']
         self.with_ghog = 'GHOG' in parameters['features']
         self.with_zhof = 'ZHOF' in parameters['features']
+        if features_to_extract is not None:
+            self.with_hof3d = '3DHOF' in features_to_extract
+            self.with_pca = '3DXYPCA' in features_to_extract
+            self.with_ghog = 'GHOG' in features_to_extract
+            self.with_zhof = 'ZHOF' in features_to_extract
         self.extracted_features = [None] * len(self.parameters['features'])
         if self.with_hof3d:
             self.hof3d_ind = self.parameters['features'].index('3DHOF')
@@ -737,19 +886,15 @@ class FeatureExtraction(object):
             self.pca_ind = self.parameters['features'].index('3DXYPCA')
         if self.with_zhof:
             self.zhof_ind = self.parameters['features'].index('ZHOF')
-        self.ispassive = parameters['passive']
+        self.action_type = parameters['action_type']
         self.use_coders = parameters['sparsecoded']
-        self.feature_params = {}
         if self.with_hof3d or self.with_zhof:
-            self.hof3d_bin_size = co.CONST['3DHOF_bin_size']
-            self.feature_params['3DHOF'] = self.hof3d_bin_size
+            self.hof_bin_size = co.CONST[['3DHOF' if self.with_hof3d
+                                          else 'ZHOF'][0]+'_bin_size']
         if self.with_ghog:
             self.ghog_bin_size = co.CONST['GHOG_bin_size']
-            self.feature_params['GHOG'] = self.ghog_bin_size
         if self.with_pca:
             self.pca_resize_size = co.CONST['3DXYPCA_size']
-            self.feature_params['3DXYPCA'] = self.pca_resize_size
-        parameters['feature_params'] = self.feature_params
         self.skeleton = None
         self.extract_time = []
         self.features = np.zeros(0)
@@ -929,10 +1074,30 @@ class FeatureExtraction(object):
         # DEBUGGING
         #cv2.imshow('test', (self.curr_roi_patch).astype(np.uint8))
         #cv2.waitKey(10)
+        dx = x_true_new - x_true_old
+        dy = y_true_new - y_true_old
+        dz = curr_z[y_new, x_new] - prev_z[y_old, x_old]
+        return np.concatenate((dx.reshape(-1, 1),
+                               dy.reshape(-1, 1),
+                               dz.reshape(-1, 1)), axis=1)
+
+    def z_flow(self, prev_depth_im, curr_depth_im):
         '''
+        Computes vertical displacement to the camera, using static frame
+        xy-coordinates and changing z ones.
+        '''
+        self.prev_roi_patch = prev_depth_im[
+            self.roi[0, 0]:self.roi[0, 1],
+            self.roi[1, 0]:self.roi[1, 1]].astype(float)
+        self.curr_roi_patch = curr_depth_im[
+            self.roi[0, 0]:self.roi[0, 1],
+            self.roi[1, 0]:self.roi[1, 1]].astype(float)
+        nonzero_mask = (self.prev_roi_patch * self.curr_roi_patch) > 0
+        if np.sum(nonzero_mask) == 0:
+            return None
         yx_coords = (find_nonzero(
             nonzero_mask.astype(np.uint8)).astype(float)
-        -
+                            -
                      np.array([[PRIM_Y - self.roi[0, 0],
                                 PRIM_X - self.roi[1, 0]]]))
         prev_z_coords = self.prev_roi_patch[nonzero_mask][:,
@@ -941,17 +1106,12 @@ class FeatureExtraction(object):
                                                           None].astype(float)
         dz_coords = (curr_z_coords - prev_z_coords).astype(float)
         #invariance to environment height variance:
-        dz_coords[dz_coords>200] = 0
-        dz_coords[dz_coords<-200] = 0
-        yx_coords_in_space = yx_coords * dz_coords / float(FLNT)
-        '''
-        dx = x_true_new - x_true_old
-        dy = y_true_new - y_true_old
-        dz = curr_z[y_new, x_new] - prev_z[y_old, x_old]
-        return np.concatenate((dx.reshape(-1, 1),
-                               dy.reshape(-1, 1),
-                               dz.reshape(-1, 1)), axis=1)
-
+        dz_outliers = self.find_outliers(dz_coords, 3.).ravel()
+        dz_coords = dz_coords[dz_outliers==0]
+        yx_coords = yx_coords[dz_outliers==0,:]
+        yx_coords_in_space = (yx_coords * dz_coords / FLNT)
+        return np.concatenate((yx_coords_in_space,
+                               dz_coords), axis=1)
     def find_roi(self, prev_patch, curr_patch, prev_patch_pos, curr_patch_pos):
         '''
         Find unified ROI, concerning 2 consecutive frames
@@ -968,15 +1128,15 @@ class FeatureExtraction(object):
                  curr_patch.shape[1] + curr_patch_pos[1])]])
         return roi
 
-    def hof3d_compute(self, prev_depth_im, curr_depth_im, hof3d_bin_size=None,
+    def hof_compute(self, prev_depth_im, curr_depth_im, hof_bin_size=None,
                        simplified=False):
         '''
-        Compute 3DHOF features
+        Compute 3DHOF features, or ZHOF features if <simplified>
         '''
-        if hof3d_bin_size is None:
-            self.hofhist.bin_size = self.hof3d_bin_size
+        if hof_bin_size is None:
+            self.hofhist.bin_size = self.hof_bin_size
         else:
-            self.hofhist.bin_size = hof3d_bin_size
+            self.hofhist.bin_size = hof_bin_size
         self.hofhist.range = [[-1.0, 1.0], [-1.0, 1.0], [-1.0, 1.0]]
         if not simplified:
             disp = self.compute_scene_flow(prev_depth_im, curr_depth_im)
@@ -1054,40 +1214,9 @@ class FeatureExtraction(object):
         hist = hist / float(np.sum(hist))
         return hist
 
-    def z_flow(self, prev_depth_im, curr_depth_im):
-        '''
-        Computes vertical displacement to the camera, using static frame
-        xy-coordinates and changing z ones.
-        '''
-        self.prev_roi_patch = prev_depth_im[
-            self.roi[0, 0]:self.roi[0, 1],
-            self.roi[1, 0]:self.roi[1, 1]].astype(float)
-        self.curr_roi_patch = curr_depth_im[
-            self.roi[0, 0]:self.roi[0, 1],
-            self.roi[1, 0]:self.roi[1, 1]].astype(float)
-        nonzero_mask = (self.prev_roi_patch * self.curr_roi_patch) > 0
-        if np.sum(nonzero_mask) == 0:
-            return None
-        yx_coords = (find_nonzero(
-            nonzero_mask.astype(np.uint8)).astype(float)
-                            -
-                     np.array([[PRIM_Y - self.roi[0, 0],
-                                PRIM_X - self.roi[1, 0]]]))
-        prev_z_coords = self.prev_roi_patch[nonzero_mask][:,
-                                                          None].astype(float)
-        curr_z_coords = self.curr_roi_patch[nonzero_mask][:,
-                                                          None].astype(float)
-        dz_coords = (curr_z_coords - prev_z_coords).astype(float)
-        #invariance to environment height variance:
-        dz_outliers = self.find_outliers(dz_coords, 3.).ravel()
-        dz_coords = dz_coords[dz_outliers==0]
-        yx_coords = yx_coords[dz_outliers==0,:]
-        yx_coords_in_space = (yx_coords * dz_coords / FLNT)
-        return np.concatenate((yx_coords_in_space,
-                               dz_coords), axis=1)
     def extract_features(self):
         '''
-        Returns 3DHOF and GHOG . ispassive to return 3DXYPCA.
+        Returns Extracted Features
         '''
         #Remember to change list of features in __init__, if
         # features computation turn is changed
@@ -1109,14 +1238,14 @@ class FeatureExtraction(object):
                self.curr_count - self.prev_count > co.CONST['min_frame_count_diff']:
                 return None
             if self.with_hof3d:
-                hof_features = self.hof3d_compute(
+                hof_features = self.hof_compute(
                     self.prev_depth_im,
                     self.curr_depth_im)
                 if hof_features is None:
                     return None
                 self.extracted_features[self.hof3d_ind] = hof_features
             if self.with_zhof:
-                zhof_features = self.hof3d_compute(
+                zhof_features = self.hof_compute(
                     self.prev_depth_im,
                     self.curr_depth_im,
                     simplified=True)
@@ -1134,7 +1263,6 @@ class FeatureExtraction(object):
 
     def reset(self, visualize=False):
         self.__init__(self.parameters,visualize)
-
     def update(self, img, img_count, use_dexter=False, mask=None, angle=None,
                center=None, masks_needed=False, isderotated=False):
         '''
@@ -1162,7 +1290,6 @@ class FeatureExtraction(object):
                                          'longest_ray'):
                         return False
                     mask = self.skeleton.hand_mask
-
                     if mask is None:
                         return False
                     last_link = (self.skeleton.skeleton[-1][1] -
@@ -1218,7 +1345,7 @@ class FeatureExtraction(object):
                     (self.prev_patch_pos,
                      self.curr_patch_pos) = (self.curr_patch_pos,
                                              hand_patch_pos)
-                    if not self.ispassive:
+                    if not self.action_type=='Passive':
                         (hand_patch_original,
                          hand_patch_pos_original,
                          self.hand_contour_original) = prepare_im(
@@ -1353,13 +1480,14 @@ class ActionRecognition(object):
     <parameters> must be a dictionary.
     '''
 
-    def __init__(self, parameters, coders=None, log_lev='INFO'):
+    def __init__(self, parameters, coders=None, feat_filename=None, log_lev='INFO'):
         self.parameters = parameters
         self.sparse_helper = ActionsSparseCoding(parameters)
         self.sparse_helper.sparse_coders = coders
         self.dict_names = self.sparse_helper.features
         self.actions = Actions(parameters,
-                               coders=self.sparse_helper.sparse_coders)
+                               coders=self.sparse_helper.sparse_coders,
+                               feat_filename=feat_filename)
         self.log_lev = log_lev
         LOG.setLevel(log_lev)
 
@@ -1375,10 +1503,13 @@ class ActionRecognition(object):
                             trained_coders_list = None,
                             coders_to_train = None,
                             codebooks_dict = None,
+                            coders_savepath = None,
                             min_iterations=10,
                             incr_rate=2,
                             sp_opt_max_iter=200,
-                            init_traindata_num=200):
+                            init_traindata_num=200,
+                            save=True,
+                            debug=False):
         '''
         Add Dexter 1 TOF Dataset or depthdata + binarymaskdata and
         set use_dexter to False (directory with .png or list accepted)
@@ -1396,6 +1527,7 @@ class ActionRecognition(object):
         self.sparse_helper.initialize()
         for ind,coder in enumerate(trained_coders_list):
             self.sparse_helper.sparse_coders[ind] = coder
+        all_sparse_coders = codebooks_dict
         for count,feat_name in enumerate(self.parameters['features']):
             if count in coders_to_train:
                 if self.parameters['dynamic_params']['post_PCA']:
@@ -1412,15 +1544,29 @@ class ActionRecognition(object):
                 frames_num = data.shape[1]
                 LOG.info('Frames number: ' + str(frames_num))
                 LOG.info('Creating coder for ' + feat_name)
-
                 self.sparse_helper.train(data,
                                         count,
                                         display=1,
                                         init_traindata_num=init_traindata_num,
                                         incr_rate=incr_rate,
                                         sp_opt_max_iter=sp_opt_max_iter,
-                                        min_iterations=min_iterations)
-                if codebooks_dict is not None:
+                                        min_iterations=min_iterations,
+                                        debug=debug)
+                save_name = feat_name + ' ' + str(self.parameters['sparse_params'][
+                    feat_name])
+                if self.parameters['dynamic_params']['post_PCA']:
+                    comp = self.parameters['dynamic_params']['post_PCA_components']
+                    save_name += ' PCA ' + str(comp)
+                all_sparse_coders[save_name
+                                   ] = self.sparse_helper.sparse_coders[
+                    count]
+                if codebooks_dict is not None and save:
                     self.sparse_helper.save(save_dict=codebooks_dict)
+                    if coders_savepath is not None:
+                        LOG.info('Saving '+
+                                 str(self.parameters['features'][count])+
+                                 ' coder..')
+                        with open(coders_savepath, 'w') as output:
+                            pickle.dump(all_sparse_coders, output, -1)
         self.parameters['sparse_params']['trained_coders'] = True
         return

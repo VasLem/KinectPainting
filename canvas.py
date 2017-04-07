@@ -27,6 +27,7 @@ from kivy.vector import Vector
 import time
 from math import pi,cos,sin
 from numpy.linalg import norm
+from scipy.interpolate import splprep
 SHAPE = (500, 900)
 
 
@@ -109,34 +110,42 @@ class StrokeRecognition(object):
         circle = [[Vector(int(10+10*cos(t)),
                                               int(10+10*sin(t)))
                                        for t in np.linspace(0,2*pi,8)]]
-        self.gdb.add_gesture('Circle',circle, )
+        self.gdb.add_gesture('Circle',circle, strokes_sensitive=True)
         #Horizontal or vertical lines give error
         self.gdb.add_gesture('Line', [[Vector(10,60),Vector(40,50)]],
-                             strokes_sensitive=False)
+                             strokes_sensitive=True, priority=50)
         self.gdb.add_gesture('Triangle', [[Vector(10,10),
                                            Vector(15,15),
                                           Vector(20,20),
-                                           Vector(25,15),
+                                           Vector(20,20),
+                                            Vector(25,15),
                                           Vector(30,10),
-                                           Vector(20,10),
+                                           Vector(30,10),
+                                            Vector(20,10),
                                           Vector(10,10)]],
-                            strokes_sensitive=False)
+                            strokes_sensitive=False,
+                            orientation_sensitive=False,
+                            permute=False)
         self.gdb.add_gesture('Rectangle', [[Vector(10,10),
                                             Vector(10,15),
                                            Vector(10,20),
-                                            Vector(15,20),
+                                            Vector(10,20),
+                                             Vector(15,20),
                                            Vector(20,20),
-                                            Vector(20,15),
+                                            Vector(20,20),
+                                             Vector(20,15),
+                                             Vector(20,10),
                                            Vector(20,10),
                                             Vector(15,10),
                                            Vector(10,10)]],
-                            strokes_sensitive=False)
+                            strokes_sensitive=False,
+                             orientation_sensitive=False,
+                            permute=False)
         self.found_gesture = False
         self.gesture = None
         self._data = data
         self._parent = parent
         self.ran = False
-        self.gdb.bind(on_search_start=self.search_start)
         self.gdb.bind(on_search_complete=self.search_stop)
         self.dist_thres = 1000
         self.time_thres = 2
@@ -150,58 +159,61 @@ class StrokeRecognition(object):
             self.callback)
         self.bridge = CvBridge()
     def callback(self, skel, class_name):
-        try:
-            skel = self.bridge.imgmsg_to_cv2(skel,
-                                             desired_encoding=
-                                             'passthrough')
-            action = class_name.source
-            if action == 'Index':
-                self.ran = False
-                self.add_stroke_vector(skel[-1, -1, 1],
-                                       skel[-1, -1, 0])
-                self.time = time.time()
-            elif action == 'Palm':
-                self.add_stroke()
-            if not self.ran and time.time() - self.time > self.time_thres:
-                self.ran = True
-                print self.strokes[:-1]
-                self.progress = self.gdb.recognize(self.strokes[:-1])
-                #removing last empty sublist          ^
-                self.progress.bind(on_progress=self.on_progress)
-                clock.tick()
-                self._data.add(gesture=self.gesture,
-                               found_gesture=self.found_gesture,
-                               strokes=self.strokes)
-                self.strokes = [[]]
-                evt = CreateEvent(EVT_STRK_TYPE, -1)
-                wx.PostEvent(self._parent, evt)
-        except Exception as e:
-             exc_type, exc_value, exc_traceback = sys.exc_info()
-             traceback.print_exception(exc_type,
-                                exc_value,
-                                exc_traceback, limit=2, file=sys.stdout)
-             print e
-    def on_progress(self, *args):
-        print(self.progress.progress) # = 0
+        if self._parent.initialized and not self._parent.write_mode:
+            try:
+                skel = self.bridge.imgmsg_to_cv2(skel,
+                                                 desired_encoding=
+                                                 'passthrough')
+                action = class_name.source
+                if action == 'Index':
+                    self.ran = False
+                    self.add_stroke_vector(skel[-1, -1, 1],
+                                           skel[-1, -1, 0])
+                    self.time = time.time()
+                elif action == 'Palm':
+                    self.add_stroke()
+                if not self.ran and time.time() - self.time > self.time_thres:
+                    self.ran = True
+                    if len(self.strokes[0])>0:
+                        self.progress = self.gdb.recognize(self.strokes[:-1])
+                    #removing last empty sublist          ^
+                    clock.tick()
+                    self._data.add(gesture=self.gesture,
+                                   found_gesture=self.found_gesture,
+                                   strokes=self.strokes)
+                    self.strokes = [[]]
+                    evt = CreateEvent(EVT_STRK_TYPE, -1)
+                    wx.PostEvent(self._parent, evt)
+            except Exception as e:
+                 exc_type, exc_value, exc_traceback = sys.exc_info()
+                 traceback.print_exception(exc_type,
+                                    exc_value,
+                                    exc_traceback, limit=2, file=sys.stdout)
+                 print e
+        else:
+            self.strokes = [[]]
 
 
-    def search_start(self, gdb, pt):
-        print("A search is starting with %d tasks" % (pt.tasks))
     def search_stop(self, gdb, pt):
         best = pt.best
-        print ("Search ended (",pt.status,"). Best is ",best['name'],
-        " (score ",
-        best['score'],", distance", best['dist'],")")
         dist = best['dist']
         self.gesture = best['name']
-        if dist < self.dist_thres:
+        if dist < self.dist_thres and self.gesture is not None:
             self.found_gesture = True
+        else:
+            self.found_gesture = False
 
     def add_stroke(self):
         if len(self.strokes[-1])>0: #add stroke only if last stroke is not empty
             self.strokes.append([])
     def add_stroke_vector(self, xpoint, ypoint):
-        self.strokes[-1].append(Vector(xpoint,ypoint))
+        if len(self.strokes[-1])>0:
+            dist_check = norm(np.diff([np.array(self.strokes[-1][-1]),
+                                       np.array([xpoint,ypoint])],axis=0))<10
+        else:
+            dist_check = True
+        if dist_check:
+            self.strokes[-1].append(Vector(xpoint,ypoint))
 
 class ROSThread(threading.Thread):
     def __init__(self, parent, data):
@@ -264,12 +276,6 @@ class Canvas(wx.Panel):
         painter.DrawBitmap(
             getbitmap(self, self.data), 0, 0)
 
-def tag_im(img, text):
-    '''
-    Tag top of img with description in red
-    '''
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(img, text, (0, 20), font, 0.5, (0, 0, 255), 2)
 
 class MainFrame(wx.Frame):
     def __init__(self,parent, id_, title):
@@ -292,6 +298,14 @@ class MainFrame(wx.Frame):
         self.size = 1
         self.prev_size = 1
         self.depths = []
+        self.prev_gest = None
+        self.stroke = []
+        self.write_mode = True
+        self.initialized = False
+        self.max_size = 20
+        self.min_size = 1
+        self.max_depth = 800
+        self.min_depth = 550
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         self.Bind(wx.EVT_CLOSE, self.on_close)
@@ -305,110 +319,140 @@ class MainFrame(wx.Frame):
             self.timer.Stop()
         self.strokes.callback()
     def on_ros_process(self, event):
-        inp = np.tile(self.data.hand[:, :, None] % 255, (1, 1, 3))
-        if self.drawing_im is None:
-            self.drawing_im = np.zeros_like(inp)
-            self.temporary_im = np.zeros_like(inp)
-        if self.init_depth == 0:
-            self.init_depth = self.data.hand[self.data.skel[-1, -1, 0],
-                                             self.data.skel[-1, -1, 1]]
         try:
-            dep = self.data.hand[self.data.skel[-1,-1,0],
-                             self.data.skel[-1,-1,1]]
-        except IndexError:
-            print self.data.skel
-        if dep!=0:
-            if len(self.depths)<20:
-                self.depths.append(dep)
-            else:
-                self.depths= self.depths[1:]+[dep]
-            dep = np.median(np.array(self.depths))
-        '''
-        if dep != 0:
-            self.size = int(2*(11-10*dep/float(self.init_depth)))
-        self.size = min(self.size, 10)
-        self.size = max(self.size , 1)
-        '''
-        if self.prev_size != self.size:
-            LOG.info('Current Size:'+ str(self.size))
-            self.prev_size = self.size
-        if self.data.class_name == 'Punch':
-            self.size = 5
-            cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
-                                            self.data.skel[-1, -1, 0]), self.size,
-                           [0,0,0], -1)
-        elif self.data.class_name == 'Index':
-            self.size = 2
-            cv2.circle(self.temporary_im,(self.data.skel[-1, -1, 1],
-                                        self.data.skel[-1, -1, 0]), self.size,
-                       [255,255,255], -1)
-
-        inp = inp + self.drawing_im + self.temporary_im
-        inp = inp.astype(np.uint8)
-        for link in self.data.skel:
-            cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]),
-                     [255, 0, 0], 3)
-        inp = cv2.flip(inp, -1)
-        co.tag_im(inp, 'Action: ' + self.data.class_name)
-        co.tag_im(inp, 'FPS: ' + str(self.data.fps),loc='bot right',
-                  fontscale=0.4, color=(255,255,255))
-        if self.canvas is None:
-            self.canvas = Canvas(self, inp)
-            self.canvas_sizer.Add(self.canvas)
-            self.SetSizerAndFit(self.canvas_sizer)
-        else:
-            self.canvas.data = inp
-        self.canvas.Refresh(False)
-    def on_stroke_process(self, event):
-        if self.stroke_data.found_gesture:
-            points = []
-            for stroke in self.stroke_data.strokes:
-                if len(stroke) == 0:
-                    continue
-                points.append([])
-                points[-1].append([[v[0],v[1]]
-                               for v in stroke])
+            inp = np.tile(self.data.hand[:, :, None] % 255, (1, 1, 3))
+            if self.drawing_im is None:
+                self.drawing_im = np.zeros_like(inp)
+                self.temporary_im = np.zeros_like(inp)
+            if self.init_depth == 0:
+                self.init_depth = self.data.hand[self.data.skel[-1, -1, 0],
+                                                 self.data.skel[-1, -1, 1]]
             try:
-                if self.stroke_data.gesture == 'Circle':
-                    points = np.array(
-                        [item for sublist in
-                         points for item in sublist]).reshape(-1,2)
-                    print points.shape
-                    center = np.int0(np.mean(points,axis=0))
-                    radius = np.int0(norm(np.std(points,axis=0)))
-                    cv2.circle(self.drawing_im,(center[0],
-                                            center[1]), radius,
-                           [255,255,255], self.size)
-                elif self.stroke_data.gesture == 'Line':
-                    points = np.array(
-                        [item for sublist in points for item in sublist])
-                    cv2.line(self.drawing_im, tuple(points[0][0])
-                             , tuple(points[-1][-1]),
-                             [255, 255, 255], self.size)
-                elif self.stroke_data.gesture == 'Rectangle':
-                    points = np.array(
-                        [item for sublist in points for item in sublist])
-                    rect = cv2.minAreaRect(points)
-                    box = np.int0(cv2.boxPoints(rect))
-                    cv2.drawContours(self.drawing_im, [box], 0,
-                                     [255, 255, 255], self.size)
-                elif self.stroke_data.gesture == 'Triangle':
-                    points = np.array(
-                        [item for sublist in points 
-                         for item in sublist]).reshape(1,-1,2)
-                    triangle = np.int0(cv2.minEnclosingTriangle(
-                        points)[1].squeeze())
-                    cv2.drawContours(self.drawing_im,
-                                     [triangle], 0,
-                                     [255, 255, 255], self.size)
+                dep = self.data.hand[self.data.skel[-1,-1,0],
+                                 self.data.skel[-1,-1,1]]
+            except IndexError:
+                print self.data.skel
+            if dep!=0:
+                if len(self.depths)<20:
+                    self.depths.append(dep)
+                else:
+                    self.depths= self.depths[1:]+[dep]
+                dep = np.median(np.array(self.depths))
+            if dep < self.min_depth and dep != 0: #erase everything if hand comes close to kinect
+                self.drawing_im = np.zeros_like(inp)
+                self.temporary_im = np.zeros_like(inp)
+            else:
+                dep = min(dep, self.max_depth)
+                if dep != 0:
+                    self.size = int((self.max_size-self.min_size)/
+                                 (float(self.max_depth) - float(self.min_depth))*
+                                 (self.max_depth - dep) + self.min_size)
+                self.size = min(self.size, self.max_size)
+                self.size = max(self.size , self.min_size)
+                if self.initialized:
+                    if self.data.class_name == 'Punch':
+                        cv2.circle(self.drawing_im,(self.data.skel[-1, -1, 1],
+                                                        self.data.skel[-1, -1, 0]), self.size,
+                                       [0,0,0], -1)
+                    elif self.data.class_name == 'Index':
+                        self.stroke.append([self.data.skel[-1, -1, 1],
+                                           self.data.skel[-1, -1, 0]])
+                        self.stroke = self.stroke[-4:] #keep last 4 points
+                        if self.prev_gest == 'Index':
+                            if norm(np.diff(np.array(self.stroke[-2:]),axis=0))<10:
+                                cv2.line(self.temporary_im,
+                                         tuple(self.stroke[-2]),tuple(self.stroke[-1]),
+                                         [255, 255, 255], self.size)
+                        else:
+                            cv2.circle(self.temporary_im,(self.data.skel[-1, -1, 1],
+                                                        self.data.skel[-1, -1, 0]), self.size,
+                                       [255,255,255], -1)
+                    elif self.data.class_name == 'Tiger':
+                        if self.prev_gest != 'Tiger':
+                            self.write_mode = not self.write_mode
+                else:
+                    if self.data.class_name == 'Tiger':
+                       self.initialized = True
+                self.prev_gest = self.data.class_name
+            if self.write_mode:
+                self.drawing_im += self.temporary_im
                 self.temporary_im = np.zeros_like(self.drawing_im)
-            except Exception as e:
-                 exc_type, exc_value, exc_traceback = sys.exc_info()
-                 traceback.print_exception(exc_type,
-                                    exc_value,
-                                    exc_traceback, limit=2, file=sys.stdout)
-        else:
-            self.drawing_im += self.temporary_im
+            inp = (inp + self.drawing_im + self.temporary_im)
+            inp = inp.astype(np.uint8)
+            for link in self.data.skel:
+                cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]),
+                         [255, 0, 0], 3)
+            inp = cv2.flip(inp, -1)
+            co.tag_im(inp, 'Action: ' + self.data.class_name+
+                      '\nWrite Mode: ' + ('on' if self.write_mode else 'off')+
+                      '\nPen Size: ' + str(self.size),color=(255,0,0),
+                      fontscale=0.7, thickness=2 )
+            co.tag_im(inp, 'Median depth: ' + str(dep) +
+                      '\nFPS: ' + str(self.data.fps),loc='bot right',
+                      fontscale=0.4, color=(255,255,255))
+            if self.canvas is None:
+                self.canvas = Canvas(self, inp)
+                self.canvas_sizer.Add(self.canvas)
+                self.SetSizerAndFit(self.canvas_sizer)
+            else:
+                self.canvas.data = inp
+            self.canvas.Refresh(False)
+        except Exception as e:
+             exc_type, exc_value, exc_traceback = sys.exc_info()
+             traceback.print_exception(exc_type,
+                                exc_value,
+                                exc_traceback, limit=2, file=sys.stdout)
+
+    def on_stroke_process(self, event):
+        try:
+            if self.stroke_data.found_gesture and not self.write_mode:
+                points = []
+                for stroke in self.stroke_data.strokes:
+                    if len(stroke) == 0:
+                        continue
+                    points.append([])
+                    points[-1].append([[v[0],v[1]]
+                                   for v in stroke])
+                    if self.stroke_data.gesture == 'Circle':
+                        points = np.array(
+                            [item for sublist in
+                             points for item in sublist]).reshape(-1,2)
+                        center = np.int0(np.mean(points,axis=0))
+                        radius = np.int0(norm(np.std(points,axis=0)))
+                        cv2.circle(self.drawing_im,(center[0],
+                                                center[1]), radius,
+                               [255,255,255], self.size)
+                    elif self.stroke_data.gesture == 'Line':
+                        points = np.array(
+                            [item for sublist in points for item in sublist])
+                        cv2.line(self.drawing_im, tuple(points[0][0])
+                                 , tuple(points[-1][-1]),
+                                 [255, 255, 255], self.size)
+                    elif self.stroke_data.gesture == 'Rectangle':
+                        points = np.array(
+                            [item for sublist in points for item in sublist])
+                        rect = cv2.minAreaRect(points)
+                        box = np.int0(cv2.boxPoints(rect))
+                        cv2.drawContours(self.drawing_im, [box], 0,
+                                         [255, 255, 255], self.size)
+                    elif self.stroke_data.gesture == 'Triangle':
+                        points = np.array(
+                            [item for sublist in points 
+                             for item in sublist]).reshape(1,-1,2)
+                        triangle = np.int0(cv2.minEnclosingTriangle(
+                            points)[1].squeeze())
+                        cv2.drawContours(self.drawing_im,
+                                         [triangle], 0,
+                                         [255, 255, 255], self.size)
+                    self.temporary_im = np.zeros_like(self.drawing_im)
+            else:
+                if self.write_mode:
+                    self.drawing_im += self.temporary_im
+        except Exception as e:
+             exc_type, exc_value, exc_traceback = sys.exc_info()
+             traceback.print_exception(exc_type,
+                                exc_value,
+                                exc_traceback, limit=2, file=sys.stdout)
 
 
 

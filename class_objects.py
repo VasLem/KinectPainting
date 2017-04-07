@@ -1,4 +1,5 @@
-import os, errno
+import os
+import errno
 import numpy as np
 import cv2
 from math import pi
@@ -6,6 +7,7 @@ import time
 from cv_bridge import CvBridge, CvBridgeError
 import yaml
 from __init__ import *
+from matplotlib import pyplot as plt
 import logging
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler()
@@ -22,7 +24,7 @@ def timeit(method):
         result = method(*args, **kw)
         te = time.time()
 
-        print method.__name__, (te-ts)*1000, 'ms'
+        print method.__name__, (te - ts) * 1000, 'ms'
         return result
 
     return timed
@@ -30,6 +32,7 @@ def timeit(method):
 
 def find_nonzero(arr):
     return np.fliplr(cv2.findNonZero(arr).squeeze())
+
 
 def makedir(path):
     try:
@@ -47,36 +50,36 @@ def tag_im(img, msg, loc='top left', in_place=True,
            centered=False,
            color=(0, 0, 255)):
     locs = loc.split(' ')
-    if len(locs)==1:
+    if len(locs) == 1:
         locs.append('mid')
     t_x_shapes = []
     t_y_shapes = []
     t_lens = []
     lines = msg.split('\n')
     for line in lines:
-        text_shape,text_len = cv2.getTextSize(line, font,
-                                              fontscale, thickness)
+        text_shape, text_len = cv2.getTextSize(line, font,
+                                               fontscale, thickness)
         t_x_shapes.append(text_shape[0])
         t_y_shapes.append(text_shape[1])
         t_lens.append(text_len)
     line_height = max(t_y_shapes)
     text_shape = (max(t_x_shapes), int((line_height) *
                                        (1 + vspace) *
-                  len(lines)))
-    vpos = {'top':0,
-            'mid':img.shape[0] / 2 - text_shape[1] / 2,
-            'bot':img.shape[0] - text_shape[1] - 10}
-    hpos = {'left':text_shape[0] / 2 + 5,
-            'mid':img.shape[1] / 2,
-            'right':img.shape[1] - text_shape[0] / 2}
+                                       len(lines)))
+    vpos = {'top': 0,
+            'mid': img.shape[0] / 2 - text_shape[1] / 2,
+            'bot': img.shape[0] - text_shape[1] - 10}
+    hpos = {'left': text_shape[0] / 2 + 5,
+            'mid': img.shape[1] / 2,
+            'right': img.shape[1] - text_shape[0] / 2}
     if in_place:
         cop = img
     else:
         cop = img.copy()
 
-    for count,line in enumerate(lines):
+    for count, line in enumerate(lines):
         xpos = hpos[locs[1]]
-        if  not centered:
+        if not centered:
             xpos -= text_shape[0] / 2
         else:
             xpos -= t_x_shapes[count] / 2
@@ -85,6 +88,7 @@ def tag_im(img, msg, loc='top left', in_place=True,
                     * (1 + count)))
         cv2.putText(cop, line, (xpos, ypos),
                     font, fontscale, color, thickness)
+
 
 class CircularOperations(object):
     '''
@@ -327,10 +331,10 @@ class Edges(object):
             if (frame_path is None) ^ (edges_path is None):
                 if frame_path is None:
                     LOG.error('Missing frame_path input, but edges_path is' +
-                                  ' given')
+                              ' given')
                 else:
                     LOG.error('Missing edges_path input, but frame_path is' +
-                                  ' given')
+                              ' given')
             if edges_path is None:
                 edges_path = CONST['cal_edges_path']
                 frame_path = CONST['cal_frame_path']
@@ -468,6 +472,16 @@ class ExistenceProbability(object):
         im_results.images.append(im_res)
         '''
 
+class FileOperations(object):
+    def save_using_ujson(self,obj, filename):
+        import ujson as json
+        with open(filename,'w') as out:
+            json.dump(obj,out)
+    def load_using_ujson(self,filename):
+        import ujson as json
+        with open(filename,'r') as inp:
+            obj = json.load(inp)
+        return obj
 
 class Hull(object):
     '''Convex Hulls of contours'''
@@ -493,19 +507,22 @@ class KalmanFilter:
         self.cur_objects_mask = np.zeros(0)
         self.can_exist = np.zeros(0)
 
+
 class Latex(object):
     '''
     Basic transriptions to latex
     '''
+
     def array_transcribe(self, arr, xlabels=None, ylabels=None,
-                       sup_x_label=None, sup_y_label=None,
-                       extra_locs=None):
+                         sup_x_label=None, sup_y_label=None,
+                         extra_locs='bot',boldlabels=True):
         '''
         <arr> is the input array, <xlabels> are the labels along x axis,
         <ylabels> are the labels along the y axis, <sup_x_label> and
         <sup_y_label> are corresponding labels description. <arr> can be also a
         list of numpy arrays when <extra_locs> is a list of 'right' and 'bot' with
-        the same length as the <arr[1:]> list . If this is the case, then starting
+        the same length as the <arr[1:]> list (or a string if uniform structure
+        is wanted). If this is the case, then starting
         by the first array in the list, each next array is concatenated to it,
         while adding either a double line or a double column separating them.
         The dimensions of the arrays and the labels should be coherent, or an
@@ -514,37 +531,43 @@ class Latex(object):
         doublerows = []
         doublecols = []
         whole_arr = None
-        if isinstance(arr , list):
+        if isinstance(arr, list):
+            if isinstance(extra_locs, basestring):
+                extra_locs = [extra_locs] * (len(arr) - 1)
             if len(arr) != len(extra_locs) + 1:
                 raise Exception('<extra_locs> should have the'
-                                +' same length as <arr> -1\n'+
+                                + ' same length as <arr> -1\n' +
                                 self.array_transcribe.__doc__)
-            if not isinstance(arr[0], np.ndarray) or len(arr[0].shape)==1:
+            if not isinstance(arr[0], np.ndarray) or len(arr[0].shape) == 1:
                 arr[0] = np.atleast_2d(arr[0])
             whole_arr = arr[0]
-            for array,loc in zip(arr[1:],extra_locs):
-                if not isinstance(array, np.ndarray) or len(array.shape)==1:
+            for array, loc in zip(arr[1:], extra_locs):
+                if not isinstance(array, np.ndarray) or len(array.shape) == 1:
                     array = np.atleast_2d(array)
                 if loc == 'right':
                     if whole_arr.shape[0] != array.shape[0]:
-                        raise Exception ('The dimensions are not coeherent\n'+
-                                         self.array_transcribe.__doc__)
+                        raise Exception('The dimensions are not coeherent\n' +
+                                        self.array_transcribe.__doc__)
                     doublecols.append(whole_arr.shape[1])
-                    whole_arr = np.concatenate((whole_arr,array), axis=1)
+                    whole_arr = np.concatenate((whole_arr, array), axis=1)
                 elif loc == 'bot':
                     if whole_arr.shape[1] != array.shape[1]:
-                        raise Exception ('The dimensions are not coeherent\n'+
-                                         self.array_transcribe.__doc__)
+                        raise Exception('The dimensions are not coeherent\n' +
+                                        self.array_transcribe.__doc__)
                     doublerows.append(whole_arr.shape[0])
-                    whole_arr = np.concatenate((whole_arr,array), axis=0)
+                    whole_arr = np.concatenate((whole_arr, array), axis=0)
         elif len(arr.shape) == 1:
             whole_arr = np.atleast_2d(arr)
         else:
             whole_arr = arr
         if xlabels is not None:
+            if boldlabels:
+                xlabels = [r'\textbf{'+lab+r'}' for lab in xlabels]
             xlabels = np.array(xlabels)
             xlabels = xlabels.astype(list)
         if ylabels is not None:
+            if boldlabels:
+                ylabels = [r'\textbf{'+lab+r'}' for lab in ylabels]
             ylabels = np.array(ylabels)
             ylabels = ylabels.astype(list)
         y_size, x_size = whole_arr.shape
@@ -568,14 +591,17 @@ class Latex(object):
                     cols_space.append('c|')
         else:
             cols_space = ['c |'] * x_mat
-        begin = '\\begin{document} \n \\begin{tabular}{|' + ''.join(cols_space) + '}\n'
+        begin = '\\begin{document} \n \\begin{tabular}{|' + \
+            ''.join(cols_space) + '}\n'
         small_hor_line = '\\cline{' + \
             str(1 + ex_ys + ex_y) + '-' + str(x_mat) + '}'
-        double_big_hor_line = ('\\hhline{' + (ex_ys)*'|~'
-                               + (x_size+ex_y) *'|=' +'|}')
+        double_big_hor_line = ('\\hhline{' + (ex_ys) * '|~'
+                               + (x_size + ex_y) * '|=' + '|}')
         big_hor_line = '\\cline{' + str(1 + ex_ys) + '-' + str(x_mat) + '}'
         whole_hor_line = '\\cline{1-' + str(x_mat) + '}'
         if sup_x_label is not None:
+            if boldlabels:
+                sup_x_label = r'\textbf{' + sup_x_label + r'}'
             if ex_ys or ex_y:
                 multicolumn = ('\\multicolumn{' + str(ex_ys + ex_y) + '}{c|}{} & ' +
                                '\\multicolumn{' + str(x_size) +
@@ -587,9 +613,11 @@ class Latex(object):
         else:
             multicolumn = ''
         if ex_ys:
+            if boldlabels:
+                sup_y_label = r'\textbf{' + sup_y_label + r'}'
             multirow = whole_hor_line + \
                 '\\multirow{' + str(y_size) + '}{*}{\\rotatebox[origin=c]{90}{'\
-            + sup_y_label + '}}'
+                + sup_y_label + '}}'
         else:
             multirow = ''
 
@@ -665,7 +693,7 @@ class Memory(object):
         '''
         add anamnesis to memory
         '''
-        if not type(anamnesis[0, 0]) == np.bool_:
+        if not isinstance(anamnesis[0, 0], np.bool_):
             anamnesis = anamnesis > 0
         if self.image is None:
             self.image = np.zeros(anamnesis.shape)
@@ -727,7 +755,8 @@ class CamShift(object):
                             [0, 1])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
         hist = hist.reshape(-1)
-        if self.track_window and self.track_window[2] > 0 and self.track_window[3] > 0:
+        if self.track_window and self.track_window[
+                2] > 0 and self.track_window[3] > 0:
             if mask2 is None:
                 mask2 = np.ones(frame.shape)
             prob_tmp = cv2.calcBackProject([inp[mask2 > 0]], [0], hist, [0, 1],
@@ -837,6 +866,22 @@ class NoiseRemoval(object):
             data.depth_im = img
         return img
 
+    def masked_mean(self, data, win_size):
+        mask = np.isnan(data)
+        K = np.ones(win_size, dtype=int)
+        return np.convolve(np.where(mask, 0, data), K) / np.convolve(~mask, K)
+
+    def masked_filter(self, data, win_size):
+        '''
+        Mean filter data with missing values, along axis 1
+        '''
+        if len(data.shape) == 1:
+            inp = np.atleast_2d(data).T
+        else:
+            inp = data
+        return np.apply_along_axis(self.masked_mean,
+                                   0, inp, win_size)[:-win_size + 1]
+
 
 class Path(object):
     '''necessary paths for loading and saving'''
@@ -882,13 +927,10 @@ class PolarOperations(object):
                       [_sin, _cos, - _x0 * _sin - _y0 * _cos + (_y1)]])
         return np.dot(M,
                       np.concatenate((points,
-                                      np.ones((1,points.shape[1]))),
+                                      np.ones((1, points.shape[1]))),
                                      axis=0))
 
-    def derotate(self, img, angle, center,in_rads=True):
-        #if in_rads:
-        #    angle = angle * 180/float(pi)
-        #derotate
+    def derotate(self, img, angle, center, in_rads=True):
         angle = - angle
         _cos = np.cos(angle)
         _sin = np.sin(angle)
@@ -904,13 +946,16 @@ class PolarOperations(object):
                                       img.shape[0]))
         return img
 
-    def find_cocircular_points(self, polar_points, radius, resolution=np.sqrt(2) / 2.0):
+    def find_cocircular_points(
+            self, polar_points, radius, resolution=np.sqrt(2) / 2.0):
         '''
         Find cocircular points given radius and suggested resolution
         '''
-        return polar_points[np.abs(polar_points[:, 0] - radius) <= resolution, :]
+        return polar_points[
+            np.abs(polar_points[:, 0] - radius) <= resolution, :]
 
-    def change_origin(self, old_polar, old_ref_angle, old_ref_point, new_ref_point):
+    def change_origin(self, old_polar, old_ref_angle,
+                      old_ref_point, new_ref_point):
         '''Caution: old_polar is changed'''
         old_polar[:, 1] += old_ref_angle
         complex_diff = (new_ref_point[0] - old_ref_point[0]) * \
@@ -988,6 +1033,21 @@ class PolarOperations(object):
         else:
             return sgn * np.min(diff, axis=0)
 # pylint:enable=no-self-use
+
+
+class PlotOperations(object):
+
+    def put_legend_outside_plot(self, axes):
+        '''
+        Remove legend from the insides of the plots
+        '''
+        # Shrink current axis by 20%
+        box = axes.get_position()
+        axes.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+        # Put a legend to the right of the current axis
+        lgd = axes.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        return lgd
 
 
 class Result(object):
@@ -1320,7 +1380,8 @@ class Segmentation(object):
                     if neighbor in check_atoms:
                         if neighbor not in neighborhoods[neighborhood_id]:
                             neighborhoods[neighborhood_id].append(neighbor)
-                    if neighbor not in self.filled_neighborhoods[neighborhood_id]:
+                    if neighbor not in self.filled_neighborhoods[
+                            neighborhood_id]:
                         self.filled_neighborhoods[
                             neighborhood_id].append(neighbor)
 
@@ -1421,6 +1482,83 @@ class Segmentation(object):
         return self.found_objects
 
 
+class TableOperations(object):
+
+    def __init__(self, usetex=False):
+        self.usetex = usetex
+
+    def construct(self, axes, cellText, colLabels=None,
+                  rowLabels=None, cellColours=None,
+                  cellLoc='center', loc='center',
+                  boldLabels=True, usetex=None):
+        if usetex is not None:
+            self.usetex = usetex
+        with plt.rc_context({'text.usetex': self.usetex,
+                             'text.latex.unicode': self.usetex}):
+
+            if boldLabels and self.usetex:
+                if colLabels is not None:
+                    colLabels = [('\n').join([r'\textbf{' + el + r'}' for el in
+                                              row_el.split('\n')]) for row_el in
+                                 colLabels]
+                if rowLabels is not None:
+                    rowLabels = [('\n').join([r'\textbf{' + el + r'}' for el in
+                                              row_el.split('\n')]) for row_el in
+                                 rowLabels]
+                table = axes.table(cellText=cellText,
+                                   colLabels=colLabels,
+                                   rowLabels=rowLabels,
+                                   cellColours=cellColours,
+                                   cellLoc=cellLoc,
+                                   loc=loc)
+            if boldLabels and not self.usetex:
+                if colLabels is not None:
+                    [table.properties()['celld'][element].get_text().set_fontweight(1000)
+                     for element in
+                     table.properties()['celld'] if element[0] == 0]
+                if colLabels is not None:
+                    [table.properties()['celld'][element].get_text().set_fontweight(1000)
+                     for element in
+                     table.properties()['celld'] if element[1] == 0]
+        return table
+
+    def fit_cells_to_content(self, fig,
+                             the_table, inc_by=0.1, equal_height=False,
+                             equal_width=False, change_height=True,
+                             change_width=True):
+        table_prop = the_table.properties()
+        # fill the transpose or not, if we need col height or row width
+        # respectively.
+        rows_heights = [[] for i in range(len([cells for cells in
+                                               table_prop['celld'] if cells[1] == 0]))]
+        cols_widths = [[] for i in range(len([cells for cells in
+                                              table_prop['celld'] if cells[0] == 0]))]
+        renderer = fig.canvas.get_renderer()
+        for cell in table_prop['celld']:
+            text = table_prop['celld'][(0, 0)]._text._text
+
+            bounds = table_prop['celld'][cell].get_text_bounds(renderer)
+            cols_widths[cell[1]].append(bounds[2])
+            rows_heights[cell[0]].append(bounds[3])
+        cols_width = [max(widths) for widths in cols_widths]
+        if equal_width:
+            cols_width = [max(cols_width)] * len(cols_width)
+        rows_height = [max(heights) for heights in rows_heights]
+        if equal_height:
+            rows_height = [max(rows_height)] * len(rows_height)
+        if not isinstance(inc_by, list):
+            inc_by = [inc_by, inc_by]
+        for cell in table_prop['celld']:
+            bounds = table_prop['celld'][cell].get_text_bounds(renderer)
+            new_width = ((1 + inc_by[0]) * cols_width[cell[1]] if change_width else
+                         bounds[2])
+            new_height = ((1 + inc_by[1]) * rows_height[cell[0]] if change_height
+                          else bounds[3])
+            table_prop['celld'][cell].set_bounds(*(bounds[:2] + (new_width,
+                                                                 new_height,
+                                                                 )))
+
+
 class Threshold(object):
     '''necessary threshold variables'''
 
@@ -1428,6 +1566,67 @@ class Threshold(object):
         self.lap_thres = 0
         self.depth_thres = 0
 
+
+class TimeOperations(object):
+
+    def __init__(self):
+        self.times_mat = []
+        self.labels = []
+        self.convert_to_ms = True
+        self.meas = 's'
+
+    def compute_stats(self, time_list, label='', print_out=True,
+                      convert_to_ms=True):
+        '''
+        <time_list> is a list or list of lists or a numpy array
+        <label> can be a string or a list of strings.
+        '''
+        time_array = np.atleast_2d(np.array(time_list))
+        if isinstance(label, basestring):
+            label = [label] * time_array.shape[0]
+        print time_array.shape
+        if len(label) != time_array.shape[0]:
+            raise Exception('Invalid number of labels given')
+        self.convert_to_ms = convert_to_ms
+        if self.convert_to_ms:
+            self.meas = 'ms'
+            time_array = time_array * 1000
+        stats = np.array([np.mean(time_array, axis=1),
+                          np.max(time_array, axis=1),
+                          np.min(time_array, axis=1),
+                          np.median(time_array, axis=1)])
+        for count in range(time_array.shape[0]):
+            if print_out:
+                print('Mean ' + label[count] + ' time ' +
+                      str(stats[0, count]) + ' ' + self.meas)
+                print('Max ' + label[count] + ' time ' +
+                      str(stats[1, count]) + ' ' + self.meas)
+                print('Min ' + label[count] + ' time ' +
+                      str(stats[2, count]) + ' ' + self.meas)
+                print('Median ' + label[count] + ' time ' +
+                      str(stats[3, count]) + ' ' + self.meas)
+        self.times_mat.append(stats)
+        self.labels.append([lab.title() for lab in label])
+
+    def extract_to_latex(self, path, stats_on_xaxis=True):
+        '''
+        extract total stats to a latex table.
+        '''
+        stats_labels = [
+            'Mean(' + self.meas + ')', 'Max(' + self.meas + ')',
+            'Min(' + self.meas + ')', 'Median(' + self.meas + ')']
+        if stats_on_xaxis:
+            time_array = latex.array_transcribe(self.times_mat, stats_labels,
+                                                ylabels=self.labels,
+                                                extra_locs='right')
+        else:
+            time_array = latex.array_transcribe(np.transpose(
+                self.times_mat), self.labels,
+                ylabels=stats_labels,
+                extra_locs='bot')
+        with open(os.path.splitext(path)[0] + '.tex',
+                  'w') as out:
+            out.write(time_array)
 with open(CONST_LOC + "/config.yaml", 'r') as stream:
     try:
         CONST = yaml.load(stream)
@@ -1440,6 +1639,7 @@ counters = Counter()
 chhm = CountHandHitMisses()
 data = Data()
 edges = Edges()
+file_oper = FileOperations()
 latex = Latex()
 lims = Lim()
 masks = Mask()
@@ -1447,7 +1647,9 @@ meas = Measure()
 models = Model()
 paths = Path()
 points = Point()
+plot_oper = PlotOperations()
 pol_oper = PolarOperations()  # depends on Measure class
+table_oper = TableOperations()
 thres = Threshold()
 im_results = Result()
 segclass = Segmentation()

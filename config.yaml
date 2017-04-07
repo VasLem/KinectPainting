@@ -62,16 +62,22 @@ var_thres : 20
 history : 4000
 #Variables necessary for sparse coding
 sparse_dim: 256
-max_dict_error: 100
-max_retries : 2
-fss_max_iter: 100 # set to None if no Feature Sign Search iterations limit is wanted
+sparse_max_dict_error: 100
+sparse_max_retries : 2
+sparse_alpha : 1
 #the rosbag for training
 train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
 #Variables for action recognition
+ZHOF_bin_size: 4
 3DHOF_bin_size: 4
 GHOG_bin_size: 64
 3DXYPCA_size: 32 # per dimension
-RF_trees: 10
+RDF_trees: 
+- 5
+- 10
+- 15
+- 20
+- 30
 STD_small_filt_window: 20 #window of buffers, not frames
 STD_big_filt_window: 40 #window of buffers, not frames
 action_separation_thres: 0

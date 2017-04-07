@@ -52,6 +52,7 @@ class DataStruct(object):
 class DataProcess(object):
 
     def __init__(self, save=True):
+        self.name = 'Data'
         self.mog2 = moda.Mog2()
         self.skeleton = None
         self.hands_mask = None
@@ -202,6 +203,7 @@ class DataProcess(object):
         if self.farm_key is None:
             self.set_keys(farm_key, reg_key)
         if isinstance(inp, basestring):
+            self.name = os.path.splitext(os.path.basename(inp))[0]
             bridge = CvBridge()
             iterat = rosbag.Bag(inp).read_messages()
             info_dict = yaml.load(rosbag.Bag(inp)._get_yaml_info())
@@ -283,7 +285,7 @@ class DataProcess(object):
                 try:
                     self.data[topic].frames.append(cop)
                 except (AttributeError, KeyError):
-                    self.data[topic] = DataStruct(topic)
+                    self.data[topic] = DataStruct(self.name+':'+topic)
                     self.data[topic].frames.append(cop)
                 self.data[topic].timestamps.append(timestamp)
                 self.data[topic].sync.append(self.sync_count)
@@ -503,13 +505,12 @@ class DataProcess(object):
                     #DEBUGGING
                     #cv2.imshow('test', (res%255).astype(np.uint8))
                     #cv2.waitKey(10)
-
                     if not save_res:
                         try:
                             self.data[reg_key].frames.append(
                                 (res*(mask>0)))
                         except (AttributeError, KeyError):
-                            self.data[reg_key] = DataStruct(reg_key)
+                            self.data[reg_key] = DataStruct(self.name+':'+reg_key)
                             self.data[reg_key].frames.append(res*(mask>0))
                         self.data[reg_key].info.append([derotate_angle,
                                                         derotate_center])

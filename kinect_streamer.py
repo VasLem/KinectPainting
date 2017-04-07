@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, traceback
 import logging
 import signal
 import numpy as np
@@ -61,44 +61,50 @@ class Kinect(object):
         '''
         Callback function, <data> is the depth image
         '''
-        time1 = time.time()
         try:
-            frame = self.bridge.imgmsg_to_cv2(data, desired_encoding="passthrough")
-        except CvBridgeError as err:
-            print err
-            return
-        mog2_res = self.mog2.run(False,
-                                 frame.astype(np.float32))
-        mask1 = cv2.morphologyEx(mog2_res.copy(), cv2.MORPH_OPEN, self.open_kernel)
-        check_sum = np.sum(mask1 > 0)
-        if not check_sum or check_sum == np.sum(frame > 0):
-            return
-        frame = frame * mog2_res
-        scores_exist,_ = self.used_classifier.run_testing(frame,
-                                        online=True)
-        #DEBUGGING
-        #cv2.imshow('test',(frame%256).astype(np.uint8))
-        #cv2.waitKey(10)
-        time2 = time.time()
-        self.time.append(np.mean(self.time[-9:]+[(time2-time1)]))
-        if (self.used_classifier.recognized_classes is not None
-            and len(self.used_classifier.recognized_classes)>0
-            and scores_exist):
-            self.image_pub.publish(self.bridge.cv2_to_imgmsg(
-                self.used_classifier.features_extraction.hand_img, "passthrough"))
-            msg = TimeReference()
+            time1 = time.time()
             try:
-                msg.source = self.used_classifier.train_classes[
-                    self.used_classifier.recognized_classes[-1]]
-            except TypeError:
-                msg.source = self.used_classifier.recognized_classes[-1].name
-            msg.time_ref = Time()
-            msg.time_ref.secs = int(1/float(self.time[-1]) if self.time[-1]
-                                    else 0)
-            self.class_pub.publish(msg)
-            self.skel_pub.publish(self.bridge.cv2_to_imgmsg(
-                         np.atleast_2d(np.array(self.used_classifier.
-                         features_extraction.skeleton.skeleton,np.int32))))
+                frame = self.bridge.imgmsg_to_cv2(data, desired_encoding="passthrough")
+            except CvBridgeError as err:
+                print err
+                return
+            mog2_res = self.mog2.run(False,
+                                     frame.astype(np.float32))
+            mask1 = cv2.morphologyEx(mog2_res.copy(), cv2.MORPH_OPEN, self.open_kernel)
+            check_sum = np.sum(mask1 > 0)
+            if not check_sum or check_sum == np.sum(frame > 0):
+                return
+            frame = frame * mog2_res
+            scores_exist,_ = self.used_classifier.run_testing(frame,
+                                            online=True)
+            #DEBUGGING
+            #cv2.imshow('test',(frame%256).astype(np.uint8))
+            #cv2.waitKey(10)
+            time2 = time.time()
+            self.time.append(np.mean(self.time[-9:]+[(time2-time1)]))
+            if (self.used_classifier.recognized_classes is not None
+                and len(self.used_classifier.recognized_classes)>0
+                and scores_exist):
+                self.image_pub.publish(self.bridge.cv2_to_imgmsg(
+                    self.used_classifier.features_extraction.hand_img, "passthrough"))
+                msg = TimeReference()
+                try:
+                    msg.source = self.used_classifier.train_classes[
+                        self.used_classifier.recognized_classes[-1]]
+                except TypeError:
+                    msg.source = self.used_classifier.recognized_classes[-1].name
+                msg.time_ref = Time()
+                msg.time_ref.secs = int(1/float(self.time[-1]) if self.time[-1]
+                                        else 0)
+                self.class_pub.publish(msg)
+                self.skel_pub.publish(self.bridge.cv2_to_imgmsg(
+                             np.atleast_2d(np.array(self.used_classifier.
+                             features_extraction.skeleton.skeleton,np.int32))))
+        except Exception as e:
+             exc_type, exc_value, exc_traceback = sys.exc_info()
+             traceback.print_exception(exc_type,
+                                exc_value,
+                                exc_traceback, limit=2, file=sys.stdout)
 
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler()

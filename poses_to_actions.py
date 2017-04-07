@@ -18,28 +18,23 @@ def makedir(path):
 class MixedClassifier(clfs.Classifier):
     def __init__(self, svms_classifier=None,
                  rf_classifier=None,log_lev='INFO',
-                 visualize=False, add_info=None, train_all=False,
+                 visualize=False, add_info=None,
                  *args,**kwargs):
-        clfs.Classifier.__init__(self,log_lev=log_lev, visualize=visualize,
-                                 masks_needed=False,
-                 ispassive = False, use='Mixed', name='',
-                                add_info=add_info, *args, **kwargs)
-        from sklearn.ensemble import RandomForestClassifier
-        self.classifier = RandomForestClassifier(100)
         self.enhanced_dyn = EnhancedDynamicClassifier(svms_classifier,
                                                       rf_classifier)
-        self.enhanced_dyn.run_training(load=not train_all)
+        clfs.Classifier.__init__(self,log_lev=log_lev, visualize=visualize,
+                                 masks_needed=False,
+                 action_type = 'Dynamic', use='Mixed', name='',
+                                 features=['Passive Cl:'
+                                           +str(rf_classifier.classifier_folder),
+                                           'Dynamic Cl:' +
+                                           str(self.enhanced_dyn.classifier_folder)],
+                                add_info=add_info, *args, **kwargs)
+        from sklearn.ensemble import RandomForestClassifier
+        self.classifier = RandomForestClassifier(10)
         self.train_classes = np.hstack((self.passive_actions,
                                         self.dynamic_actions)).tolist()
-        self.classifier_savename = 'trained_'
-        self.classifier_savename += self.full_info.replace(' ', '_').lower()
         self.train_inds = np.arange(len(self.train_classes))
-        if self.classifier_savename not in self.classifiers_list:
-            with open('trained_classifiers_list.yaml','a') as out:
-                out.write(self.classifier_savename+': '+
-                          str(len(self.classifiers_list))+'\n')
-            self.classifiers_list[self.classifier_savename] = str(
-                len(self.classifiers_list))
     def single_run_training(self,action_path, action):
         self.enhanced_dyn.testing_initialized = False
         rf_scores, en_scores = self.enhanced_dyn.run_testing(action_path,
@@ -47,7 +42,8 @@ class MixedClassifier(clfs.Classifier):
                                           just_scores=True,
                                           display_scores=False,
                                           compute_perform=False,
-                                          construct_gt=False)
+                                          construct_gt=False,
+                                          load=not self.train_all)
         traindata = np.concatenate((rf_scores, en_scores), axis=1)
         ground_truth,_ = (self.construct_ground_truth(
             data=action_path,
@@ -55,7 +51,9 @@ class MixedClassifier(clfs.Classifier):
         return traindata, ground_truth
 
     def run_training(self, save=True, load=True,
-                     classifier_savename=None):
+                     classifier_savename=None,train_all=False):
+        self.enhanced_dyn.run_training(load=not train_all)
+        self.train_all = train_all
         if classifier_savename is not None:
             self.classifier_savename = classifier_savename
         if (self.classifier_savename not in
@@ -68,12 +66,25 @@ class MixedClassifier(clfs.Classifier):
             self.classifier = self.classifier.fit(traindata[fmask,:],
                                 ground_truth[fmask])
             LOG.info('Saving classifier: '+ self.classifier_savename)
-            self.trained_classifiers[self.classifier_savename] = self.classifier
+            self.trained_classifiers[
+                self.classifier_savename] = (self.classifier,
+                                      self.train_classes,
+                                      self.parameters,
+                                      self.train_inds)
             with open('trained_classifiers.pkl','w') as out:
                 pickle.dump(self.trained_classifiers, out)
         else:
-            self.classifier = self.trained_classifiers[
+            (self.classifier,
+              self.train_classes,
+              self.parameters,
+              self.train_inds) = self.trained_classifiers[
                 self.classifier_savename]
+        if self.classifier_savename not in self.classifiers_list:
+            with open('trained_classifiers_list.yaml','a') as out:
+                out.write(self.classifier_savename+': '+
+                          str(len(self.classifiers_list))+'\n')
+            self.classifiers_list[self.classifier_savename] = str(
+                len(self.classifiers_list))
 
     def run_testing(self, data=None, online=True, against_training=False,
                     scores_filter_shape=5,
@@ -116,13 +127,15 @@ class MixedClassifier(clfs.Classifier):
             self.scores[:] = None
             fmask = np.isfinite(np.sum(testdata,axis=1))
             self.scores[fmask] = self.classifier.predict_proba(testdata[fmask,:])
-        self.filtered_scores = self.scores
+        #self.filtered_scores = self.scores
+        self.filtered_scores = self.upgr_filter(self.scores,
+                                                3)
         recognized_classes = []
-        for score in self.scores:
+        for score in self.filtered_scores:
             if np.sum(score) is None:
                 recognized_classes.append(None)
                 continue
-            if (np.max(score) >= 0.7 or len(
+            if (np.max(score) >= 0.6 or len(
                 recognized_classes) == 0 or
                 recognized_classes[-1] is None):
                 recognized_classes.append(score.argmax())
@@ -165,12 +178,16 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         # matrix entries are coherence probabilities
         if svms_classifier is None or rf_classifier is None:
             raise Exception(self.__doc__)
-        self.passive_actions_classifier = rf_classifier  # poses classifier
-        self.dynamic_actions_classifier = svms_classifier  # actions classifier
+        self.passive_actions_classifier = rf_classifier  # passive gestures classifier
+        self.dynamic_actions_classifier = svms_classifier  # dynamic gestures classifier
         clfs.Classifier.__init__(self,log_lev=log_lev, visualize=visualize,
+                                 features=['Passive Cl.:' +
+                                           str(rf_classifier.classifier_folder),
+                                           'Dynamic Cl:' +
+                                           str(svms_classifier.classifier_folder)],
                                  masks_needed=False,
                  buffer_size = self.dynamic_actions_classifier.buffer_size,
-                 ispassive = False, use='Double', name='actions',
+                 action_type = 'Dynamic', use='Double', name='actions',
                                 add_info=add_info, *args, **kwargs)
         self.add_train_classes(co.CONST['actions_path'])
         self.passive_actions_classifier_test = None
@@ -214,7 +231,7 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             online=False,
             construct_gt=False,
             save=True,
-            load=True,
+            load= not self.train_all,
             display_scores=False)
         poses_pred = self.passive_actions_classifier.recognized_classes
         poses_predictions_expanded = np.zeros(
@@ -229,7 +246,7 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             online=False,
             construct_gt=False,
             save=True,
-            load=True,
+            load=not self.train_all,
             display_scores=False,
             just_scores=True,
             compute_perform=False)
@@ -306,11 +323,13 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         return self.coherence_matrix
 
     def run_training(self, save=True, load=True,
-                     classifier_savename=None):
+                     classifier_savename=None,
+                     train_all=False):
         '''
         Computes coherence matrix
         Overrides <clfs.run_training>
         '''
+        self.train_all = train_all
         if classifier_savename is not None:
             self.classifier_savename = classifier_savename
         if not self.classifier_savename in self.trained_classifiers or not load:
@@ -321,18 +340,30 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             self.construct_coherence()
             self.plot_coherence()
             if save:
+                scores_params = {}
+                scores_params['min'] = self.min
+                scores_params['max'] = self.max
+                self.parameters['scores_params'] = scores_params
                 self.trained_classifiers[self.classifier_savename] = (
-                    self.coherence_matrix, self.min, self.max,
-                    self.passive_actions,self.dynamic_actions)
+                                      None,
+                                      self.train_classes,
+                                      self.parameters,
+                                      self.train_inds,
+                                      self.coherence_matrix,
+                                      self.min,
+                                      self.max,)
             with open('trained_classifiers.pkl', 'w') as out:
                 LOG.info('Saving ' + self.classifier_savename)
+
                 pickle.dump(self.trained_classifiers, out)
         else:
-            (self.coherence_matrix,
-             self.min,
-             self.max,
-             self.passive_actions,
-             self.dynamic_actions) = self.trained_classifiers[self.classifier_savename]
+            (_,
+              self.train_classes,
+              self.parameters,
+              self.train_inds,
+              self.coherence_matrix,
+              self.min,
+              self.max) = self.trained_classifiers[self.classifier_savename]
         if self.classifier_savename not in self.classifiers_list:
             with open('trained_classifiers_list.yaml','a') as out:
                 out.write(self.classifier_savename+': '+
@@ -365,8 +396,8 @@ class EnhancedDynamicClassifier(clfs.Classifier):
                             verticalalignment='center',fontsize=16)
 
         cb = fig.colorbar(res)
-        ax.set_xlabel(r'Actions', fontsize=16)
-        ax.set_ylabel(r'Poses', fontsize=16)
+        ax.set_xlabel(r'Dynamic', fontsize=16)
+        ax.set_ylabel(r'Passive', fontsize=16)
         ax.set_title(r'Coherence', fontsize=18)
         plt.xticks(range(len(self.dynamic_actions)), [r'%s' % action for action in
                                               self.dynamic_actions], rotation = 45)
@@ -485,7 +516,7 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         Mixed bayesian model, meant to provide unified action scores.
         P(p_i|a_j) = c_ij in Coherence Map C
         P(a_j|t) = probabilities produced by svms scores
-        P(p_i|t) = poses RF probability scores
+        P(p_i|t) = passive gestures RF probability scores
         Combined Prediction = Sum{i}{c[i,j]*P[a_j]/P[p_i]*Sum{k}{c[i,k]*P[a_j]}}
         If S is the matrix [P(a_j|t)[j,t]], j=0:n-1, t=0:T-1
         and R is the matrix [1/P[p_i|t][i,t]], i=0:m, t=0:T-1
@@ -628,18 +659,16 @@ def construct_mixed_classifier(testname='actions', train=False,
     Constructs a enhanced classifier
     '''
     svms_classifier = clfs.construct_dynamic_actions_classifier(
-        train=train_all, test=False, visualize=False, test_against_all=False,
+        test=False, visualize=False, test_against_all=False,
         features=['GHOG','ZHOF'])
-    rf_classifier = clfs.construct_passive_actions_classifier(train=train_all,
-                                                            test=False,
+    rf_classifier = clfs.construct_passive_actions_classifier(test=False,
                                                             visualize=False,
                                                             test_against_all=False)
 
     mixed = MixedClassifier(
         svms_classifier=svms_classifier,
-        rf_classifier=rf_classifier,
-        train_all=train_all)
-    mixed.run_training(load=not train)
+        rf_classifier=rf_classifier)
+    mixed.run_training(load=not train, train_all=train_all)
     if test or visualize:
         if test_against_all:
             iterat = mixed.available_tests
@@ -668,7 +697,8 @@ def construct_enhanced_dynamic_actions_classifier(testname='actions', train=Fals
                                  test=True, visualize=True,
                                  dicts_retrain=False, hog_num=None,
                                  name='actions', use_dicts=False,
-                                 des_dim=None, test_against_all=False):
+                                 des_dim=None,
+                                                  test_against_all=False,train_all=False):
     '''
     Constructs a enhanced classifier
     '''
@@ -683,7 +713,7 @@ def construct_enhanced_dynamic_actions_classifier(testname='actions', train=Fals
     enhanced = EnhancedDynamicClassifier(
         svms_classifier=svms_classifier,
         rf_classifier=rf_classifier)
-    enhanced.run_training(load=not train)
+    enhanced.run_training(load=not train,train_all=train_all)
     if test or visualize:
         if test_against_all:
             iterat = enhanced.available_tests
@@ -712,15 +742,17 @@ def main():
     '''
     construct_enhanced_dynamic_actions_classifier(
         train=True,
-        test=True,
-        visualize=False,
-        test_against_all=True)
+        test=False,
+        visualize=True,
+        test_against_all=True,
+        train_all=False)
     '''
     construct_mixed_classifier(
         train=True,
-        test=True,
+        test=False,
         visualize=True,
-        test_against_all=True)
+        test_against_all=True,
+        train_all=False)
 
     plt.show()
 

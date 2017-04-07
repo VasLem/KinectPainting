@@ -32,6 +32,7 @@ ID_ADD = wx.NewId()
 ID_MIN = wx.NewId()
 ID_MAX = wx.NewId()
 ID_REMOVE = wx.NewId()
+ID_VIDEO_SAVE = wx.NewId()
 ID_MASK_RECOMPUTE = wx.NewId()
 ID_ACT_SAVE = wx.NewId()
 ID_BAG_RECORD = wx.NewId()
@@ -163,7 +164,120 @@ class MOG2params(wx.Panel):
         self.SetSizer(box)
 
 
+class StreamChoice(wx.Frame):
+    def __init__(self, parent, id_,
+                 data):
+        wx.Frame.__init__(self, parent, id_, 'Select Stream')
+        self.Center()
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        name = 'Convert to video :'
+        self._data = data
+        self._parent = parent
+        centeredLabel = wx.StaticText(self, -1, name)
+        self.choice = wx.Choice(self,-1,choices=data.keys())
+        self.choice.Bind(wx.EVT_CHOICE, self.on_choice)
+        sizer.AddMany(([centeredLabel, wx.ALIGN_CENTER_HORIZONTAL],
+                        self.choice))
+        self.SetSizerAndFit(sizer)
 
+
+    def on_choice(self,event):
+        chosen = self.choice.GetStringSelection()
+        path = os.path.join(co.CONST['results_fold'],'Videos')
+        makedir(path)
+        dlg = wx.FileDialog(self, "Save stream as..",
+                            path,
+                            os.path.basename(self._data[chosen].name.split(':')[0])+
+                            '_'+
+                            os.path.basename(chosen),
+                            "*.avi", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+        result = dlg.ShowModal()
+        dlg.Destroy()
+        self.Hide()
+        if result == wx.ID_OK:
+            try:
+                path = dlg.GetPath()
+                dlg = wx.ProgressDialog("Converting",
+                                        "Progress",
+                                        maximum=len(self._data[chosen].frames),
+                                        parent=self,
+                                        style=0
+                                        | wx.PD_APP_MODAL
+                                        | wx.PD_ESTIMATED_TIME
+                                        | wx.PD_REMAINING_TIME
+                                        | wx.PD_CAN_ABORT)
+                video = None
+                try:
+                    framesize=None
+                    for frame in self._data[chosen].frames:
+                        if frame is not None:
+                            framesize = frame.shape[:2][::-1]
+
+                            break
+                    if framesize is None:
+                        dlg.Destroy()
+                        dlg.Close()
+                        self.Close()
+                        return
+                    video = cv2.VideoWriter(
+                        path,cv2.VideoWriter_fourcc(*'MJPG'),30,framesize)
+                    for count in range(len(self._data[chosen].frames)):
+                        frame = self._data[chosen].frames[count]
+                        sync = self._data[chosen].sync[count]
+                        if frame is not None:
+                            if len(frame.shape) < 2 or len(frame.shape) > 3:
+                                raise Exception('Invalid frame of shape '+
+                                                frame.shape+' was given')
+                            elif len(frame.shape) == 2:
+                                inp = np.tile(frame[...,None],(1,1,3))
+                            else:
+                                inp = frame
+                            video.write(inp.astype(np.uint8))
+                        else:
+                            video.write(np.zeros(framesize,np.uint8))
+                        wx.Yield()
+                        keepGoing,_=dlg.Update(count)
+                        if not keepGoing:
+                            cv2.destroyAllWindows()
+                            video.release()
+                            dlg.Destroy()
+                            dlg.Close()
+                            self.CLose()
+                            return
+                finally:
+                    if video is not None:
+                        cv2.destroyAllWindows()
+                        video.release()
+
+            finally:
+                dlg.Destroy()
+                dlg.Close()
+                self.Close()
+        elif result == wx.ID_CANCEL:
+            return
+
+class FrameToVideoOperations(wx.Panel):
+
+    def __init__(self, parent, main_panel, data):
+        self._parent = parent
+        self._data = data
+        wx.Panel.__init__(self, main_panel)
+        self.save_vid = wx.Button(
+            self, ID_VIDEO_SAVE, "Save as Video")
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.save_vid,wx.ALIGN_CENTER_HORIZONTAL)
+        self.SetSizerAndFit(sizer)
+        self.Bind(wx.EVT_BUTTON, self.on_selection, id=ID_VIDEO_SAVE)
+
+    def on_selection(self, event):
+        if not self._data.keys():
+            dlg = wx.MessageDialog(self._parent, 'Process a rosbag file first',
+                                   'Error', wx.OK | wx.ICON_ERROR)
+            dlg.ShowModal()
+            dlg.Destroy()
+            return
+        choice_frame = StreamChoice(None,-1,self._data)
+        choice_frame.Show()
 
 
 class EditableListCtrl(wx.ListCtrl, listmix.TextEditMixin):
@@ -219,8 +333,6 @@ class TopicsNotebook(wx.Notebook):
                                              start_frame_handler,
                                              end_frame_handler,
                                              forced_frame_handler))
-                data[topic].frames = inp
-                data[topic].sync = []
             else:
                 txtPanel = wx.Panel(self)
                 wx.StaticText(txtPanel, id=-1, label="This topic  was not saved in memory",
@@ -249,8 +361,6 @@ class TopicsNotebook(wx.Notebook):
                                                  self.start_frame_handler,
                                                  self.end_frame_handler,
                                                  self.forced_frame_handler))
-                data[topic].frames = inp
-                data[topic].sync = []
             else:
                 txtPanel = wx.Panel(self)
                 wx.StaticText(txtPanel, id=-1, label="This topic  was not saved in memory",
@@ -476,10 +586,11 @@ class MainFrame(wx.Frame):
         self.inter_pnl = wx.Panel(self.main_panel, wx.NewId())
         self.act_pnl = wx.Panel(self.main_panel, -1)
         self.mog_pnl = None
-        self.mog_pnl = MOG2params(self, self.main_panel)
-        self.recompute_mog2 = wx.Button(
-            self.main_panel, ID_MASK_RECOMPUTE, "Calculate hand masks")
-        self.Bind(wx.EVT_BUTTON, self.on_recompute_mask, id=ID_MASK_RECOMPUTE)
+        #self.mog_pnl = MOG2params(self, self.main_panel)
+        self.mog_pnl = FrameToVideoOperations(self, self.main_panel, self.data)
+        #self.recompute_mog2 = wx.Button(
+        #    self.main_panel, ID_MASK_RECOMPUTE, "Calculate hand masks")
+        #self.Bind(wx.EVT_BUTTON, self.on_recompute_mask, id=ID_MASK_RECOMPUTE)
 
         lbl_list = ['Memory', 'File']
         self.rbox = wx.RadioBox(self.inter_pnl,
@@ -578,8 +689,10 @@ class MainFrame(wx.Frame):
         self.lft_box = wx.BoxSizer(wx.VERTICAL)
         self.lft_box.AddMany([(self.inter_pnl), (self.act_pnl)])
         if self.mog_pnl is not None:
-            sboxSizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel, 'MOG2')
-            sboxSizer.AddMany([(self.mog_pnl, 1), (self.recompute_mog2)])
+            sboxSizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel,
+                                          'Stream Postprocessing')
+            sboxSizer.Add(self.mog_pnl,wx.ALIGN_CENTER_HORIZONTAL,1)
+            #sboxSizer.AddMany([(self.mog_pnl, 1), (self.recompute_mog2)])
             self.lft_box.Add(sboxSizer)
         self.main_box = wx.BoxSizer(wx.HORIZONTAL)
         self.main_box.AddMany([(self.lft_box, 1)])
@@ -614,7 +727,10 @@ class MainFrame(wx.Frame):
 
     def on_lst_item_select(self, event):
         ind = self.lst.GetFocusedItem()
-        self.txt_inp.SetValue(self.lst.GetItem(ind, 0).GetText())
+        try:
+            self.txt_inp.SetValue(self.lst.GetItem(ind, 0).GetText())
+        except wx._core.wxAssertionError:
+            pass
 
     def update_drawing(self, main_panel):
         '''
@@ -677,15 +793,17 @@ class MainFrame(wx.Frame):
         return 1
 
     def on_actions_save(self, event):
-        print self.bag_path
         self.actionfarming.run(self.lst,self.bag_path, append=self.append.GetValue())
 
     def on_frame_change(self, event, slider, main_panel):
         '''
         change frame when slider value changes
         '''
-        bmp = getbitmap(main_panel, self.data[
-            self.farm_key].frames[slider.GetValue()])
+        try:
+            bmp = getbitmap(main_panel, self.data[
+                self.farm_key].frames[slider.GetValue()])
+        except KeyError:
+            return
         if bmp is not None:
             painter = wx.AutoBufferedPaintDC(main_panel)
             painter.Clear()
@@ -875,17 +993,24 @@ class MainFrame(wx.Frame):
                                 | wx.PD_ESTIMATED_TIME
                                 | wx.PD_REMAINING_TIME
                                 | wx.PD_CAN_ABORT)
-        gmm_num = self.mog_pnl.gmm_num.GetValue()
-        bg_ratio = self.mog_pnl.bg_ratio.GetValue()
-        var_thres = self.mog_pnl.var_thres.GetValue()
-        history = self.mog_pnl.history.GetValue()
+        try:
+            gmm_num = self.mog_pnl.gmm_num.GetValue()
+            bg_ratio = self.mog_pnl.bg_ratio.GetValue()
+            var_thres = self.mog_pnl.var_thres.GetValue()
+            history = self.mog_pnl.history.GetValue()
+        except:
+            gmm_num = co.CONST['gmm_num']
+            bg_ratio = co.CONST['bg_ratio']
+            var_thres = co.CONST['var_thres']
+            history = co.CONST['history']
         self.rosbag_process.set_mog2_parameters(gmm_num, bg_ratio, var_thres,
                                                 history)
         rbox_sel = self.rbox.GetSelection()
         append = self.append.GetValue()
-        self.data = self.rosbag_process.run(self.bag_path,
+        self.data.clear()
+        self.data.update(self.rosbag_process.run(self.bag_path,
                                             dialog=dlg, low_ram=1 - rbox_sel,
-                                               save_res=rbox_sel,append=append)
+                                               save_res=rbox_sel,append=append))
         lengths = [len(self.data[key].frames) for key in self.data.keys()]
         baglength = max(lengths)
         dlg.Destroy()
