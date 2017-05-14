@@ -16,22 +16,54 @@ import time
 import class_objects as co
 
 LOG = logging.getLogger('__name__')
-CH = logging.StreamHandler(sys.stderr)
-CH.setFormatter(logging.Formatter(
-    '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
-LOG.handlers = []
-LOG.addHandler(CH)
-LOG.setLevel(logging.INFO)
+SPLOG = logging.getLogger('SparseLogger')
+FH = logging.FileHandler('sparse_coding.log',mode='w')
+FH.setFormatter(logging.Formatter(
+    '%(asctime)s (%(lineno)s): %(message)s',
+    "%Y-%m-%d %H:%M:%S"))
+SPLOG.addHandler(FH)
+SPLOG.setLevel(logging.DEBUG)
+if __name__=='__main__':
+    CH = logging.StreamHandler(sys.stderr)
+    CH.setFormatter(logging.Formatter(
+        '%(funcName)20s()(%(lineno)s)-%(levelname)s:%(message)s'))
+    LOG.addHandler(CH)
+    LOG.setLevel(logging.INFO)
 
+def timeit(func):
+    '''
+    Decorator to time extraction
+    '''
+    def wrapper(self,*arg, **kw):
+        t1 = time.time()
+        res = func(self,*arg, **kw)
+        t2 = time.time()
+        self.time.append(t2-t1)
+        del self.time[:-5000]
+        return res
+    return wrapper
 
 class SparseCoding(object):
 
-    def __init__(self, log_lev='INFO', sparse_dim=None, name='',
+    def __init__(self, log_lev='INFO', sparse_dim_rat=None, name='',
                  dist_beta=0.1, dist_sigma=0.005, display=0):
         LOG.setLevel(log_lev)
+
         self.name = name
         self.codebook_comps = None
         self.active_set = None
+        self.min_coeff = max([1,
+            co.CONST['sparse_fss_min_coeff']])
+        self.min_coeff_rat = co.CONST['sparse_fss_min_coeff_rat']
+        self.gamma = co.CONST['sparse_fss_gamma']
+        self.rat = None
+        if isinstance(self.gamma, str):
+            if self.gamma.starts_with('var'):
+                try:
+                    self.rat = [float(s) for s in str.split() if
+                                co.type_conv.isfloat(s)][0]
+                except IndexError:
+                    self.rat = None
         self.inp_features = None
         self.sparse_features = None
         self.basis_constraint = 1
@@ -43,15 +75,16 @@ class SparseCoding(object):
         self.prev_err = 0
         self.curr_error = 0
         self.allow_big_vals = False
-        self.sparse_dim = sparse_dim
-        if sparse_dim is None:
-            self.sparse_dim = co.CONST['sparse_dim']
+        self.sparse_dim_rat = sparse_dim_rat
+        if sparse_dim_rat is None:
+            self.sparse_dim_rat = co.CONST['sparse_dim_rat']
         self.theta = None
         self.prev_sparse_feats = None
         self.flush_flag = False
         self.sparse_feat_list = None
         self.inp_feat_list = None
         self.codebook = None
+        self.time = []
 
     def flush_variables(self):
         '''
@@ -74,9 +107,11 @@ class SparseCoding(object):
         '''
         Initialises B dictionary and s
         '''
+        self.sparse_dim = self.sparse_dim_rat * feat_dim
         if init_codebook_comps is not None:
             if (init_codebook_comps.shape[0] == feat_dim and
-                    init_codebook_comps.shape[1] == self.sparse_dim):
+                    init_codebook_comps.shape[1] == self.sparse_dim_rat *
+                feat_dim):
                 self.codebook_comps = init_codebook_comps.copy()
             else:
                 raise Exception('Wrong input of initial B matrix, the dimensions' +
@@ -85,6 +120,7 @@ class SparseCoding(object):
                                 str(init_codebook_comps.shape[0]) + 'x' +
                                 str(init_codebook_comps.shape[1]))
         if (self.codebook_comps is None) or self.flush_flag:
+            LOG.warning('Non existent codebook, manufactuning a random one')
             self.codebook_comps = random.random((feat_dim, self.sparse_dim))
         if (self.sparse_features is None) or self.flush_flag:
             self.sparse_features = zeros((self.sparse_dim, 1))
@@ -115,6 +151,10 @@ class SparseCoding(object):
         '''
         Returns sparse features representation
         '''
+        self.min_coeff_rat = co.CONST['sparse_fss_min_coeff_rat']
+        self.min_coeff = max([self.min_coeff,
+                              self.min_coeff_rat *
+                              np.size(inp_features)])
         if self.inp_feat_list is not None:
             self.inp_feat_list.append(inp_features.ravel())
         else:
@@ -123,7 +163,10 @@ class SparseCoding(object):
         # Step 1
         btb = dot(self.codebook_comps.T, self.codebook_comps)
         btf = dot(self.codebook_comps.T, self.inp_features)
-        gamma = np.max(np.abs(-2 * btf)) / 100
+        if self.rat is not None:
+            self.gamma = np.max(np.abs(-2 * btf)) * self.rat
+
+        gamma = self.gamma
         if starting_points is not None:
             self.sparse_features = starting_points.reshape((self.sparse_dim,
                                                             1))
@@ -143,7 +186,11 @@ class SparseCoding(object):
         prev_error = 0
         initial_energy = compute_lineq_error(inp_features, 0,
                                                               0)
-        LOG.debug('Initial Signal Energy: ' + str(initial_energy))
+        interm_error = initial_energy
+        SPLOG.info('Initial Signal Energy: ' + str(initial_energy))
+        SPLOG.info('Initial nonzero elements number: ' +
+                  str(np.sum(inp_features!=0)))
+        converged = False
         for count in range(self.max_iter):
             # Step 2    
             if step2:
@@ -152,15 +199,10 @@ class SparseCoding(object):
                     (dot(btb, self.sparse_features)
                      - btf) * zero_coeffs.reshape((-1,1))
                 i = argmax(npabs(qp_der_outfeati))
-                if npabs(qp_der_outfeati[i]) > gamma:
+                if (npabs(qp_der_outfeati[i]) > gamma
+                    or npsum(self.active_set) < self.min_coeff):
                     self.theta[i] = -sign(qp_der_outfeati[i])
                     self.active_set[i] = True
-                '''
-                elif count == 0:
-                    gamma = 0.8 * npabs(qp_der_outfeati[i])
-                    self.theta[i] = -sign(qp_der_outfeati[i])
-                    self.active_set[i] = True
-                '''
             # Step 3
             codebook_comps_h = self.codebook_comps[:, self.active_set]
             sparse_feat_h = self.sparse_features[self.active_set].reshape(
@@ -237,6 +279,9 @@ class SparseCoding(object):
             self.sparse_features[self.active_set] = new_sparse_f_h.copy()
             self.active_set[self.active_set] = np.logical_not(
                 isclose(new_sparse_f_h, 0))
+            if npsum(self.active_set) < self.min_coeff:
+                step2 = 1
+                continue
             self.theta = sign(self.sparse_features)
             # Step 4
             nnz_coeff = self.sparse_features != 0
@@ -245,19 +290,20 @@ class SparseCoding(object):
             new_qp_der_outfeati = 2 * (dot(btb, self.sparse_features) - btf)
             cond_a = (new_qp_der_outfeati +
                       gamma * sign(self.sparse_features)) * nnz_coeff
+            '''
             if np.abs(objval) - np.abs(prev_objval) > 100 and not\
                     self.allow_big_vals and not count == 0:
                 if self.prev_sparse_feats is not None:
-                    LOG.debug('Current Objective Function value: ' +
+                    SPLOG.info('Current Objective Function value: ' +
                               str(np.abs(objval)))
-                    LOG.debug('Previous Objective Function value: ' +
+                    SPLOG.info('Previous Objective Function value: ' +
                               str(np.abs(prev_objval)))
-                    LOG.debug('Problem with big values of inv(B^T*B)' +
+                    SPLOG.info('Problem with big values of inv(B^T*B)' +
                               ',you might want to increase atol' +
                               ' or set flag allow_big_vals to true' +
                               ' (this might cause' +
                               ' problems)')
-                    LOG.debug('Reverting to previous iteration result ' +
+                    SPLOG.info('Reverting to previous iteration result ' +
                               'and exiting loop..')
                     self.sparse_features = self.prev_sparse_feats.ravel()
                     break
@@ -272,6 +318,7 @@ class SparseCoding(object):
                     LOG.error('Exiting as algorithm has not produced any'
                               + ' output results.')
                     exit()
+            '''
             prev_objval = objval
             self.prev_sparse_feats = self.sparse_features
             if allclose(cond_a, 0, atol=acondtol):
@@ -279,45 +326,33 @@ class SparseCoding(object):
                 z_coeff = self.sparse_features == 0
                 cond_b = npabs(new_qp_der_outfeati * z_coeff) <= gamma
                 if npsum(cond_b) == new_qp_der_outfeati.shape[0]:
-                    if not single:
-                        if self.sparse_feat_list is None:
-                            self.sparse_feat_list = [
-                                self.sparse_features.ravel()]
-                        else:
-                            self.sparse_feat_list.append(
-                                self.sparse_features.ravel())
                     self.sparse_features = self.sparse_features.reshape((-1,1))
-                    if ret_error:
-                        final_error = compute_lineq_error(self.inp_features,
-                                                          self.codebook_comps,
-                                                          self.sparse_features)
-                        LOG.debug('Reconstrunction error after ' +
-                                  'output vector correction: ' + str(final_error))
-                        if display_error:
-                            LOG.debug('Final Error' + str(final_error))
-                        return final_error, True, initial_energy
-                    return None, True, None
+                    converged = True
+                    break
                 else:
                     # go to step 2
                     step2 = 1
             else:
                 # go to step 3
                 step2 = 0
-            if count % 20 == 0:
+            if count % 10 == 0:
                 interm_error = compute_lineq_error(
                     self.inp_features, self.codebook_comps,
                     self.sparse_features)
                 if interm_error == prev_error or interm_error > initial_energy:
+                    converged=True
                     break
                 else:
                     prev_error = interm_error
-                LOG.debug('\t Epoch:' + str(count))
-                LOG.debug('\t\t Intermediate Error=' +
+                SPLOG.info('\t Epoch:' + str(count))
+                SPLOG.info('\t\t Intermediate Error=' +
                           str(interm_error))
                 if interm_error < 0.001:
-                    LOG.debug('Too small error, asssuming  convergence')
+                    converged=True
+                    SPLOG.info('Small error, asssuming  convergence')
                     break
-        if initial_energy <= interm_error:
+        '''
+        if initial_energy < interm_error:
             if not training:
                 LOG.warning('FSS Algorithm did not converge, using pseudoinverse' +
                             ' of provided codebook instead')
@@ -325,27 +360,31 @@ class SparseCoding(object):
                     self.inv_codebook_comps = pinv(self.codebook_comps)
                 self.sparse_features=dot(self.inv_codebook_comps,self.inp_features).ravel()
             else:
-                LOG.debug('FSS Algorithm did not converge,' +
+                SPLOG.info('FSS Algorithm did not converge,' +
                             ' removing sample from training dataset...')
                 self.sparse_features = None
             return (interm_error), False, initial_energy
         else:
-            LOG.debug('FSS Algorithm did not converge' +
-                  ' in the given iterations with' +
-                  ' error ' + str(interm_error) +
-                  ', you might want to change' +
-                  ' tolerance or increase iterations')
-            if not single:
-                if self.sparse_feat_list is None:
-                    self.sparse_feat_list = [self.sparse_features.ravel()]
-                else:
-                    self.sparse_feat_list.append(self.sparse_features.ravel())
-            if ret_error:
-                return (compute_lineq_error(self.inp_features, self.codebook_comps,
-                                            self.sparse_features),
-                        True, initial_energy)
-            self.sparse_features = self.sparse_features.ravel()
-            return None, True, None
+        '''
+        if not converged:
+            SPLOG.info('FSS Algorithm did not converge' +
+                  ' in the given iterations')
+        else:
+            SPLOG.info('Successful Convergence')
+        SPLOG.info('\tFinal error: ' + str(interm_error))
+        SPLOG.info('\tNumber of nonzero elements: ' +
+                  str(np.sum(self.sparse_features!=0)))
+        if not single:
+            if self.sparse_feat_list is None:
+                self.sparse_feat_list = [self.sparse_features.ravel()]
+            else:
+                self.sparse_feat_list.append(self.sparse_features.ravel())
+        if ret_error:
+            return (compute_lineq_error(self.inp_features, self.codebook_comps,
+                                        self.sparse_features),
+                    True, initial_energy)
+        self.sparse_features = self.sparse_features.ravel()
+        return None, True, None
 
     def lagrange_dual(self, lbds, ksi, _s_, basis_constraint):
         '''
@@ -356,7 +395,7 @@ class SparseCoding(object):
         self.ksist = dot(ksi, _s_.T)
         interm_result = inv(
             dot(_s_, _s_.T) + diag(lbds.ravel()))
-        LOG.info('Computed Lagrange Coefficients:\n'+str(np.unique(lbds)))
+        LOG.debug('Computed Lagrange Coefficients:\n'+str(np.unique(lbds)))
         res = ((dot(ksi.T,ksi)).trace() -
                (dot(dot(self.ksist, interm_result), self.ksist.T)).trace() -
                (basis_constraint * diag(lbds.ravel())).trace())
@@ -434,17 +473,24 @@ s_
 
     def train_sparse_dictionary(self, data, sp_opt_max_iter=200,
                                 init_traindata_num=200, incr_rate=2,
-                                min_iterations=3, init_codebook_comps=None):
-        self.bmat = DictionaryLearning(n_components=self.sparse_dim,
+                                min_iterations=3, init_codebook_comps=None,
+                                log_lev=None, n_jobs=4):
+        if log_lev is not None:
+            LOG.setLevel(log_lev)
+        self.codebook_comps = DictionaryLearning(
+            n_components=self.sparse_dim_rat * data.shape[1],
                                        alpha=co.CONST['sparse_alpha'],
-                                               verbose=1).fit(data.T).components_.T
+                                       verbose=1, n_jobs=n_jobs).fit(data).components_.T
 
 
+    @timeit
     def code1(self, data, max_iter=None, errors=False):
         '''
         Sparse codes a single feature
         Requires that the dictionary is already trained
         '''
+        if self.codebook is None:
+            self.codebook = SparseCoder(self.codebook_comps.T,n_jobs=4)
         return self.codebook.transform(data.reshape(1,-1)).ravel()
 
     def train_sparse_dictionary1(self, data, sp_opt_max_iter=200,
@@ -460,6 +506,7 @@ s_
         sign search algorithm. <min_iterations> is the least number of
         iterations of the dictionary training, after total data is processed.
         '''
+        self.sparse_dim = min(data.shape) * self.sparse_dim_rat
         self.flush_variables()
         try:
             import progressbar
@@ -541,7 +588,7 @@ s_
                         max_iter=feat_sign_max_iter,
                         ret_error=errors,training=True,
                         starting_points=computed[sample_count])
-                    are_sparsecoded.append(valid)
+                    are_sparsecoded.append(True)
                     try:
                         if iter_count > 0 and valid:
                             #do not trust first iteration sparse features, before
@@ -573,7 +620,6 @@ s_
                         pickle.dump((self.codebook_comps,
                                      self.sparse_feat_list,
                                      self.are_sparsecoded_inp), out)
-
             prev_error = compute_lineq_error(self.are_sparsecoded_inp, self.codebook_comps,
                 self.sparse_feat_list)
             if not lar_approx:
@@ -587,9 +633,9 @@ s_
                 mean_init_energy=0
                 mean_error = 0
             if curr_error > prev_error or mean_error>1000 or retry or lar_approx:
-                if (prev_error > co.CONST['sparse_max_dict_error'] or mean_error>1000
+                if (prev_error > 100 or mean_error>1000
                     or retry or lar_approx):
-                    if retry_count == co.CONST['sparse_max_retries'] or lar_approx:
+                    if retry_count == 2 or lar_approx:
                         if iter_count != 0:
                             iter_count = 0
                             lar_approx = True
@@ -647,13 +693,14 @@ s_
         self.sparse_feat_list = None
         self.is_trained = True
 
+    @timeit
     def code(self, data, max_iter=None, errors=False):
         '''
         Sparse codes a single feature
         Requires that the dictionary is already trained
         '''
         if max_iter is None:
-            max_iter = self.sparse_dim
+            max_iter = co.CONST['sparse_fss_max_iter']
         self.initialize(data.size)
         self.feature_sign_search_algorithm(data.ravel(), max_iter=max_iter,
                                            single=True, display_error=errors,
@@ -667,10 +714,20 @@ s_
         <data> is assumed to have dimensions [n_features, n_samples]
         output has dimensions [n_sparse, n_samples]
         '''
-        sparse_features = np.zeros((self.sparse_dim, data.shape[1]))
-        for count in range(data.shape[1]):
-            sparse_features[:, count] = self.code(data[:, count],
+        feat_dim = 0
+        for datum in data:
+            if datum is not None:
+                feat_dim = len(datum)
+        if feat_dim == 0 :
+            raise Exception('Bad Input, full of nans')
+        sparse_features = np.zeros((len(data),
+                                    self.sparse_dim_rat* feat_dim))
+        for count in range(len(data)):
+            if data[count] is not None and np.prod(np.isfinite(data[count][:])):
+                sparse_features[count, :] = self.code(data[count][:],
                                                   max_iter, errors).ravel()
+            else:
+                sparse_features[count, :] = np.nan
         return sparse_features
 
 def compute_lineq_error(prod, matrix, inp):
@@ -699,8 +756,8 @@ def main():
     test2 = cv2.resize(test2, test.shape)
     test_shape = test.shape
     codebook_comps = None
-    sparse_coding = SparseCoding(name='Images', sparse_dim=2 *
-                                 test.size, dist_sigma=0.01, dist_beta=0.01,
+    sparse_coding = SparseCoding(name='Images', sparse_dim_rat=2,
+                                 dist_sigma=0.01, dist_beta=0.01,
                                  display=5)
     sparse_coding.train_sparse_dictionary(np.vstack((test.ravel(),
                                                      test2.ravel())).T,

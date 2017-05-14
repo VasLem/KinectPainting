@@ -272,6 +272,87 @@ class Data(object):
         self.reference_uint8_depth_im = np.zeros(1)
         self.depth_raw = None
 
+class DrawingOperations(object):
+    def draw_nested(self,nested_object,parent=None):
+        '''
+        Creates tree from a nested object. Nested objects can be
+        tuples, dicts and lists. Dicts and tuples are drawn, lists are
+        used for making the tree. tuple[0] is used as the name of the node,
+        tuple[1] as the next structure to draw. dict[key] is used as the next
+        structure to draw, key is used as the name of the node.
+        If tuple[1] or dict[key] are None, they are not drawn.
+        '''
+        import pydot, ast
+        def add2graph(graph, parent=None, struct=None):
+            try:
+                struct = ast.literal_eval(str(struct))
+            except: #struct is a string 
+                edge = pydot.Edge(parent, str(struct))
+                graph.add_edge(edge)
+                return
+            if (not isinstance(struct, list) and
+                not isinstance(struct, tuple) and
+                not isinstance(struct, dict)):
+                edge = pydot.Edge(parent, str(struct))
+                graph.add_edge(edge)
+                return
+            for item in struct:
+                if isinstance(struct, dict):
+                    sub_categ = struct[item]
+                else:
+                    sub_categ = item
+                if (not isinstance(sub_categ, tuple)
+                    and not isinstance(sub_categ, dict)):
+                    add2graph(graph, parent, sub_categ)
+                else:
+                    if isinstance(sub_categ, dict):
+                        if len(sub_categ)>1:
+                            add2graph(graph, parent,
+                                      sub_categ)
+                            continue
+                        else:
+                            node_name = sub_categ.keys[0]
+                            node_val = sub_categ[sub_categ.keys[0]]
+                    else:
+                        node_name = sub_categ[0]
+                        node_val = sub_categ[1]
+                    if parent is not None:
+                        if node_val is not None:
+                            edge = pydot.Edge(parent, node_name)
+                            graph.add_edge(edge)
+                        else:
+                            continue
+                    try:
+                        add2graph(graph, node_name, node_val)
+                    except:
+                        print node_name
+                        raise
+        graph = pydot.Dot(graph_type='graph')
+        add2graph(graph,parent,nested_object)
+        return graph
+
+
+class DictionaryOperations(object):
+    def create_sorted_dict_view(self, x):
+        import operator
+        return sorted(x.items(), key=operator.itemgetter(0))
+    def join_list_of_dicts(self, L):
+        return  { k: v for d in L for k, v in d.items() }
+    def dict_from_tuplelist(self,x):
+        return dict(x)
+    def lookup(self,dic, key, *keys):
+        if keys:
+            return self.lookup(dic.get(key, {}), *keys)
+        return dic.get(key)
+class TypeConversions(object):
+
+    def isfloat(self, value):
+        try:
+            float(value)
+            return True
+        except ValueError:
+            return False
+
 
 class Edges(object):
 
@@ -472,16 +553,293 @@ class ExistenceProbability(object):
         im_results.images.append(im_res)
         '''
 
+
 class FileOperations(object):
-    def save_using_ujson(self,obj, filename):
+    '''
+    Class that holds all loading and saving operations
+    '''
+
+    def save_obj(self, obj, filename):
+        import dill
+        with open(filename, 'w') as out:
+            dill.dump(obj, out)
+
+    def load_obj(self, filename):
+        import dill
+        try:
+            with open(filename, 'r') as inp:
+                obj = dill.load(inp)
+        except:
+            obj = None
+        return obj
+
+    def save_using_ujson(self, obj, filename):
         import ujson as json
-        with open(filename,'w') as out:
-            json.dump(obj,out)
-    def load_using_ujson(self,filename):
+        with open(filename, 'w') as out:
+            json.dump(obj, out)
+
+
+    def fix_keys(self,name):
+        '''
+        for every json file inside name, changes dictionaries with more than
+        one element to tuples list, sorted by keys
+        '''
+        import os
+        for path in os.listdir(name):
+            if os.path.isdir(os.path.join(name,path)):
+                self.fix_keys(os.path.join(name,path))
+            elif path.endswith('.json'):      
+                catalog = self.load_using_ujson(
+                    os.path.join(name,path))
+                catalog = self.replace_dicts(catalog)
+                catalog = dict(catalog)
+                self.save_using_ujson(
+                    catalog, os.path.join(name, path))
+
+    def replace_dicts(self, catalog):
+        '''
+        replace dicts with lists of tuples recursively inside a list/dictionary
+        '''
+        import ast
+        from class_objects import dict_oper
+        try:
+            evalcatalog = ast.literal_eval(str(catalog))
+            if isinstance(evalcatalog, dict):
+                for key in evalcatalog.keys():
+                    newkey = self.replace_dicts(
+                        key)
+                    val = evalcatalog.pop(key)
+                    if str(newkey) not in evalcatalog:
+                        evalcatalog[str(newkey)] = val
+                catalog = dict_oper.create_sorted_dict_view(
+                    evalcatalog)
+            elif isinstance(evalcatalog, list):
+                newcatalog = []
+                for item in evalcatalog:
+                    newcatalog.append(
+                        self.replace_dicts(item))
+                catalog = newcatalog
+        except (ValueError,SyntaxError) as e:
+            pass
+        return catalog
+
+
+
+    def remove_keys(self,name,keys,startswith=None):
+        import ast
+        import os
+        for path in os.listdir(name):
+            if os.path.isdir(os.path.join(name,path)):
+                self.remove_keys(os.path.join(name,path),keys,
+                                 startswith)
+            elif path.endswith('.json'):
+                catalogs = self.load_using_ujson(
+                    os.path.join(name,path))
+                if not isinstance(catalogs,list):
+                    catalogsislist = False
+                    catalogs = [catalogs]
+                else:
+                    catalogsislist = True
+                for catalog in catalogs:
+                    for entry in catalog.keys():
+                        try:
+                            ds = ast.literal_eval(str(entry))
+                        except:
+                            continue
+                        if not isinstance(ds, list):
+                            dsislist= False
+                            ds = [ds]
+                        else:
+                            dsislist = True
+                        for dcount,d in enumerate(ds):
+                            try:
+                                evald = ast.literal_eval(str(d))
+                            except:
+                                continue
+                            for key in evald.keys():
+                                check = False
+                                if startswith:
+                                    check = key.startswith(
+                                        startswith)
+                                check = check or any([key == k for k in keys])
+                                if check:
+                                    evald.pop(key)
+                            ds[dcount] = str(evald)
+                        if not dsislist:
+                            ds = ds[0]
+                        val = catalog.pop(entry)
+                        if str(ds) not in catalog:
+                            catalog[str(ds)] = val
+                if not catalogsislist:
+                    catalogs = catalogs[0]
+                self.save_using_ujson(
+                    catalogs,
+                    os.path.join(name,path))
+
+    def load_using_ujson(self, filename):
         import ujson as json
-        with open(filename,'r') as inp:
+        with open(filename, 'r') as inp:
             obj = json.load(inp)
         return obj
+
+    def load_catalog(self,name,include_catalog=True):
+        if include_catalog and 'include_catalog.json' in os.listdir(name):
+            return self.load_using_ujson(os.path.join(name,
+                                        'include_catalog.json'))
+        elif 'catalog.json' in os.listdir(name):
+            return self.load_using_ujson(os.path.join(name,
+                                         'catalog.json'))
+        else:
+            return None
+
+    def load_all_inside(self,name, keys_list=None, fold_lev=0, _id=None):
+        if keys_list is None:
+            import ast
+            all_catalog = self.load_catalog(name, include_catalog=True)
+            all_catalog = dict(all_catalog)
+            keys_list = [ast.literal_eval(entry) for entry in all_catalog]
+        else:
+            all_catalog = None
+        catalog = self.load_catalog(name, include_catalog=False)
+        if catalog is None:
+            return None
+        if isinstance(keys_list[0][0], tuple):
+            keys_list = [keys_list]
+        import ast
+        import sys
+        entry_list = {}
+        keys_result = {}
+        for entry in keys_list:
+            if all_catalog is not None:
+                _id = all_catalog[str(entry)]
+            if np.any([os.path.isdir(os.path.join(name,path)) for path in os.listdir(name)]):
+                if str(entry[0]) in catalog:
+                    search_key = str(entry[0])
+                    next_keys_list = entry[1:]
+                elif str([entry[0]]) in catalog:
+                    search_key = str([entry[0]])
+                else:
+                    LOG.error('Attempted to access inexistent key: '+
+                              str([entry[0]]))
+                    LOG.error('Existent keys are: '+str(catalog.keys()))
+                    sys.exit()
+                loaded = self.load_all_inside(
+                                     os.path.join(name,
+                                                  str(catalog[search_key])),
+                                     entry[1:],
+                                     fold_lev-1,
+                                    _id=_id)
+                if not fold_lev:
+                    entry_list[_id] = loaded
+                    keys_result[_id] = entry
+                else:
+                    return loaded
+            else:
+                if _id is None:
+                    return None
+                try:
+                    return self.load_obj(os.path.join(
+                        name,str(catalog[str(keys_list[0])]))+'.pkl')
+                except KeyError:
+                    return self.load_obj(os.path.join(
+                        name,str(catalog[str(keys_list[0][0])]))+'.pkl')
+        return entry_list, keys_result
+
+    def load_labeled_data(self, keys_list, name=None, fold_lev=-1,
+                          just_catalog=False, all_inside=False,
+                          include_all_catalog=False):
+        import os
+        if name is None:
+            name = CONST['save_path']
+        name = str(name)
+        direct = name.split(os.sep)
+        if not os.path.isdir(name):
+            return None
+        if 'catalog.json' in os.listdir(name):
+            catalog = self.load_using_ujson(os.path.join(name,
+                                                         'catalog.json'))
+        else:
+            return None
+        if fold_lev==-1:
+            fold_lev = len(keys_list)
+        if (fold_lev > 0 and len(keys_list) > 1 or
+            fold_lev > 0 and (just_catalog or all_inside)):
+            if str(keys_list[0]) not in catalog:
+                return None
+            data = self.load_labeled_data(
+                keys_list[1:],
+                os.path.join(name, str(catalog[str(keys_list[0])])),
+                fold_lev=fold_lev - 1, just_catalog=just_catalog,
+                all_inside=all_inside,
+                include_all_catalog=include_all_catalog)
+        else:
+            if just_catalog:
+                return self.load_catalog(name,include_all_catalog)
+            if all_inside:
+                return self.load_all_inside(name)
+            key = '.'.join(map(str, keys_list))
+            if key not in catalog:
+                return None
+            if str(catalog[key]) + '.pkl' not in os.listdir(
+                    name):
+                return None
+            return self.load_obj(os.path.join(name,
+                                                       str(catalog[key]))
+                                          + '.pkl')
+        return data
+
+
+    def save_labeled_data(self, keys_list, data, name=None, fold_lev=-1):
+        '''
+        keys_list is a list of the keys that work as labels for data
+        <name> is the name of the folder
+        to be used as hyperfolder to save labeled data. The <keys_list> defines
+        the number of keys inside keys_list to be used to created subfolers.
+        The rest of the keys are used as entry of a catalogue.
+        '''
+        import os
+        if name is None:
+            name = CONST['save_path']
+        name = str(name)
+        direct = name.split(os.sep)
+        if not os.path.isdir(name):
+            makedir(name)
+        if 'catalog.json' in os.listdir(name):
+            catalog = self.load_using_ujson(os.path.join(name,
+                                                         'catalog.json'))
+        else:
+            catalog = {}
+        if fold_lev == -1:
+            fold_lev = len(keys_list)
+        if fold_lev > 0 and len(keys_list) > 1:
+            if str(keys_list[0]) not in catalog:
+                catalog[str(keys_list[0])] = len(catalog)
+                self.save_using_ujson(catalog, os.path.join(
+                    name, 'catalog.json'))
+            self.save_labeled_data(
+                keys_list[1:],
+                data,
+                os.path.join(name, str(catalog[str(keys_list[0])])),
+                fold_lev=fold_lev - 1)
+            if 'include_catalog.json' in os.listdir(name):
+                all_catalog = self.load_using_ujson(os.path.join(
+                    name,'include_catalog.json'))
+            else:
+                all_catalog = {}
+            if str(keys_list) not in all_catalog:
+                all_catalog[str(keys_list)] = str(len(all_catalog))
+                self.save_using_ujson(all_catalog, os.path.join(name,
+                                                   'include_catalog.json'))
+        else:
+            key = '.'.join(map(str, keys_list))
+            if key not in catalog:
+                catalog[str(key)] = len(catalog)
+                self.save_using_ujson(catalog, os.path.join(
+                    name, 'catalog.json'))
+            self.save_obj(data, os.path.join(name,
+                                                      str(catalog[key]))
+                                   + '.pkl')
+
 
 class Hull(object):
     '''Convex Hulls of contours'''
@@ -513,9 +871,100 @@ class Latex(object):
     Basic transriptions to latex
     '''
 
+    def compile(self, path, name):
+        '''
+        <path>:save path
+        <name>:tex name
+        '''
+        import subprocess
+        proc = subprocess.Popen(['pdflatex',
+                                         '-output-directory',
+                                          path,
+                                 os.path.join(path, name)])
+        proc.communicate()
+
+    def add_package(self, data, package, options=None):
+        if not package in data:
+            import re
+            try:
+                pack_ind = [m.end() for m in re.finditer('usepackage', data)][-1]
+            except IndexError:
+                pack_ind = [m.end() for m in
+                            re.finditer('documentclass', data)][0]
+            pack_ind += data[pack_ind:].find('}')+3
+            pack_data = '\\usepackage'
+            if options is not None:
+                pack_data += '[' + options + ']'
+            pack_data += '{' + package + '}'
+            data = (data[:pack_ind] + pack_data +
+                    data[pack_ind:])
+        return data
+
+
+    def add_graphics(self, files, tex_path=None , captions=None,
+                           labels=None, options=None, nomargins=False,
+                        shrink_to_fit_only=True):
+        if not isinstance(files, list):
+            files = [files]
+        if captions is None:
+            captions = [None] * len(files)
+        if not isinstance(captions, list):
+            files = [captions]
+        if labels is None:
+            labels = [None] * len(files)
+        if not isinstance(labels, list):
+            labels = [labels]
+        if len(files) != len(captions) or len(labels) != len(captions):
+            print ('Error:Captions and labels should have the same length as' +
+                   ' files if defined')
+            exit()
+        data = ''
+        try:
+            with open(tex_path, 'r') as inp:
+                data += inp.read()
+            tex_exists = True
+        except (IOError, EOFError, TypeError):
+            data = '\\documentclass[12pt,a4paper]{article} \n'
+            tex_exists = False
+        data = self.add_package(data, 'graphicx')
+        data = self.add_package(data, 'float')
+        data = self.add_package(data, 'grffile', 'space')
+        if shrink_to_fit_only:
+            data = self.add_package(data, 'adjustbox')
+        if data.find('\\begin{document}') == -1:
+            data += '\n\\begin{document}\n'
+
+        if not tex_exists:
+            data += '\\end{document}\n'
+        data_ind = data.find('\\end{document}')
+        data2add = ''
+        for fil, caption, label in zip(files, captions, labels):
+            data2add += '\\begin{figure}[H] \n \\centering \n'
+            if nomargins:
+                data2add += '\\centerline{'
+            if shrink_to_fit_only and options is not None:
+                data2add += '\\adjustimage'
+                data2add += '{' + options + '}'
+            else:
+                data2add += '\\includegraphics'
+                if options is not None:
+                    data2add += '[' + options + ']'
+            data2add += '{' + fil + '}'
+            if nomargins:
+                data2add +='}'
+            data2add += '\n'
+            if caption is not None:
+                data2add += '\\caption{' + caption + '}\n'
+            if label is not None:
+                data2add += '\\label{' + label + '}\n'
+            data2add += '\\end{figure}\n'
+        data = data[:data_ind] + data2add + data[data_ind:]
+        return data
+
+
     def array_transcribe(self, arr, xlabels=None, ylabels=None,
                          sup_x_label=None, sup_y_label=None,
-                         extra_locs='bot',boldlabels=True):
+                         extra_locs='bot', boldlabels=True):
         '''
         <arr> is the input array, <xlabels> are the labels along x axis,
         <ylabels> are the labels along the y axis, <sup_x_label> and
@@ -562,12 +1011,12 @@ class Latex(object):
             whole_arr = arr
         if xlabels is not None:
             if boldlabels:
-                xlabels = [r'\textbf{'+lab+r'}' for lab in xlabels]
+                xlabels = [r'\textbf{' + lab + r'}' for lab in xlabels]
             xlabels = np.array(xlabels)
             xlabels = xlabels.astype(list)
         if ylabels is not None:
             if boldlabels:
-                ylabels = [r'\textbf{'+lab+r'}' for lab in ylabels]
+                ylabels = [r'\textbf{' + lab + r'}' for lab in ylabels]
             ylabels = np.array(ylabels)
             ylabels = ylabels.astype(list)
         y_size, x_size = whole_arr.shape
@@ -663,6 +1112,97 @@ class Lim(object):
     def __init__(self):
         self.max_im_num_to_save = 0
         self.init_n = 0
+
+
+class LoggingOperations(object):
+    '''
+    operations to a logger or a logging module
+    '''
+    import logging
+
+    class MaxLevelFilter(logging.Filter):
+        '''Filters (lets through) all messages with level < LEVEL'''
+
+        def __init__(self, level):
+            self.level = level
+
+        def filter(self, record):
+            # "<" instead of "<=": since logger.setLevel is inclusive, this should be exclusive
+            return record.levelno < self.level
+
+    class SingleLevelFilter(logging.Filter):
+        '''Filters (or filters out) messages of a specific level'''
+
+        def __init__(self, passlevel, reject):
+            self.passlevel = passlevel
+            self.reject = reject
+
+        def filter(self, record):
+            if self.reject:
+                return (record.levelno != self.passlevel)
+            else:
+                return (record.levelno == self.passlevel)
+
+    def add_level(self, log_name, custom_log_module=None, log_num=None,
+                  log_call=None,
+                  lower_than=None, higher_than=None, same_as=None,
+                  verbose=True):
+        '''
+        Function to dynamically add a new log level to a given custom logging module.
+        <custom_log_module>: the logging module. If not provided, then a copy of
+            <logging> module is used
+        <log_name>: the logging level name
+        <log_num>: the logging level num. If not provided, then function checks
+            <lower_than>,<higher_than> and <same_as>, at the order mentioned.
+            One of those three parameters must hold a string of an already existent
+            logging level name.
+        In case a level is overwritten and <verbose> is True, then a message in WARNING
+            level of the custom logging module is established.
+        '''
+        if custom_log_module is None:
+            import imp
+            custom_log_module = imp.load_module('custom_log_module',
+                                                *imp.find_module('logging'))
+        log_name = log_name.upper()
+
+        def cust_log(par, message, *args, **kws):
+            # Yes, logger takes its '*args' as 'args'.
+            if par.isEnabledFor(log_num):
+                par._log(log_num, message, args, **kws)
+        available_level_nums = [key for key in custom_log_module._levelNames
+                                if isinstance(key, int)]
+
+        available_levels = {key: custom_log_module._levelNames[key]
+                            for key in custom_log_module._levelNames
+                            if isinstance(key, str)}
+        if log_num is None:
+            try:
+                if lower_than is not None:
+                    log_num = available_levels[lower_than] - 1
+                elif higher_than is not None:
+                    log_num = available_levels[higher_than] + 1
+                elif same_as is not None:
+                    log_num = available_levels[higher_than]
+                else:
+                    raise Exception('Infomation about the ' +
+                                    'log_num should be provided')
+            except KeyError:
+                raise Exception('Non existent logging level name')
+        if log_num in available_level_nums and verbose:
+            custom_log_module.warn('Changing ' +
+                                   custom_log_module._levelNames[log_num] +
+                                   ' to ' + log_name)
+        custom_log_module.addLevelName(log_num, log_name)
+
+        if log_call is None:
+            log_call = log_name.lower()
+        exec(
+            'custom_log_module.Logger.' +
+            eval('log_call') +
+            ' = cust_log',
+            None,
+            locals())
+        return custom_log_module
 
 
 class Mask(object):
@@ -1581,11 +2121,11 @@ class TimeOperations(object):
         <time_list> is a list or list of lists or a numpy array
         <label> can be a string or a list of strings.
         '''
-        time_array = np.atleast_2d(np.array(time_list))
+        time_array = np.atleast_2d(np.array(time_list).squeeze())
         if isinstance(label, basestring):
             label = [label] * time_array.shape[0]
         print time_array.shape
-        if len(label) != time_array.shape[0]:
+        if len(label) != min(time_array.shape):
             raise Exception('Invalid number of labels given')
         self.convert_to_ms = convert_to_ms
         if self.convert_to_ms:
@@ -1638,10 +2178,13 @@ contours = Contour()
 counters = Counter()
 chhm = CountHandHitMisses()
 data = Data()
+dict_oper = DictionaryOperations()
+draw_oper = DrawingOperations()
 edges = Edges()
 file_oper = FileOperations()
 latex = Latex()
 lims = Lim()
+log_oper = LoggingOperations()
 masks = Mask()
 meas = Measure()
 models = Model()
@@ -1651,6 +2194,7 @@ plot_oper = PlotOperations()
 pol_oper = PolarOperations()  # depends on Measure class
 table_oper = TableOperations()
 thres = Threshold()
+type_conv = TypeConversions()
 im_results = Result()
 segclass = Segmentation()
 existence = ExistenceProbability()

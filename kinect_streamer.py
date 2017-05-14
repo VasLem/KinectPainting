@@ -86,7 +86,7 @@ class Kinect(object):
                 and len(self.used_classifier.recognized_classes)>0
                 and scores_exist):
                 self.image_pub.publish(self.bridge.cv2_to_imgmsg(
-                    self.used_classifier.features_extraction.hand_img, "passthrough"))
+                    self.used_classifier.frames_preproc.hand_img, "passthrough"))
                 msg = TimeReference()
                 try:
                     msg.source = self.used_classifier.train_classes[
@@ -99,12 +99,12 @@ class Kinect(object):
                 self.class_pub.publish(msg)
                 self.skel_pub.publish(self.bridge.cv2_to_imgmsg(
                              np.atleast_2d(np.array(self.used_classifier.
-                             features_extraction.skeleton.skeleton,np.int32))))
+                             frames_preproc.skeleton.skeleton,np.int32))))
         except Exception as e:
              exc_type, exc_value, exc_traceback = sys.exc_info()
              traceback.print_exception(exc_type,
                                 exc_value,
-                                exc_traceback, limit=2, file=sys.stdout)
+                                exc_traceback, limit=10, file=sys.stdout)
 
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler()

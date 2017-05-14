@@ -338,6 +338,7 @@ class MainFrame(wx.Frame):
                 else:
                     self.depths= self.depths[1:]+[dep]
                 dep = np.median(np.array(self.depths))
+            init_dep = dep
             if dep < self.min_depth and dep != 0: #erase everything if hand comes close to kinect
                 self.drawing_im = np.zeros_like(inp)
                 self.temporary_im = np.zeros_like(inp)
@@ -387,7 +388,7 @@ class MainFrame(wx.Frame):
                       '\nWrite Mode: ' + ('on' if self.write_mode else 'off')+
                       '\nPen Size: ' + str(self.size),color=(255,0,0),
                       fontscale=0.7, thickness=2 )
-            co.tag_im(inp, 'Median depth: ' + str(dep) +
+            co.tag_im(inp, 'Median depth: ' + str(init_dep) +
                       '\nFPS: ' + str(self.data.fps),loc='bot right',
                       fontscale=0.4, color=(255,255,255))
             if self.canvas is None:

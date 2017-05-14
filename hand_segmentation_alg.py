@@ -85,6 +85,55 @@ def array_row_intersection(arr1, arr2):
     '''
     return arr1[find_rows_in_array(arr1, arr2)]
 
+def find_trues_segments(inp, iscircular):
+    if iscircular:
+        shift = np.argmin(inp)
+        inp = np.roll(inp, -shift)
+        a = np.concatenate(([0], inp, [0]))
+        dif = np.diff(a)[1:]
+    else:
+        a = np.concatenate(([0], inp, [0]))
+        dif = np.diff(a)
+    ind_start = cv2.findNonZero(
+        np.roll(dif == 1, 1)[:, None].astype(np.uint8))[:, 0, 1]
+    ind_end = cv2.findNonZero(
+        (dif == -1)[:, None].astype(np.uint8))[:, 0, 1]
+    if iscircular:
+        ind_start = (ind_start + shift)%len(inp)
+        ind_end = (ind_end + shift) %len(inp)
+    return np.concatenate((ind_start[:,None],ind_end[:,None]),axis=-1)
+
+def find_largest_trues_segment(inp, iscircular=True, ret_filtered=True):
+    if inp.sum() == inp.size:
+        res = np.array([0, inp.size - 1])
+        filtered = inp.copy()
+    else:
+        if iscircular:
+            shift = np.argmin(inp)
+            inp = np.roll(inp, -shift)
+        a = np.concatenate(([0], inp, [0]))
+        dif = np.diff(a)[1:]
+        ind_start = cv2.findNonZero(
+            np.roll(dif == 1, 1)[:, None].astype(np.uint8))[:, 0, 1]
+        ind_end = cv2.findNonZero(
+            (dif == -1)[:, None].astype(np.uint8))[:, 0, 1]
+        tmp = np.cumsum(inp)[ind_end]
+        mass = np.diff(np.concatenate(([0], tmp)))
+        ind_largest = np.argmax(mass)
+        res = np.array([ind_start[ind_largest], ind_end[ind_largest]])
+
+        if ret_filtered:
+            filtered = inp.copy()
+            filtered[:res[0]] = 0
+            filtered[res[1] + 1:] = 0
+            filtered = np.roll(filtered, shift)
+        if iscircular:
+            res = res + shift
+            res = res % len(inp)
+    if ret_filtered:
+        return res, filtered.astype(bool)
+    else:
+        return res
 
 def find_corrected_point(polar_points, ref_angle,
                          ref_point, ref_radius,
@@ -310,7 +359,7 @@ class FindArmSkeleton(object):
     '''
 
     def __init__(self, frame=None, angle_bin_num=500, min_coords_num=50,
-                 max_links=8, link_width_thres=50):
+                 max_links=8, link_width_thres=50, draw=False, focus='speed'):
         # skeleton holds the cartesian skeleton joints
         self.skeleton = []
         # skeleton_widths is populated only with rectangle_approx method and holds the
@@ -326,14 +375,17 @@ class FindArmSkeleton(object):
         self.contour = None
         self.filter_mask = None
         self.frame = None
+        self.img = None
         self.armpoints = None
         self.hand_mask = None
         self.polar = None
+        self.draw = draw
         self.angle_bin_num = angle_bin_num
         self.min_coords_num = min_coords_num
         self.max_links = max_links
         self.link_width_thres = link_width_thres
         self.positions_initiated = True
+        self.focus = focus
         if frame is not None:
             if not co.edges.exist:
                 co.edges.load_calib_data(whole_im=True, img=frame)
@@ -442,6 +494,8 @@ class FindArmSkeleton(object):
             raise Exception('contour is needed')
         else:
             self.contour = contour
+        if self.draw:
+            self.img = np.tile(frame[..., None] / float(np.max(frame)), (1, 1, 3))
         if not self.positions_initiated:
             (self.all_cart_positions,
              self.all_polar_positions) = co.meas.construct_positions(frame,
@@ -533,14 +587,68 @@ class FindArmSkeleton(object):
         # create a matrix with zeroed all the columns refering to above angles
         s = H.copy()
         s[:, a] = 0
-        # find where the intersection happens for each non zeroed angle
-        r_indices = np.argmax(s[:, :], axis=0)
-        # find which intersection happens farthest. This is the result.
-        y_ind = np.argmax(r_indices)
-        x_ind = r_indices[y_ind]
-        # find the winning point
-        new_pol_ref_point = np.array(
-            [[r_bins_edges[x_ind], p_bins_edges[y_ind]]])
+        if self.focus == 'speed':
+            # find where the intersection happens for each non zeroed angle
+            r_indices = np.argmax(s[:, :], axis=0)
+            # find which intersection happens farthest. This is the result.
+            y_ind = np.argmax(r_indices)
+            x_ind = r_indices[y_ind]
+            # find the winning point
+            new_pol_ref_point = np.array(
+                [[r_bins_edges[x_ind], p_bins_edges[y_ind]]])
+        elif self.focus == 'accuracy':
+            polpoints = polar.copy()
+            #polpoints[:, 1] *= 10
+            #polpoints = np.round(polpoints).astype(int)
+            p_uni, polpoints[:,1] = np.unique(polpoints[:,1],
+                                              return_inverse=True)
+            r_uni, polpoints[:,0] = np.unique(polpoints[:,0],
+                                              return_inverse=True)
+            polpoints = (polpoints).astype(int)
+            dists = calculate_cart_dists(polpoints)
+            segm_thres = polpoints.max()/float(20)
+            segments_to_cut = dists < segm_thres
+            segm_inds = find_trues_segments(segments_to_cut,iscircular=False)
+            segments = [np.int32(polpoints[:,::-1][start+1:end]) for [start, end] in
+                        segm_inds]
+            s_new = np.zeros(tuple((polpoints.max(axis=0)+1).tolist()))
+            cv2.polylines(s_new, segments ,False, 1)
+            s_new[0,:] = 0
+            #ref_p = np.min(polpoints, axis=0)
+            #polpoints = polpoints
+            #s_new[polpoints[:,0], polpoints[:,1]] = 1
+            '''
+            check = s>0
+            h_points = find_nonzero(check.astype(np.uint8))
+            d = np.abs(h_points - np.median(h_points,axis=0))
+            mdev = np.median(d,axis=0)
+            mdev[mdev==0] = 0.01
+            rat = d / mdev.astype(float) <= 2
+            h_points = h_points[np.prod(rat,axis=1).astype(bool)]
+            print h_points
+            s_new = np.zeros_like(s)
+            s_new[h_points[:,0],h_points[:,1]] = s[h_points[:,0],h_points[:,1]]
+            '''
+            s = s_new
+            # find where the intersection happens for each non zeroed angle
+            r_indices = np.argmax(s[:, :], axis=0)
+            # find which intersection happens farthest. This is the result.
+            y_ind = np.argmax(r_indices)
+            x_ind = r_indices[y_ind]
+            dists = calculate_cart_dists(polpoints,
+                                         np.hstack((x_ind,y_ind)))
+            new_pol_ref_point = polar[np.argmin(dists), :][None, :]
+        if self.draw:
+            import matplotlib.pyplot as plt
+            fig = plt.figure()
+            axes = fig.add_subplot(111)
+            #im = (H[...,None]*np.array([[[1,0,0]]])+s[...,None]*np.array([[[0,1,0]]]))
+            im = (s[...,None]*np.array([[[0,1,0]]]))
+            im = im / np.max(im).astype(float)
+            cv2.circle(im, (y_ind, x_ind), 3, [1,1,1], -1)
+            axes.imshow(im)
+            #plt.hist2d(p_d,r_d, bins=(p_bins_edges, r_bins_edges))
+            plt.show()
         old_cart_ref_point = new_cart_ref_point.copy()
         new_cart_ref_point = co.pol_oper.polar_to_cart(
             new_pol_ref_point, old_cart_ref_point, 0).squeeze()
@@ -667,6 +775,9 @@ class FindArmSkeleton(object):
         length_radius = link_end_1st[0]
         cocircular_with_crit_mask = np.abs(
             used_polar[:, 0] - length_radius) < self.car_res
+        if self.draw:
+            cv2.circle(self.img, tuple(ref_point.astype(int)[::-1]), int(length_radius),
+                       [0.5,0.0,0.0])
         try:
             cocircular_with_crit_inds = cv2.findNonZero(cocircular_with_crit_mask[:, None]
                                                         .astype(np.uint8))[:, 0, 1]
@@ -750,6 +861,7 @@ class FindArmSkeleton(object):
         '''
         Use rectangle approximation of the links to find the skeleton
         '''
+
         if entry_inds is None:
             if not self.skeleton:
                 if self.entry is not None:
@@ -922,22 +1034,23 @@ class FindArmSkeleton(object):
         '''
         if show:
             from matplotlib import pyplot as plt
-        img = np.tile(frame[..., None] / float(np.max(frame)), (1, 1, 3))
+        if not self.draw:
+            self.img = np.tile(frame[..., None] / float(np.max(frame)), (1, 1, 3))
         c_copy = self.contour.squeeze()
         for surr_points_mask in self.surrounding_skel:
             colr = np.random.random(3)
             surr_points = c_copy[surr_points_mask, :]
             for count in range(surr_points.shape[0]):
-                cv2.circle(img, tuple(surr_points[count, :]),
+                cv2.circle(self.img, tuple(surr_points[count, :]),
                            1, colr.astype(tuple), -1)
         for link in self.skeleton:
-            cv2.arrowedLine(img, tuple(
+            cv2.arrowedLine(self.img, tuple(
                 link[0][::-1]), tuple(link[1][::-1]), [0, 0, 1], 2)
         if show:
             plt.figure()
-            plt.imshow(img)
+            plt.imshow(self.img)
             plt.show()
-        return (img * np.max(frame))
+        return (self.img * np.max(frame))
 
 
 def main():
@@ -948,11 +1061,12 @@ def main():
                            "arm_example.png")
     # binarm3d = cv2.imread('random.png')
     # binarm3d = cv2.imread('arm_example.png')
+    #binarm = cv2.imread('random.png', -1)
     binarm = cv2.imread('arm_example.png', -1)
     _, cnts, _ = cv2.findContours(
         binarm.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     co.edges.load_calib_data(whole_im=True, img=binarm)
-    skel = FindArmSkeleton(binarm)
+    #skel = FindArmSkeleton(binarm)
     # binarm3d_positions = np.transpose(np.nonzero(np.ones_like(
     #    binarm3d[:, :, 0]))).reshape(binarm3d.shape[:-1] + (2,))
     # co.edges.calib_edges = np.pad(np.zeros((binarm3d.shape[
@@ -966,7 +1080,7 @@ def main():
 
     # profile.runctx('main_process_upgraded(binarm3d,binarm3d_positions,0)',
     #               globals(), locals())
-    profile.runctx('skel.run(binarm, cnts[0])', globals(), locals())
+    #profile.runctx('skel.run(binarm, cnts[0])', globals(), locals())
     for _ in range(4):
         # rows, cols, _ = binarm3d.shape
         rows, cols = binarm.shape
@@ -976,7 +1090,8 @@ def main():
         rot_mat[1, 2] += np.floor(cols / 2.0 - rows / 2.0)
         # binarm3d_positions = np.transpose(np.nonzero(np.ones_like(
         #    binarm3d[:, :, 0]))).reshape(binarm3d.shape[:-1] + (2,))
-        skel = FindArmSkeleton(binarm)
+        skel = FindArmSkeleton(binarm, link_width_thres=0, draw=True,
+                               focus='accuracy')
         _, cnts, _ = cv2.findContours(
             binarm.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         skel.run(binarm, cnts[0], 'longest_ray')
@@ -1413,38 +1528,6 @@ def main_process(binarm3d, positions=None, display=0, entry=None):
             np.array([link_end_2nd]), new_ref_point, new_ref_angle)
         new_polar = new_polar[new_crit_ind:, :]
 
-
-def find_largest_trues_segment(inp, iscircular=True, ret_filtered=True):
-    if inp.sum() == inp.size:
-        res = np.array([0, inp.size - 1])
-        filtered = inp.copy()
-    else:
-        if iscircular:
-            shift = np.argmin(inp)
-            inp = np.roll(inp, -shift)
-            a = np.concatenate(([0], inp, [0]))
-        dif = np.diff(a)[1:]
-        ind_start = cv2.findNonZero(
-            np.roll(dif == 1, 1)[:, None].astype(np.uint8))[:, 0, 1]
-        ind_end = cv2.findNonZero(
-            (dif == -1)[:, None].astype(np.uint8))[:, 0, 1]
-        tmp = np.cumsum(inp)[ind_end]
-        mass = np.diff(np.concatenate(([0], tmp)))
-        ind_largest = np.argmax(mass)
-        res = np.array([ind_start[ind_largest], ind_end[ind_largest]])
-
-        if ret_filtered:
-            filtered = inp.copy()
-            filtered[:res[0]] = 0
-            filtered[res[1] + 1:] = 0
-            filtered = np.roll(filtered, shift)
-        if iscircular:
-            res = res + shift
-            res = res % len(inp)
-    if ret_filtered:
-        return res, filtered.astype(bool)
-    else:
-        return res
 
 
 def find_hand(*args):

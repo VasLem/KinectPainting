@@ -138,6 +138,7 @@ def optGridSearchCV(classifier, xtrain, ytrain, parameters, reduction_ratio=2,
                 grids_params = grids.best_params_
             except ValueError:
                 print('Invalid parameters')
+                raise
                 best_params = parameters
             if rand_flag == rand_flags[1]:
                 print('Iteration Number: ' + str(it_count))

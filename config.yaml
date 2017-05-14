@@ -34,7 +34,10 @@ test_actions_ground_truth : /media/vassilis/Thesis/Datasets/PersonalFarm/Trainin
 test_poses: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test1
 test_poses_ground_truth: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test1.csv
 ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths
-#folder to save algorithms results
+#folder to save data
+save_path: /media/vassilis/Thesis/Data/
+class_save_path: /media/vassilis/Thesis/Data/Classifiers
+#folder to display data
 results_fold : /media/vassilis/Data/Thesis/KinectPainting/Results
 #save parameters
 max_depth_im_num_to_save: 200
@@ -61,10 +64,12 @@ bg_ratio : 0.2
 var_thres : 20
 history : 4000
 #Variables necessary for sparse coding
-sparse_dim: 256
-sparse_max_dict_error: 100
-sparse_max_retries : 2
+sparse_dim_rat: 2
 sparse_alpha : 1
+sparse_fss_max_iter: 1000
+sparse_fss_min_coeff_rat: 0.05
+sparse_fss_min_coeff: 3
+sparse_fss_gamma: 1
 #the rosbag for training
 train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
 #Variables for action recognition
@@ -72,12 +77,18 @@ ZHOF_bin_size: 4
 3DHOF_bin_size: 4
 GHOG_bin_size: 64
 3DXYPCA_size: 32 # per dimension
-RDF_trees: 
-- 5
-- 10
-- 15
-- 20
-- 30
+RDF_trees: 29 
+    #- 5
+    #- 10
+    #- 15
+    #- 20
+    #- 30
+SVM_C: 83
+    #- 50.0
+    #- 100.0
+    #- 500.0
+    #- 1000.0
+#Dynamic Params
 STD_small_filt_window: 20 #window of buffers, not frames
 STD_big_filt_window: 40 #window of buffers, not frames
 action_separation_thres: 0
@@ -86,6 +97,9 @@ buffer_size: 10
 buffer_confidence_tol: 0.25
 filt_window_confidence_tol: 0.75
 kernel : linear #for SVMs classifier
+#PTPCA Params
+PTPCA_components: 3
+    
 #Variables for hand segmentation
 max_link_number : 6
 max_hsa_contours_num: 5
