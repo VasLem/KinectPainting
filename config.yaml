@@ -29,10 +29,6 @@ save_depth: Depth
 save_color: Color
 #folders to save datasets and ground truths
 test_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
-test_actions : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test2
-test_actions_ground_truth : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test2.csv
-test_poses: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result/test1
-test_poses_ground_truth: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths/test1.csv
 ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths
 #folder to save data
 save_path: /media/vassilis/Thesis/Data/
@@ -77,17 +73,11 @@ ZHOF_bin_size: 4
 3DHOF_bin_size: 4
 GHOG_bin_size: 64
 3DXYPCA_size: 32 # per dimension
+GHOG_resize_size: 30 # in y dimension, proportional for x dimension
+ZHOF_resize_size: 30 # in y dimension, proportional for x dimension
 RDF_trees: 29 
-    #- 5
-    #- 10
-    #- 15
-    #- 20
-    #- 30
 SVM_C: 83
-    #- 50.0
-    #- 100.0
-    #- 500.0
-    #- 1000.0
+AdaBoost_Estimators: 100
 #Dynamic Params
 STD_small_filt_window: 20 #window of buffers, not frames
 STD_big_filt_window: 40 #window of buffers, not frames
@@ -139,4 +129,5 @@ min_frame_count_diff: 5
 max_gamma: 0.0001
 #Show results and where (display,file,no)
 results: display
-
+#App configuration
+AppData: AppData

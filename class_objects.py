@@ -272,8 +272,459 @@ class Data(object):
         self.reference_uint8_depth_im = np.zeros(1)
         self.depth_raw = None
 
+
 class DrawingOperations(object):
-    def draw_nested(self,nested_object,parent=None):
+    '''
+    Methods for advanced plotting using matplotlib
+    '''
+    
+
+
+    def plot_utterances(self, breakpoints,
+                        labels,
+                        ground_truth=None,
+                        frames_sync=None,
+                        frames=None,
+                        real_values = None,
+                        show_legend=False,
+                        leg_labels=[],
+                        show_breaks=True, show_occ_tab=True,
+                        show_zoomed_occ=True, show_fig_title=True,
+                        show_im_examples=True, categories_to_zoom = None,
+                        fig_width=12, examples_height=2, zoomed_occ_size=4,
+                        break_height = 0,
+                                        examples_pad_size=10,show_res=True,
+                        examples_num=None, min_im_zoom_num = 5,
+                        max_im_zoom_num = 40,
+                        title=None, dataset_name='',
+                        show_warnings=True, *args, **kwargs):
+        '''
+        An advanced plotter that shows utterances, dependent on time.
+        <breakpoints> is a dictionary,with keys the names of the classes to be recognized
+        and each entry holding the starting and ending time points (2 lists)
+        for each occurence, based on the indices in ground truth.
+        <frames> is the list of frames of the whole video sequence, which is
+        necessary in case <show_zoomed_occ> or <show_im_examples> is True.
+        <ground_truth> is the corresponding ground truth, a numpy array, which
+        is needed in case <show_im_examples> is True.
+        <frames_sync> is a vector holding the ground_truth index of each frame, which is
+        necessary in case <show_zoomed_occ> or <show_im_examples> is True.
+        <labels> are the names of the classes inside ground truth.
+        Flags starting by 'show' are there, so that to determine which element
+        to plot or not. <categories_to_zoom> is a string or a list of strings with the names
+        of the classes, from which a sample is going to be plotted in a montage.
+        '''
+        if kwargs and show_warnings:
+            LOG.warning('Given Invalid Arguments: ' + str(kwargs.keys()))
+        if categories_to_zoom is None:
+            categories_to_zoom = labels
+        if not isinstance(categories_to_zoom, list):
+            categories_to_zoom = [categories_to_zoom]
+        for ind in range(len(categories_to_zoom)):
+            categories_to_zoom[ind] = categories_to_zoom[ind].lower()
+        lower_labels = []
+        for label in labels:
+            lower_labels.append(label.lower())
+        gs_width = fig_width
+        gs_examples = examples_height
+        zoom_size = zoomed_occ_size
+        pad_size = examples_pad_size
+        from matplotlib.cm import get_cmap
+        from matplotlib.patches import ArrowStyle, ConnectionPatch
+        from matplotlib import gridspec
+
+        # Initialize constants
+        
+        cmap = get_cmap('Spectral')
+        arr_cmap = get_cmap('tab20b')
+        tab_x_size = zoom_size * show_occ_tab
+        if show_fig_title:
+            gs_title = 1
+        else:
+            gs_title = 0
+        break_width = (gs_width-tab_x_size) * show_breaks
+        if not break_height:
+            break_height = break_width
+        if show_occ_tab:
+            if show_breaks:
+                tab_y_size = break_height
+            else:
+                tab_y_size = 2 * zoom_size
+        else:
+            tab_y_size = 0
+        if examples_num is None and show_im_examples:
+            if show_breaks and show_im_examples:
+                examples_num = break_width
+            else:
+                examples_num = 8
+            LOG.warning('Specifying explicitely examples_num to %d',
+                        examples_num)
+        else:
+            examples_num = 0
+
+        gs_examples = gs_examples * show_im_examples
+        
+        ex_categories_to_zoom = [act for act in breakpoints if act.lower() in categories_to_zoom]
+        zoom_cat_num = len(ex_categories_to_zoom)
+        zooms_per_row = gs_width / zoom_size
+        zooms_columns = np.ceil(zoom_cat_num / float(zooms_per_row)) * show_zoomed_occ
+        gs_height = int(gs_title + max(tab_y_size,break_height) + gs_examples + zooms_columns*zoom_size)
+
+        if not gs_height:
+            LOG.warning('All show flags are set to false, returning None')
+            return None
+       
+        # Initialize GridSpec and figure objects
+        f = plt.figure(figsize=(gs_width,gs_height))
+        gs = gridspec.GridSpec(gs_height,gs_width)
+        gs.update(wspace=0.025, hspace=0.05)
+        if show_fig_title:
+            ax_title = plt.subplot(gs[0,:])
+            if title is None:
+                title = 'Utterances in dataset \"' + dataset_name +'\"'
+            ax_title.set_title(title,
+                                    fontsize=20)
+            ax_title.axis('off')
+
+        if show_breaks:
+            ax_plot = plt.subplot(gs[gs_title:gs_title+break_height,
+                                      :break_width])
+            f.add_subplot(ax_plot)
+            bbox = ax_plot.get_window_extent().transformed(f.dpi_scale_trans.inverted())
+            width, height = bbox.width, bbox.height
+            width *= f.dpi
+            height *= f.dpi
+            norm_lw = min(width, height)/200
+            
+        if show_im_examples:
+            ax_ex = plt.subplot(gs[gs_title+break_height:
+                                   gs_title+break_height+gs_examples,:-tab_x_size])
+            f.add_subplot(ax_ex)
+        else:
+            ax_ex = None
+        if show_occ_tab:
+            ax_table = plt.subplot(gs[gs_title:tab_y_size+gs_title,-tab_x_size:])
+            f.add_subplot(ax_table)
+        else:
+            ax_table = None
+        if show_zoomed_occ:
+            axzooms=[]
+            for count,lab in enumerate(ex_categories_to_zoom):
+                zoom_x = int(count  % np.floor(((gs_width)/zoom_size)))
+                zoom_y = int(count  / np.floor(((gs_width)/zoom_size)))
+                axzooms.append(plt.subplot(gs[gs_title+break_height + gs_examples +
+                                              zoom_y * zoom_size:
+                                              gs_title+break_height + gs_examples +
+                                             (zoom_y + 1) * zoom_size,
+                                              zoom_x * zoom_size:
+                                              (zoom_x + 1) * zoom_size
+                                              ]))
+                axzooms[-1].axis('off')
+
+
+        if show_im_examples:
+            if frames is None:
+                raise Exception('frames must not be None.\n'
+                                + self.plot_utterances.__doc__)
+
+            selected_imgs = []
+            selected_inds = []
+            selected_acts = []
+            for count in np.arange(examples_num)/float(examples_num-1)*(len(ground_truth)-1):
+                count2 = int(count)
+                sgn = 1
+                cnt = 1
+                while True:
+                    try:
+                        if (count2 in frames_sync and 
+                            frames[frames_sync.index(count2)] is not None and 
+                            0 not in np.shape(frames[frames_sync.index(count2)]) and
+                            np.isfinite(ground_truth[count2])):
+                            break
+                    except:
+                        pass
+                    count2 = int(count) + sgn*cnt
+                    sgn = -sgn
+                    if sgn == 1:
+                        cnt+=1
+                selected_imgs.append(cv2.equalizeHist(frames[frames_sync.index(count2)].astype(np.uint8)))
+                selected_inds.append(count2)
+                selected_acts.append(ground_truth[count2]+1)
+
+
+            selected_imgs = np.hstack(
+                [np.pad(array=img,mode='constant',pad_width=((0,0),(0,pad_size)), constant_values=255)
+                 for img in selected_imgs]).astype(np.uint8)
+            selected_imgs = selected_imgs[:,:-pad_size]
+
+            rat = (ground_truth.size-1)/float(selected_imgs.shape[1]-1)
+            ax_ex.imshow(selected_imgs,interpolation="nearest",cmap='gray',zorder=1)
+            ax_ex.set_title('Example Frames')
+            ax_ex.set_aspect('auto')
+            if not show_breaks:
+                ax_ex.set_xlabel('Frames')
+                ax_ex.set_xticklabels((ax_ex.get_xticks() * rat).astype(int))
+            else:
+                ax_ex.xaxis.set_visible(0)
+            ax_ex.yaxis.set_visible(0)
+            
+
+        else:
+            rat = 1
+
+
+        if show_breaks:
+
+            max_plotpoints_num = 0
+            for act in breakpoints:
+                max_plotpoints_num = max(max_plotpoints_num,
+                                          len(breakpoints[act][0]))
+            c_num = max_plotpoints_num
+
+            for act_cnt,act in enumerate(breakpoints):
+                drawn = 0
+                for cnt,(start, end) in enumerate(zip(breakpoints[act][0],
+                                      breakpoints[act][1])):
+                    gest_dur = np.arange(int(start/rat),int(end/rat))
+                    ax_plot.plot(gest_dur, np.ones(gest_dur.size)*(
+                        lower_labels.index(act.lower())+1),
+
+                                    color=cmap(cnt/float(c_num)),linewidth=norm_lw,
+                                 solid_capstyle="butt",zorder=0)
+
+            if real_values is not None:
+                ax_plot.plot(real_values, linewidth=norm_lw/2, color='black',
+                             label='Predicted Values',zorder=1)
+                if show_legend:
+                    ax_plot.legend()
+            ax_plot.set_title('Gestures Utterances\nAlong Time')
+            ax_plot.set_aspect('auto')
+            ax_plot.set_ylim(0,len(labels)+1)
+            ax_plot.set_yticks(np.arange(len(labels)+1))
+            ax_plot.set_yticklabels(['']+[label.title() for label in labels]+[''])
+            ax_plot.set_ylabel('Gestures')
+            ax_plot.set_xlabel('Frames')
+            ax_plot.set_xticklabels((ax_plot.get_xticks() * rat).astype(int))
+        if show_zoomed_occ:
+            if frames is None:
+                raise Exception('frames must not be None.\n'
+                                + self.plot_utterances.__doc__)
+            for img in frames:
+                if img is not None and 0 not in img.shape:
+                    imi = img.shape[0]
+                    imj = img.shape[1]
+                    break
+            occ_montages = []
+            break_spans = []
+            break_labels = []
+            for act_cnt,act in enumerate(breakpoints):
+                drawn = 0
+                for cnt,(start, end) in enumerate(zip(breakpoints[act][0],
+                                      breakpoints[act][1])):
+                    if drawn:
+                        break
+                    if (act.lower() in categories_to_zoom
+                        and start in frames_sync and end in frames_sync and end-start > min_im_zoom_num):
+                        rat_of_nans = sum([img is None for img
+                                           in frames[frames_sync.index(start):
+                                                           frames_sync.index(end)]]) / float(
+                            end-start+1)
+                        if rat_of_nans < 0.2:
+                            occ_montage = self.create_montage(frames[
+                                frames_sync.index(start):
+                                frames_sync.index(end)],
+                                max_ims=max_im_zoom_num,
+                                im_shape=(imi, imj))
+                            occ_montages.append(occ_montage)
+                            break_spans.append([int(start/rat),
+                                          int(end/rat)])
+                            break_labels.append(lower_labels.index(act.lower())+1)
+                            drawn = 1
+                        else:
+                            continue
+            for axzoom,occ_montage,break_span, break_label in zip(
+                axzooms,occ_montages,break_spans, break_labels) :
+                occ_montage = occ_montage/255.0
+                mont = axzoom.imshow(occ_montage,zorder=1)
+                axzoom.set_title(labels[break_label-1].title())
+
+        if show_breaks and show_zoomed_occ:
+            for cnt,(axzoom,occ_montage,break_span, break_label) in enumerate(zip(
+                axzooms,occ_montages,break_spans, break_labels)) : 
+                con1 = ConnectionPatch(xyA=(break_span[0],break_label), xyB=[0,0], coordsA="data", coordsB="data",
+                                  axesA=ax_plot, axesB=axzoom, color=arr_cmap(cnt), linewidth=1, linestyle='dashdot',
+                                  alpha=1,zorder=25)
+                con2 =  ConnectionPatch(xyA=(break_span[1],break_label), xyB=[occ_montage.shape[1],0], coordsA="data", coordsB="data",
+                                  axesA=ax_plot, axesB=axzoom, color=arr_cmap(cnt), linewidth=1, linestyle='dashdot',
+                                   alpha=1,zorder=25)
+
+                ax_plot.add_patch(con1)
+                ax_plot.add_patch(con2)
+
+        if show_im_examples and show_breaks:
+            for count, ind in enumerate(selected_inds):
+                xyB = [(0.5+count)*imj
+                       +count*pad_size, 0]
+                xyA = [ind/float(ground_truth.size) * selected_imgs.shape[1],
+                       selected_acts[count]]
+
+
+                con = ConnectionPatch(
+                    xyA=xyA,
+                    xyB =xyB,
+                    coordsA="data", coordsB="data",
+                    axesA=ax_plot, axesB=ax_ex,
+                    color="red",alpha=0.5,arrowStyle='-|>',
+                    linewidth=0.5, zorder=25)
+                con.set_arrowstyle(ArrowStyle('-|>',head_length=.4,
+                                              head_width=0.2))
+
+                ax_plot.add_artist(con)
+
+
+
+        if show_occ_tab:
+            columns = ('Gestures','#Occurences')
+            cell_text = []
+            for key in breakpoints:
+                cell_text.append([key,len(breakpoints[key][0])])
+
+            ax_table.table(cellText=cell_text,
+                           colLabels=columns,
+                           loc='center',
+                           cellLoc='center',
+                           )
+            ax_table.axis('off')
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            # This raises warnings since tight layout cannot
+            # handle gridspec automatically. We are going to
+            # do that manually so we can filter the warning.
+            gs.tight_layout(f)
+
+        if show_res:
+            plt.show()
+        return f
+
+    def save_pure_image(self, img, path, dpi=1200):
+        fig = plt.figure(frameon=False)
+        ax = fig.add_subplot(111)
+        ax.axis('off')
+        ax.imshow(img)
+        extent = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+        fig.savefig(path, bbox_inches=extent, pad_inches=0, dpi=dpi,
+                    transparent=True)
+        plt.close(fig)
+
+    def create_montage(self, imgs, draw_num=True, num_rat=2.5,
+                       num_col=(255, 0, 0, 125),
+                       num_font_family='Arial', max_ims=None,
+                       im_shape=None,
+                       *args,
+                       **kwargs):
+        '''
+        draws list of images into a montage. If <draw_num> then the
+        corresponding index of each image is drawn above it, with
+        font size <num_rat> times smaller than height and color <num_col>,
+        while using font family <num_font_family>. Returns montage or None
+        '''
+        if max_ims is not None and len(imgs) > max_ims:
+            inds = np.linspace(0, len(imgs) - 1,max_ims).astype(
+                int)
+        else:
+            inds = np.arange(len(imgs))
+        not_nan_imgs = sum([imgs[cnt] is not None for cnt in inds])
+        num_im_y = int(np.ceil(np.sqrt(not_nan_imgs)))
+        num_im_x = int(np.ceil(not_nan_imgs / float(num_im_y)))
+        if im_shape is not None:
+            imi, imj = im_shape
+        else:
+            imi = None
+            for img in imgs:
+                if img is not None and 0 not in img.shape:
+                    imi = img.shape[0]
+                    imj = img.shape[1]
+                    break
+
+            if imi is None:
+                return None
+
+        montage_shape = (num_im_x * imi,
+                         num_im_y * imj, 4)
+        montage = np.zeros(montage_shape)
+        montage[:, :, 3] = 255
+        im_cnt = 0
+
+        for ind_cnt,cnt in enumerate(inds):
+            im_cnt = cnt
+            try:
+                while imgs[im_cnt] is None:
+                    im_cnt += 1
+            except BaseException:
+                break
+            i_rat = ind_cnt / (num_im_y)
+            j_rat = ind_cnt % (num_im_y)
+            if len(imgs[im_cnt].shape) <= 2:
+                imgs[im_cnt] = cv2.equalizeHist(
+                    imgs[im_cnt].astype(np.uint8))
+            else:
+                imgs[im_cnt] = imgs[im_cnt].astype(np.uint8)
+            if draw_num:
+                imgs[im_cnt] = self.watermark_image_with_text(
+                    imgs[im_cnt], str(im_cnt), rat=num_rat, color=num_col,
+                    fontfamily=num_font_family)
+            else:
+                imgs[im_cnt] = self.convert_to_rgba(imgs[im_cnt])
+            montage[i_rat * imi:(i_rat + 1) * imi,
+                    j_rat * imj:(j_rat + 1) * imj, :] = imgs[im_cnt]
+
+            im_cnt += 1
+        return montage
+
+    def convert_to_rgba(self, img, alpha=255):
+        '''
+        converts grayscale or rgb to rgba image. Alpha channel has <alpha>=255 value
+        '''
+        img = self.convert_to_rgb(img)
+        if img.shape[2] == 3:
+            img = np.concatenate([img, np.uint8(alpha * np.ones((img.shape[0], img.shape[1])))[..., None]],
+                                 axis=2)
+        return img
+
+    def convert_to_rgb(self, img):
+        if len(img.shape) == 2:
+            img = np.tile(img[:, :, None], (1, 1, 3))
+        elif img.shape[2] == 1:
+            img = np.tile(img, (1,1,3))
+        return img
+
+    def watermark_image_with_text(self, img, text, rat=2, color=(
+            255, 0, 0, 125), fontfamily='Arial', *args, **kwargs):
+        '''
+        Places watermark above image
+        '''
+        from PIL import Image, ImageDraw, ImageFont
+        img = self.convert_to_rgba(img)
+        image = Image.fromarray(img.astype(np.uint8)).convert("RGBA")
+        imageWatermark = Image.new('RGBA', image.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(imageWatermark)
+
+        width, height = image.size
+        frat = int(height / rat)
+        margin = 10
+        font = ImageFont.truetype(fontfamily, 1)
+        textWidth, textHeight = draw.textsize(text, font)
+        font = ImageFont.truetype(fontfamily, textHeight * frat)
+        textWidth, textHeight = draw.textsize(text, font)
+        x = width / 2 - textWidth / 2
+        y = height / 2 - textHeight
+
+        draw.text((x, y), text, color, font)
+
+        return np.array(Image.alpha_composite(image, imageWatermark))
+
+    def draw_nested(self, nested_object, parent=None):
         '''
         Creates tree from a nested object. Nested objects can be
         tuples, dicts and lists. Dicts and tuples are drawn, lists are
@@ -282,17 +733,19 @@ class DrawingOperations(object):
         structure to draw, key is used as the name of the node.
         If tuple[1] or dict[key] are None, they are not drawn.
         '''
-        import pydot, ast
+        import pydot
+        import ast
+
         def add2graph(graph, parent=None, struct=None):
             try:
                 struct = ast.literal_eval(str(struct))
-            except: #struct is a string 
+            except BaseException:
                 edge = pydot.Edge(parent, str(struct))
                 graph.add_edge(edge)
                 return
             if (not isinstance(struct, list) and
                 not isinstance(struct, tuple) and
-                not isinstance(struct, dict)):
+                    not isinstance(struct, dict)):
                 edge = pydot.Edge(parent, str(struct))
                 graph.add_edge(edge)
                 return
@@ -302,11 +755,11 @@ class DrawingOperations(object):
                 else:
                     sub_categ = item
                 if (not isinstance(sub_categ, tuple)
-                    and not isinstance(sub_categ, dict)):
+                        and not isinstance(sub_categ, dict)):
                     add2graph(graph, parent, sub_categ)
                 else:
                     if isinstance(sub_categ, dict):
-                        if len(sub_categ)>1:
+                        if len(sub_categ) > 1:
                             add2graph(graph, parent,
                                       sub_categ)
                             continue
@@ -324,11 +777,11 @@ class DrawingOperations(object):
                             continue
                     try:
                         add2graph(graph, node_name, node_val)
-                    except:
+                    except BaseException:
                         print node_name
                         raise
         graph = pydot.Dot(graph_type='graph')
-        add2graph(graph,parent,nested_object)
+        add2graph(graph, parent, nested_object)
         return graph
 
 
@@ -336,14 +789,19 @@ class DictionaryOperations(object):
     def create_sorted_dict_view(self, x):
         import operator
         return sorted(x.items(), key=operator.itemgetter(0))
+
     def join_list_of_dicts(self, L):
-        return  { k: v for d in L for k, v in d.items() }
-    def dict_from_tuplelist(self,x):
+        return {k: v for d in L for k, v in d.items()}
+
+    def dict_from_tuplelist(self, x):
         return dict(x)
-    def lookup(self,dic, key, *keys):
+
+    def lookup(self, dic, key, *keys):
         if keys:
             return self.lookup(dic.get(key, {}), *keys)
         return dic.get(key)
+
+
 class TypeConversions(object):
 
     def isfloat(self, value):
@@ -556,7 +1014,8 @@ class ExistenceProbability(object):
 
 class FileOperations(object):
     '''
-    Class that holds all loading and saving operations
+    Class that holds all loading and saving operations needed for a file
+    database to work
     '''
 
     def save_obj(self, obj, filename):
@@ -569,7 +1028,7 @@ class FileOperations(object):
         try:
             with open(filename, 'r') as inp:
                 obj = dill.load(inp)
-        except:
+        except BaseException:
             obj = None
         return obj
 
@@ -578,19 +1037,18 @@ class FileOperations(object):
         with open(filename, 'w') as out:
             json.dump(obj, out)
 
-
-    def fix_keys(self,name):
+    def fix_keys(self, name):
         '''
         for every json file inside name, changes dictionaries with more than
         one element to tuples list, sorted by keys
         '''
         import os
         for path in os.listdir(name):
-            if os.path.isdir(os.path.join(name,path)):
-                self.fix_keys(os.path.join(name,path))
-            elif path.endswith('.json'):      
+            if os.path.isdir(os.path.join(name, path)):
+                self.fix_keys(os.path.join(name, path))
+            elif path.endswith('.json'):
                 catalog = self.load_using_ujson(
-                    os.path.join(name,path))
+                    os.path.join(name, path))
                 catalog = self.replace_dicts(catalog)
                 catalog = dict(catalog)
                 self.save_using_ujson(
@@ -619,23 +1077,21 @@ class FileOperations(object):
                     newcatalog.append(
                         self.replace_dicts(item))
                 catalog = newcatalog
-        except (ValueError,SyntaxError) as e:
+        except (ValueError, SyntaxError) as e:
             pass
         return catalog
 
-
-
-    def remove_keys(self,name,keys,startswith=None):
+    def remove_keys(self, name, keys, startswith=None):
         import ast
         import os
         for path in os.listdir(name):
-            if os.path.isdir(os.path.join(name,path)):
-                self.remove_keys(os.path.join(name,path),keys,
+            if os.path.isdir(os.path.join(name, path)):
+                self.remove_keys(os.path.join(name, path), keys,
                                  startswith)
             elif path.endswith('.json'):
                 catalogs = self.load_using_ujson(
-                    os.path.join(name,path))
-                if not isinstance(catalogs,list):
+                    os.path.join(name, path))
+                if not isinstance(catalogs, list):
                     catalogsislist = False
                     catalogs = [catalogs]
                 else:
@@ -644,17 +1100,17 @@ class FileOperations(object):
                     for entry in catalog.keys():
                         try:
                             ds = ast.literal_eval(str(entry))
-                        except:
+                        except BaseException:
                             continue
                         if not isinstance(ds, list):
-                            dsislist= False
+                            dsislist = False
                             ds = [ds]
                         else:
                             dsislist = True
-                        for dcount,d in enumerate(ds):
+                        for dcount, d in enumerate(ds):
                             try:
                                 evald = ast.literal_eval(str(d))
-                            except:
+                            except BaseException:
                                 continue
                             for key in evald.keys():
                                 check = False
@@ -674,7 +1130,7 @@ class FileOperations(object):
                     catalogs = catalogs[0]
                 self.save_using_ujson(
                     catalogs,
-                    os.path.join(name,path))
+                    os.path.join(name, path))
 
     def load_using_ujson(self, filename):
         import ujson as json
@@ -682,17 +1138,17 @@ class FileOperations(object):
             obj = json.load(inp)
         return obj
 
-    def load_catalog(self,name,include_catalog=True):
+    def load_catalog(self, name, include_catalog=True):
         if include_catalog and 'include_catalog.json' in os.listdir(name):
             return self.load_using_ujson(os.path.join(name,
-                                        'include_catalog.json'))
+                                                      'include_catalog.json'))
         elif 'catalog.json' in os.listdir(name):
             return self.load_using_ujson(os.path.join(name,
-                                         'catalog.json'))
+                                                      'catalog.json'))
         else:
             return None
 
-    def load_all_inside(self,name, keys_list=None, fold_lev=0, _id=None):
+    def load_all_inside(self, name, keys_list=None, fold_lev=0, _id=None):
         if keys_list is None:
             import ast
             all_catalog = self.load_catalog(name, include_catalog=True)
@@ -712,23 +1168,24 @@ class FileOperations(object):
         for entry in keys_list:
             if all_catalog is not None:
                 _id = all_catalog[str(entry)]
-            if np.any([os.path.isdir(os.path.join(name,path)) for path in os.listdir(name)]):
+            if np.any([os.path.isdir(os.path.join(name, path))
+                       for path in os.listdir(name)]):
                 if str(entry[0]) in catalog:
                     search_key = str(entry[0])
                     next_keys_list = entry[1:]
                 elif str([entry[0]]) in catalog:
                     search_key = str([entry[0]])
                 else:
-                    LOG.error('Attempted to access inexistent key: '+
+                    LOG.error('Attempted to access inexistent key: ' +
                               str([entry[0]]))
-                    LOG.error('Existent keys are: '+str(catalog.keys()))
+                    LOG.error('Existent keys are: ' + str(catalog.keys()))
                     sys.exit()
                 loaded = self.load_all_inside(
-                                     os.path.join(name,
-                                                  str(catalog[search_key])),
-                                     entry[1:],
-                                     fold_lev-1,
-                                    _id=_id)
+                    os.path.join(name,
+                                 str(catalog[search_key])),
+                    entry[1:],
+                    fold_lev - 1,
+                    _id=_id)
                 if not fold_lev:
                     entry_list[_id] = loaded
                     keys_result[_id] = entry
@@ -739,10 +1196,10 @@ class FileOperations(object):
                     return None
                 try:
                     return self.load_obj(os.path.join(
-                        name,str(catalog[str(keys_list[0])]))+'.pkl')
+                        name, str(catalog[str(keys_list[0])])) + '.pkl')
                 except KeyError:
                     return self.load_obj(os.path.join(
-                        name,str(catalog[str(keys_list[0][0])]))+'.pkl')
+                        name, str(catalog[str(keys_list[0][0])])) + '.pkl')
         return entry_list, keys_result
 
     def load_labeled_data(self, keys_list, name=None, fold_lev=-1,
@@ -760,10 +1217,10 @@ class FileOperations(object):
                                                          'catalog.json'))
         else:
             return None
-        if fold_lev==-1:
+        if fold_lev == -1:
             fold_lev = len(keys_list)
         if (fold_lev > 0 and len(keys_list) > 1 or
-            fold_lev > 0 and (just_catalog or all_inside)):
+                fold_lev > 0 and (just_catalog or all_inside)):
             if str(keys_list[0]) not in catalog:
                 return None
             data = self.load_labeled_data(
@@ -774,7 +1231,7 @@ class FileOperations(object):
                 include_all_catalog=include_all_catalog)
         else:
             if just_catalog:
-                return self.load_catalog(name,include_all_catalog)
+                return self.load_catalog(name, include_all_catalog)
             if all_inside:
                 return self.load_all_inside(name)
             key = '.'.join(map(str, keys_list))
@@ -784,18 +1241,19 @@ class FileOperations(object):
                     name):
                 return None
             return self.load_obj(os.path.join(name,
-                                                       str(catalog[key]))
-                                          + '.pkl')
+                                              str(catalog[key]))
+                                 + '.pkl')
         return data
-
 
     def save_labeled_data(self, keys_list, data, name=None, fold_lev=-1):
         '''
-        keys_list is a list of the keys that work as labels for data
-        <name> is the name of the folder
-        to be used as hyperfolder to save labeled data. The <keys_list> defines
-        the number of keys inside keys_list to be used to created subfolers.
-        The rest of the keys are used as entry of a catalogue.
+        <keys_list> is a list of the keys that work as labels for <data>.
+        <name> is the name of the folder to be used as hyperfolder to save
+        labeled <data>. The <fold_lev> defines the number of keys inside <keys_list>
+        to be used to create subfolders.
+        The rest of the keys are used as entry of a catalogue inside the final
+        subfolder. If fold_lev==-1, all the keys are used for subfolder
+        creation, except of the last one.
         '''
         import os
         if name is None:
@@ -823,13 +1281,13 @@ class FileOperations(object):
                 fold_lev=fold_lev - 1)
             if 'include_catalog.json' in os.listdir(name):
                 all_catalog = self.load_using_ujson(os.path.join(
-                    name,'include_catalog.json'))
+                    name, 'include_catalog.json'))
             else:
                 all_catalog = {}
             if str(keys_list) not in all_catalog:
                 all_catalog[str(keys_list)] = str(len(all_catalog))
                 self.save_using_ujson(all_catalog, os.path.join(name,
-                                                   'include_catalog.json'))
+                                                                'include_catalog.json'))
         else:
             key = '.'.join(map(str, keys_list))
             if key not in catalog:
@@ -837,8 +1295,556 @@ class FileOperations(object):
                 self.save_using_ujson(catalog, os.path.join(
                     name, 'catalog.json'))
             self.save_obj(data, os.path.join(name,
-                                                      str(catalog[key]))
-                                   + '.pkl')
+                                             str(catalog[key]))
+                          + '.pkl')
+
+
+class ImagesFolderOperations(object):
+
+    def load_frames_data(self,
+                         input_data,
+                         imgs_fold_name=None,
+                         masks_fold_name=None,
+                         masks_needed=False,
+                         derot_centers=None, derot_angles=None,
+                         filetype='png'):
+        '''
+        <input_data> is the name of the folder including images.
+        If there are two subfolders, the first one including the images and
+        the second the masks to segment them, then <masks_needed> should be
+        set to True and <imgs_fold_name> and <masks_fold_name> need to be set.
+        The <derot_centers> and <derot_angles> can be provided if a rotation
+        of each input image is wanted, but if not provided, such lists will be
+        loaded from the subfolders, if <angles.txt> and <centers.txt> exist.
+        The directory structure inside <input_data> or in both <imgs_fold_name> and
+        <masks_fold_name> should be either in the form ./occurence number/frames
+        or ./frames, with each frame being of <filetype> type.
+
+        Returns images, masks, a vector <sync> keeping the numeric part of the name of each
+        image, the angles if found, the centers if found and a vector <utterance_indices>
+        keeping the number of the occurence folder of each frame, if it exists.
+        '''
+        if masks_needed:
+            if imgs_fold_name is None:
+                imgs_fold_name = CONST['mv_obj_fold_name']
+            if masks_fold_name is None:
+                masks_fold_name = CONST['hnd_mk_fold_name']
+        files = []
+        masks = []
+        utterance_indices = []
+        angles = []
+        centers = []
+        # check if multiple subfolders/samples exist
+        try:
+            mult_samples = (os.path.isdir(os.path.join(input_data, '0')) or
+                            os.path.isdir(os.path.join(input_data, imgs_fold_name, '0')))
+        except BaseException:
+            mult_samples = False
+        sync = []
+        for root, dirs, filenames in os.walk(input_data):
+            if not mult_samples:
+                folder_sep = os.path.normpath(root).split(os.sep)
+            for filename in sorted(filenames):
+                fil = os.path.join(root, filename)
+                if mult_samples:
+                    folder_sep = os.path.normpath(fil).split(os.sep)
+                if filename.endswith('png'):
+                    ismask = False
+                    if masks_needed:
+                        if mult_samples:
+                            ismask = folder_sep[-3] == masks_fold_name
+                        else:
+                            ismask = folder_sep[-2] == masks_fold_name
+                    par_folder = folder_sep[-2]
+                    try:
+                        ind = int(par_folder) if mult_samples else 0
+                        if ismask:
+                            masks.append(fil)
+                        else:
+                            files.append(fil)
+                            sync.append(int(filter(
+                                str.isdigit, os.path.basename(fil))))
+                            utterance_indices.append(ind)
+                    except ValueError:
+                        pass
+                elif filename.endswith('angles.txt'):
+                    with open(fil, 'r') as inpf:
+                        angles += map(float, inpf)
+                elif filename.endswith('centers.txt'):
+                    with open(fil, 'r') as inpf:
+                        for line in inpf:
+                            center = [
+                                float(num) for num
+                                in line.split(' ')]
+                            centers += [center]
+        utterance_indices = np.array(utterance_indices)
+        imgs = [cv2.imread(filename, -1) for filename
+                in files]
+        if masks_needed:
+            masks = [cv2.imread(filename, -1) for filename in masks]
+        else:
+            masks = [None] * len(imgs)
+        if derot_angles is not None and derot_centers is not None:
+            centers = derot_centers
+            angles = derot_angles
+
+        act_len = sync[-1]
+        return (imgs, masks, sync, angles, centers, utterance_indices)
+
+
+class GroundTruthOperations(object):
+
+    def __init__(self):
+        self.ground_truths = {}
+        self.gd_breakpoints = {}
+        self.gd_labels = {}
+
+
+    def pad_ground_truth(self, ground_truth, data, padding_const=0):
+        '''
+        Pad ground_truth if its length is lower than length of data.
+        <padding_const=0> sets the padding constant.
+        '''
+        if len(data) != len(ground_truth):
+            ground_truth = np.hstack(ground_truth,
+                                     np.zeros(len(data) -
+                                              len(ground_truth)) +
+                                     padding_const)
+        return ground_truth
+
+    def load_ground_truth(self, gd_name, path=None,
+                          ret_breakpoints=False,
+                          ret_labs=False,
+                          *args, **kwargs):
+        '''
+        Auxiliary function for processing a ground truth .csv file.
+        Loads saved ground truth, using <path>/<gd_name> name identifier,
+        or constructs it and saves it. Loading and
+        saving is performed inside <path>. The <gd_name>.csv and the
+        <gd_name>.pkl files should be present in the <path>.
+        Other arguments are needed, if ground truth is to be constructed.
+        Refer to construct_ground_truth.__doc__
+        '''
+        if path is None:
+            path = CONST['ground_truth_fold']
+        from os.path import getmtime
+        clas_file = os.path.join(path, gd_name)
+        csv_file = clas_file + '.csv'
+        pkl_file = clas_file + '.pkl'
+        try:
+            csv_mtime = getmtime(csv_file)
+        except OSError:
+            LOG.error('Invalid Location for csv file: ' + csv_file)
+            raise
+        import pickle
+        import datetime
+        import time
+        threshold = datetime.timedelta(seconds=3)
+        recreate = False
+        try:
+            with open(pkl_file, 'r') as inp:
+                pkl_mtime, loaded_data = pickle.load(inp)
+                if ret_breakpoints:
+                    if ret_labs:
+                        ground_truth, breakpoints, labs = loaded_data
+                    else:
+                        ground_truth, breakpoints = loaded_data
+                        if isinstance(breakpoints[0], str):
+                            raise Exception
+                else:
+                    if ret_labs:
+                        ground_truth, labs = loaded_data
+                        if not isinstance(labs[0], str):
+                            raise Exception
+                    else:
+                        ground_truth = loaded_data
+                        if isinstance(ground_truth, tuple):
+                            raise Exception
+
+                if ret_breakpoints:
+                    ground_truth, breakpoints = loaded_data
+                else:
+                    ground_truth = loaded_data
+                delta = datetime.timedelta(seconds=pkl_mtime
+                                           - csv_mtime)
+                if delta > threshold:
+                    recreate = True
+        except BaseException:
+            recreate = True
+            pkl_mtime = 0
+        if recreate:
+            res = self.construct_ground_truth(
+                ground_truth_type=csv_file,
+                ret_breakpoints=ret_breakpoints,
+                ret_labs=ret_labs,
+                *args, **kwargs)
+
+            with open(pkl_file, 'w') as out:
+                pickle.dump((time.time(), res), out)
+        return res
+
+    def load_all_ground_truth_data(self):
+        '''
+        Loads all ground truth csv files inside <ground_truth_fold> defined in
+        file config.yaml
+        '''
+        for fil in os.listdir(CONST['ground_truth_fold']):
+            if fil.endswith('csv'):
+                try:
+                    name = os.path.splitext(fil)[0]
+                    gd , br, lb = self.load_ground_truth(
+                        name, ret_labs=True, ret_breakpoints=True)
+                    name = name.replace('_',' ').title()
+                    self.ground_truths[name] = gd
+                    self.gd_breakpoints[name] = br
+                    self.gd_labels[name] = lb
+                except:
+                    print fil
+                    raise
+
+    def create_utterances_vectors(self, breakpoints, frames_num=0):
+        '''
+        Using classes breakpoints, creates a corresponding dictionary of
+        vectors, keeping numbered the instances of each class. If an
+        element has no class, then -1 is given to it. If <frames_num> is not
+        given, the resulting vectors will have size equal to the (maximum index
+        in breakpoints + 1)
+        '''
+        res = {}
+        if not frames_num:
+            frames_num = max([max(breakpoints[key][1]) for key in
+                              breakpoints]) + 1
+        cnt = 0
+        for key in breakpoints:
+            res[key] = np.zeros(frames_num) - 1
+            for (start, end) in zip(
+                breakpoints[key][0], breakpoints[key][1]):
+                res[key][start:end + 1] = cnt
+                cnt += 1
+        return res
+
+    def merge_utterances_vectors(self, utt_vectors, classes_to_merge):
+        '''
+        Merge <utt_vectors> dictionary entries, with keys in
+        <classes_to_merge>. The 0-th dimension of the result is the same as
+        the mutiplicity of the classes, that is the number of the classes
+        a vector element can have after the merge.
+        '''
+        selected = np.array([utt_vectors[key] for key in utt_vectors if key in
+               classes_to_merge])
+        flag = selected != -1
+        check = np.sum(flag, axis=0)
+        if 0:#np.max(check) == 1:
+            fill = np.zeros((flag.shape[0],1))
+            fill[0] = 1
+            flag[:,check==0] = fill
+            return selected[flag][None,:]
+        else:
+            res = np.zeros((np.max(check),selected.shape[1])) - 1
+            for cnt,col in enumerate(selected.T):
+                uni = np.unique(col[col!=-1])
+                res[:len(uni),cnt] = uni
+            return res
+    def create_utterances_frequency_plots(self, val_filt='validation',
+                                     test_filt='test'):
+        '''
+        Creates ground truth bar plots, that refer to the utterances frequency
+        of each class, while separating the plots to validation, testing and
+        training. The result is saved to GroundTruth/Utterances inside
+        <results_fold> folder, defined in file config.yaml
+        '''
+
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        self.load_all_ground_truth_data()
+        results_loc = os.path.join(CONST['results_fold'],
+                                   'GroundTruth',
+                                   'Utterances')
+        if not os.path.isdir(results_loc):
+            os.makedirs(results_loc)
+
+        val_ocs = {}
+        test_ocs = {}
+        train_ocs = {}
+        max_val = {'val':0, 'train':0, 'test':0}
+        for datakey in self.gd_breakpoints:
+            if val_filt.lower() in datakey.lower():
+                dic = val_ocs
+                ind='val'
+            elif test_filt.lower() in datakey.lower():
+                dic = test_ocs
+                ind='test'
+            else:
+                dic = train_ocs
+                ind='train'
+            dic[datakey] = {}
+            for classkey in self.gd_breakpoints[datakey]:
+                dic[datakey][classkey] = len(
+                    self.gd_breakpoints[datakey][classkey][0])
+                if (dic[datakey][classkey] == 1 and
+                    not (val_filt.lower() in datakey.lower())
+                    and not
+                    (test_filt.lower() in datakey.lower())):
+                    dic[datakey][classkey] = 100
+                max_val[ind] = max(max_val[ind],
+                                   dic[datakey][classkey])
+
+        val_ocs_df = pd.DataFrame(val_ocs).fillna(0).astype(int)
+        test_ocs_df = pd.DataFrame(test_ocs).fillna(0).astype(int)
+        train_ocs_df = pd.DataFrame(train_ocs).fillna(0).astype(int)
+
+        def plot_barh_frame(df,title=None,save_path=None,
+                           max_val=None, change_last_xtick=None):
+            '''
+            Takes a pandas dataframe as input
+            '''
+            from matplotlib.ticker import MaxNLocator
+            import matplotlib.pyplot as plt
+            ax = df.plot(kind='barh')
+            plt.ylabel('Gestures')
+            plt.xlabel('Utterances')
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+            if max_val is not None:
+                ax.set_xlim([0,max_val])
+                xticks = ax.get_xticks()
+                xticks = np.unique(np.hstack((xticks,max_val)))
+                ax.set_xticks(xticks)
+            if change_last_xtick is not None:
+                xticks = ax.get_xticks()
+                xticklabels = [str(int(tick)) for tick in xticks]
+                xticklabels[-1] = change_last_xtick
+                ax.set_xticklabels(xticklabels)
+            if title is not None:
+                plt.title(title)
+            plt.grid('off')
+            leg = plt.legend(loc='center left', bbox_to_anchor=(1.0, 0.5),
+                             title='Dataset')
+            if save_path is not None:
+                fig = ax.get_figure()
+                fig.savefig(save_path, bbox_extra_artists=(leg,), bbox_inches='tight')
+        plot_barh_frame(val_ocs_df,'Gestures Utterances in\n Validation Sets',
+                save_path=os.path.join(results_loc,'validocs.pdf'),
+                       max_val=max_val['val'])
+        plot_barh_frame(test_ocs_df,'Gestures Utterances in\n Test Set',
+                save_path=os.path.join(results_loc,'testocs.pdf'),
+                       max_val=max_val['test'])
+        plot_barh_frame(train_ocs_df,'Gestures Utterances in\n Training Sets',
+                save_path=os.path.join(results_loc,'trainocs.pdf',
+                                      ),
+                       max_val=max_val['train'], change_last_xtick='1')
+
+
+    def construct_ground_truth(self, data=None, classes_namespace=None,
+                               length=None, ground_truth_type=None,
+                               all_actions=True, ret_labs=False,
+                               ret_breakpoints=False):
+        '''
+        <ground_truth_type>:'*.csv'(wildcard) to load csv
+                                whose rows have format
+                                class:start_index1,start_index2,..
+                                start_indexn:end_index1,end_index2,...
+                                end_indexn
+                            'filename' to load class from datapath
+                                filenames which have format
+                                'number-class.png' or 'number.png'
+                                if it has no class
+                            'datapath' to load class from the name
+                                of the directory filenames,
+                                which were saved inside
+                                <datapath/class/num1/num2.png> with <num1>
+                                and <num2> integers, <num1> denoting sample
+                                and <num2> frame number
+                            'constant-*'(wildcard) to add the same ground
+                                truth label for all .png files inside data
+                                if * is a valid action and exists
+                                inside <classes_namespace>
+        <data> should be either a string refering to the datapath
+        of the numbered frames or a boolean list/array.
+        if <testing> is True, compare ground truth classes with
+            <classes_namespace> and remove classes that do not exist
+            inside <classes_namespace>
+        If <classes_namespace> does not exist, it is created by sorting the
+        labels extracted by the <ground_truth_type> or <data>.
+        Returns <ground_truth> vectors which
+        holds indices that refer to the <classes_namespace>, which is also returned.
+        If <ret_names>, then the corresponging names for each index are also
+        returned. Any item with no class has corresponding ground truth NaN
+        '''
+        if isinstance(data, basestring):
+            if not os.path.exists(data):
+                raise Exception(data + ' is a non existent path')
+            paths = []
+            for root, _, files in os.walk(data):
+                root_separ = root.split(os.path.sep)
+                if root_separ[-2] != CONST['hnd_mk_fold_name']:
+                    paths += [os.path.join(root, filename)
+                              for filename in sorted(files) if
+                              filename.endswith('.png')]
+            files = [os.path.basename(path) for path in paths]
+            files = sorted(files)
+            if not paths:
+                raise Exception(data + ' does not include any png file')
+        elif data is not None:
+            data = np.array(data)
+            if np.max(data) != 1:
+                raise Exception('data should be boolean')
+            else:
+                data = data.astype(bool)
+        ground_truth_init = {}
+        max_ind = 0
+        if ground_truth_type[-4::] == '.csv':
+            try:
+                with open(ground_truth_type, 'r') as inp:
+                    for line in inp:
+                        if '\n' in line:
+                            line = line.replace('\n', '')
+                        items = line.split(':')
+                        if len(items) <= 1:
+                            continue
+                        try:
+                            ground_truth_init[items[0]].append([
+                                int(item) for item in items[1].split(',')])
+                            ground_truth_init[items[0]].append([
+                                int(item) for item in items[2].split(',')])
+                        except (AttributeError, KeyError):
+                            ground_truth_init[items[0]] = []
+                            try:
+                                ground_truth_init[items[0]].append([
+                                    int(item) for item in items[1].split(',')])
+                                ground_truth_init[items[0]].append([
+                                    int(item) for item in items[2].split(',')])
+                            except:
+                                print items
+                                raise
+                        max_ind = max(max_ind, max(
+                            ground_truth_init[items[0]][1]))
+            except (EOFError, IOError):
+                raise Exception('Invalid csv file given\n' +
+                                self.construct_ground_truth.__doc__)
+            keys = ground_truth_init.keys()
+            class_match = {}
+            if classes_namespace is None:
+                classes_namespace = sorted(ground_truth_init.keys())
+            for key in keys:
+                try:
+                    class_match[key] = classes_namespace.index(key)
+                except ValueError:
+                    ground_truth_init.pop(key, None)
+            if not ground_truth_init:
+                raise Exception(
+                    'No classes found matching with training data ones')
+            if data is None:
+                ground_truth = np.zeros(max_ind + 1)
+            elif not isinstance(data, basestring):
+                if length is None:
+                    ground_truth = np.zeros(len(data))
+                else:
+                    ground_truth = np.zeros(length)
+            else:
+                ground_truth = np.zeros(max([int(filter(str.isdigit,
+                                                        os.path.basename(filename))) for
+                                             filename in files]) + 1)
+            ground_truth[:] = np.NaN
+            all_bounds = [map(list, zip(*ground_truth_init[key])) for key in
+                          ground_truth_init.keys()]
+            if isinstance(data, basestring):
+                iterat = [int(filter(str.isdigit,
+                                     os.path.basename(filename)))
+                          for filename in files]
+            elif data is not None:
+                iterat = np.where(data)[0]
+            else:
+                iterat = range(len(ground_truth))
+            for count, ind in enumerate(iterat):
+                for key, bounds in zip(ground_truth_init, all_bounds):
+                    for bound in bounds:
+                        if ind <= bound[1] and ind >= bound[0]:
+                            ground_truth[ind] = class_match[key]
+                            break
+        elif ground_truth_type == 'filename':
+            ground_truth_vecs = [filename.split('-') for filename
+                                 in files]
+            classes = []
+            ground_truth = np.zeros(max([int(filter(str.isdigit, vec[1])) for
+                                         vec in ground_truth_vecs]) + 1)
+            ground_truth[:] = np.NaN
+            inval_format = True
+            for count, item in enumerate(ground_truth_vecs):
+                if len(item) > 2:
+                    inval_format = True
+                    break
+                if len(item) == 2:
+                    inval_format = False
+                    if all_actions:
+                        if item[1] not in classes_namespace:
+                            continue
+                    if item[1] not in classes:
+                        classes.append(item[1])
+                    ground_truth[count] = classes.index(items[1])
+            if inval_format:
+                LOG.error('Invalid format')
+                raise Exception(self.construct_ground_truth.__doc__)
+        elif ground_truth_type == 'datapath':
+            ground_truth_init = {}
+            for path, filename in zip(paths, files):
+                ground_truth_init[os.path.normpath(path)
+                                  .split(os.path.sep)[-3]] = int(
+                                      filter(str.isdigit, os.path.basename(
+                                          filename)))
+            keys = ground_truth_init.keys()
+            if all_actions:
+                class_match = {}
+                for key in keys:
+                    try:
+                        class_match[key] = classes_namespace.index(key)
+                    except ValueError:
+                        ground_truth_init.pop(key, None)
+                if not ground_truth_init:
+                    raise Exception(
+                        'No classes found matching with training data ones'
+                        + '. The keys of the testing data are ' + str(keys))
+            else:
+                class_match = {}
+                for count, key in enumerate(keys):
+                    class_match[key] = count
+                ground_truth = np.zeros(max([int(filter(str.isdigit,
+                                                        os.path.basename(
+                                                            filename))) for
+                                             filename in files]) + 1)
+                ground_truth[:] = np.NaN
+                for key in ground_truth_init:
+                    ground_truth[
+                        np.array(ground_truth_init[key])] = class_match[key]
+        elif ground_truth_type.split('-')[0] == 'constant':
+            action_cand = ground_truth_type.split('-')[1]
+            if all_actions:
+                class_match = {}
+                class_match[action_cand] = classes_namespace.index(
+                    action_cand)
+            else:
+                class_match[action_cand] = 0
+            if action_cand in classes_namespace:
+                ground_val = classes_namespace.index(action_cand)
+            else:
+                raise Exception('Invalid action name, it must exists in '
+                                + 'classes_namespace')
+            ground_truth = np.zeros(max([int(filter(str.isdigit,
+                                                    os.path.basename(filename))) for
+                                         filename in files]) + 1)
+            ground_truth[:] = np.NaN
+            for fil in sorted(files):
+                ground_truth[int(filter(
+                    str.isdigit, os.path.basename(fil)))] = ground_val
+
+        else:
+            raise Exception('Invalid ground_truth_type\n' +
+                            self.construct_ground_truth.__doc__)
+        ret = (ground_truth,)
+        if ret_breakpoints:
+            ret += (ground_truth_init,)
+        if ret_labs:
+            ret += (classes_namespace,)
+        return ret
 
 
 class Hull(object):
@@ -871,6 +1877,114 @@ class Latex(object):
     Basic transriptions to latex
     '''
 
+
+    def wrap_entry(self, str_to_analyse, ignore_num=True):
+        '''
+        found_strings = [m.group(1) for m in
+                          re.finditer('\\\\(.*){(.*)}', str_to_analyse)]
+        '''
+        import re
+        from textwrap import TextWrapper
+        wrapper = TextWrapper(width=8, break_long_words=False,
+                              break_on_hyphens=False, replace_whitespace=False)
+        try:
+            to_app, found_strings = zip(*[[m.group(1), m.group(2)] for m in
+                                      re.finditer('(\\\\.*)\{([^{}]+)\}',
+                                                  str_to_analyse)])
+            to_app = list(to_app)
+            found_strings = list(found_strings)
+        except:
+            found_strings = []
+        if not found_strings:
+            found_strings = [str_to_analyse]
+            to_app = [0]
+
+        for string in str_to_analyse.split(' '):
+            if not string.startswith('\\'):
+                found_strings.append(string)
+                to_app.append(0)
+        for string,to_ap in zip(found_strings, to_app):
+            remove = [m.group(1) for m in re.finditer('(\\\\([a-zA-Z0-9]*) )', string)]
+            for rem in remove:
+                string = string.replace(rem,'')
+            if ignore_num:
+                perform_wrapping = False
+                try:
+                    float(string)
+                    continue
+                except:
+                    pass
+            wrapped = wrapper.fill(string)
+            if wrapped.replace(' ',
+                               '') != string.replace(' ',''):
+                if to_ap:
+                    wrapped = '\n'.join([to_ap+'{' +el + '}' for el in
+                               wrapped.split('\n')])
+                    str_to_analyse = str_to_analyse.replace(to_ap+'{'+
+                                                            string+'}',
+                                   '\\aspecialcell{' +
+                                   wrapped.replace('\n','\\\\')
+                                           + '}')
+                else:
+                    str_to_analyse = str_to_analyse.replace(string,
+                                   '\\aspecialcell{' +
+                                   wrapped.replace('\n','\\\\')
+                                           + '}')
+
+        return str_to_analyse
+
+    def wrap_latex_table_entries(self,latex_text, width=8,
+                                 ignore_num=True):
+        '''
+        gets a latex table and wraps its entries,
+        to have a certain <width>, ignoring numeric
+        values if <ignore_num>
+        '''
+        import re
+
+
+        def wrap_table(latex_table):
+            latex_table = latex_table.replace('\n',' ')
+            latex_table = ' '.join(latex_table.split())
+            inds = [[m.start(),(1 if m.group(1) is not None
+                                else 2)] for m in
+                                re.finditer('(&)|(\\\\\\\\)',
+                                            latex_table)]
+            for (start, start_off), (end, end_off) in zip(
+                inds[:-1][::-1],inds[1:][::-1]):
+                latex_table = (latex_table[:start+start_off]+
+                    self.wrap_entry(latex_table[
+                                         start+start_off:
+                                         end])
+                               +latex_table[end:])
+            return latex_table
+        tables_start_inds = [m.end() for m in
+                       re.finditer('\\\\begin\{tabular\}',
+                                   latex_text)]
+        tables_end_inds = [m.start()-1 for m in re.
+                           finditer('\\end{tabular}',
+                           latex_text)]
+        for tab_st, tab_en in zip(tables_start_inds[::-1],
+                                  tables_end_inds[::-1]):
+            latex_table = latex_text[tab_st:tab_en]
+            latex_table = wrap_table(latex_table)
+            latex_text = (latex_text[:tab_st] +
+                          latex_table +
+                          latex_text[tab_en:])
+        preamble = ('\\newcommand{\\aspecialcell}[2][c]{ \n'+
+                 '\\begin{tabular}[#1]{@{}c@{}}#2\\end{tabular}}\n ')
+        if preamble not in latex_text:
+            beg_ind = latex_text.find('\\begin{document}')
+            if beg_ind == -1:
+                latex_text = preamble + latex_text
+            else:
+                latex_text = (latex_text[:beg_ind] +
+                                    preamble +
+                                    latex_text[beg_ind:])
+        return latex_text
+
+
+
     def compile(self, path, name):
         '''
         <path>:save path
@@ -878,8 +1992,8 @@ class Latex(object):
         '''
         import subprocess
         proc = subprocess.Popen(['pdflatex',
-                                         '-output-directory',
-                                          path,
+                                 '-output-directory',
+                                 path,
                                  os.path.join(path, name)])
         proc.communicate()
 
@@ -887,23 +2001,31 @@ class Latex(object):
         if not package in data:
             import re
             try:
-                pack_ind = [m.end() for m in re.finditer('usepackage', data)][-1]
+                pack_ind = [m.end()
+                            for m in re.finditer('usepackage', data)][-1]
+                pack_ind += data[pack_ind:].find('}') + 2
             except IndexError:
-                pack_ind = [m.end() for m in
-                            re.finditer('documentclass', data)][0]
-            pack_ind += data[pack_ind:].find('}')+3
+                try:
+                    pack_ind = [m.end() for m in
+                                re.finditer('documentclass', data)][0]
+                    pack_ind += data[pack_ind:].find('}') + 3
+                except:
+                    pack_ind = 0
             pack_data = '\\usepackage'
             if options is not None:
                 pack_data += '[' + options + ']'
-            pack_data += '{' + package + '}'
-            data = (data[:pack_ind] + pack_data +
-                    data[pack_ind:])
+            pack_data += '{' + package + '} \n'
+            if pack_ind:
+                data = (data[:pack_ind] + pack_data +
+                        data[pack_ind:])
+            else:
+                data = pack_data + data
         return data
 
-
-    def add_graphics(self, files, tex_path=None , captions=None,
-                           labels=None, options=None, nomargins=False,
-                        shrink_to_fit_only=True):
+    def add_graphics(self, files, tex_path=None, captions=None,
+                     labels=None, 
+                     options=None, nomargins=False,
+                     shrink_to_fit_only=True):
         if not isinstance(files, list):
             files = [files]
         if captions is None:
@@ -939,32 +2061,41 @@ class Latex(object):
         data_ind = data.find('\\end{document}')
         data2add = ''
         for fil, caption, label in zip(files, captions, labels):
-            data2add += '\\begin{figure}[H] \n \\centering \n'
+            if label is not None:
+                if label.startswith('tab'):
+                    data2add += '\\begin{table}[H] \n \\centering \n'
+                else:
+                    data2add += '\\begin{figure}[H] \n \\centering \n'
             if nomargins:
                 data2add += '\\centerline{'
             if shrink_to_fit_only and options is not None:
-                data2add += '\\adjustimage'
-                data2add += '{' + options + '}'
+                data2add += '\\includegraphics'
+                data2add += '[' + options + ']'
             else:
                 data2add += '\\includegraphics'
                 if options is not None:
                     data2add += '[' + options + ']'
             data2add += '{' + fil + '}'
             if nomargins:
-                data2add +='}'
+                data2add += '}'
             data2add += '\n'
             if caption is not None:
                 data2add += '\\caption{' + caption + '}\n'
             if label is not None:
                 data2add += '\\label{' + label + '}\n'
-            data2add += '\\end{figure}\n'
+                if label.startswith('tab'):
+                    data2add += '\\end{table}\n'
+                else:
+                    data2add += '\\end{figure}\n'
         data = data[:data_ind] + data2add + data[data_ind:]
         return data
 
-
     def array_transcribe(self, arr, xlabels=None, ylabels=None,
                          sup_x_label=None, sup_y_label=None,
-                         extra_locs='bot', boldlabels=True):
+                         extra_locs='bot', boldlabels=True,
+                         title=None, isdataframe=False,
+                         wrap=True, wrap_size=8,
+                         round_nums=True, max_float=3):
         '''
         <arr> is the input array, <xlabels> are the labels along x axis,
         <ylabels> are the labels along the y axis, <sup_x_label> and
@@ -980,6 +2111,16 @@ class Latex(object):
         doublerows = []
         doublecols = []
         whole_arr = None
+        if isdataframe:
+            if xlabels is None:
+                xlabels = arr.keys()
+            if ylabels is None:
+                try:
+                    ylabels = arr.index()
+                except:
+                    ylabels = arr.index.levels[0]
+            arr = arr.values
+
         if isinstance(arr, list):
             if isinstance(extra_locs, basestring):
                 extra_locs = [extra_locs] * (len(arr) - 1)
@@ -1040,7 +2181,8 @@ class Latex(object):
                     cols_space.append('c|')
         else:
             cols_space = ['c |'] * x_mat
-        begin = '\\begin{document} \n \\begin{tabular}{|' + \
+        begin = '\\begin{document} \n'
+        begin += '\\begin{tabular}{|' + \
             ''.join(cols_space) + '}\n'
         small_hor_line = '\\cline{' + \
             str(1 + ex_ys + ex_y) + '-' + str(x_mat) + '}'
@@ -1048,6 +2190,10 @@ class Latex(object):
                                + (x_size + ex_y) * '|=' + '|}')
         big_hor_line = '\\cline{' + str(1 + ex_ys) + '-' + str(x_mat) + '}'
         whole_hor_line = '\\cline{1-' + str(x_mat) + '}'
+        if title is not None:
+            begin += '\\multicolumn'
+            begin += '{'+str(x_mat)+'}{c}'
+            begin += '{\\textbf{' + title + '}}\\\\[2ex] \n'
         if sup_x_label is not None:
             if boldlabels:
                 sup_x_label = r'\textbf{' + sup_x_label + r'}'
@@ -1071,9 +2217,24 @@ class Latex(object):
             multirow = ''
 
         end = '\\hline \\end{tabular}\n \\end{document}'
-        if isinstance(whole_arr[0, 0], float):
-            whole_arr = np.around(whole_arr, 3)
-        str_arr = whole_arr.astype(str)
+        y = []
+        for row in whole_arr.astype(str):
+            y.append([])
+            for elem in row:
+                try:
+                    int(elem)
+                    y[-1].append(elem)
+                except:
+                    try:
+                        float(elem)
+                        if round_nums:
+                            y[-1].append(
+                                "%.*f" % (max_float,float(elem)))
+                        else:
+                            y[-1].append(elem)
+                    except:
+                        y[-1].append(elem)
+        str_arr = y
         str_rows = [' & '.join(row) + '\\\\ \n ' for row in str_arr]
         if ex_y:
             str_rows = ["%s & %s" % (ylabel, row) for (row, ylabel) in
@@ -1103,6 +2264,8 @@ class Latex(object):
             else:
                 str_mat += big_hor_line
         str_mat = init + needed_packages + begin + str_mat + end
+        if wrap:
+            str_mat = self.wrap_latex_table_entries(str_mat)
         return str_mat
 
 
@@ -1319,6 +2482,51 @@ class CamShift(object):
         '''
         self.track_window = None
         self.rect = None
+
+class MacroMetricsCalculation(object):
+    def construct_vectors(self, true_classes, pred_classes, utterances_inds, threshold=0.5):
+        '''
+        <pred_classes> are the predicted classes
+        <true_classes> are the ground truth classes
+        <utterances_inds> is a dictionary of vectors, holding the indices of the utterances,
+        taken from the ground truth
+        <threshold> is the least rate of same category samples inside an
+        utterance, so as to is assumed to be
+        actually recognized.
+        '''
+        predicted_cats = []
+        actual_cats = []
+        try:
+            utterances_inds[0][0]
+        except:
+            utterances_inds = [utterances_inds]
+        for utt_row in utterances_inds:
+            uni_utt = np.unique(utt_row)
+            predicted_cats.append([])
+            actual_cats.append([])
+            for utt_ind in uni_utt:
+                if utt_ind == -1:
+                    predicted_cats[-1].append(-1)
+                    actual_cats[-1].append(-1)
+                    continue
+                selection = np.array(utt_row) == utt_ind
+                predicted = pred_classes[selection]
+                actual = true_classes[selection]
+                uni_actual, counts = np.unique(actual, return_counts=True)
+                actual_cats[-1].append(uni_actual[np.argmax(np.unique(actual))])
+                uni_pred, counts = np.unique(predicted, return_counts=True)
+                if np.max(counts) > threshold * np.sum(selection):
+                    predicted_cats[-1].append(uni_pred[
+                        np.argmax(counts)])
+                else:
+                    predicted_cats[-1].append(-1)
+        rav_actual_cats = np.array([item for sublist in actual_cats for item in sublist])
+        rav_predicted_cats = np.array([item for sublist in predicted_cats for item in
+                                       sublist])
+        select = rav_actual_cats != -1
+        res = rav_actual_cats[select], rav_predicted_cats[select]
+        return res
+
 
 
 class Measure(object):
@@ -1577,19 +2785,61 @@ class PolarOperations(object):
 
 class PlotOperations(object):
 
-    def put_legend_outside_plot(self, axes):
+    def put_legend_outside_plot(self, axes, already_reshaped=False):
         '''
         Remove legend from the insides of the plots
         '''
         # Shrink current axis by 20%
         box = axes.get_position()
-        axes.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+        if not already_reshaped:
+            axes.set_position([box.x0, box.y0, box.width * 0.8, box.height])
 
         # Put a legend to the right of the current axis
         lgd = axes.legend(loc='center left', bbox_to_anchor=(1, 0.5))
         return lgd
 
-
+class PreprocessingOperations(object):
+    def equalize_samples(self,
+                         samples,
+                         utterance_indices=None,
+                         mode='random'):
+        '''
+        Equalizes dimensions of n_i x m arrays, with i=1:k the array index,
+        in the <samples> list, cutting off random samples. 
+        If <utterance_indices> are given
+        (list of n_i vectors, describing samples utterances indices),
+        then the cutting off is performed
+        in utterances indices level.
+        <mode> can be either 'random'(default) or 'serial'
+        '''
+        if utterance_indices is not None:
+            samples_uniq_inds = []
+            inv_inds = []
+            for category in utterance_indices:
+                uniq_samples, inv_indices = np.unique(category, return_inverse=True)
+                samples_uniq_inds.append(uniq_samples[uniq_samples!=-1])
+                try:
+                    inv_indices = inv_indices[inv_indices!= np.where(uniq_samples
+                                                                 == -1)[0]]
+                except:
+                    pass
+                inv_inds.append(inv_indices)
+        else:
+            samples_uniq_inds = samples
+            inv_inds = [np.arange(len(samples))]*len(samples)
+        num_indices = min([len(cat) for cat in samples_uniq_inds])
+        eq_samples = []
+        inds_to_return = []
+        for category_inds, category, inv_indices in zip(
+            samples_uniq_inds, samples, inv_inds):
+            if mode == 'random':
+                sel_indices = np.random.choice(len(category_inds),num_indices,
+                                           replace=False)
+            elif mode == 'serial':
+                sel_indices = np.arange(num_indices)
+            mask =  np.any(np.any(inv_indices[None,:]==sel_indices[:,None],axis=0),axis=0)
+            eq_samples.append(np.array(category)[mask])
+        return eq_samples
 class Result(object):
     '''class to keep results'''
 
@@ -1791,7 +3041,7 @@ class SceneObjects():
                     locs = find_nonzero(vals_mask.astype(np.uint8))
                     self.locs[:locs.shape[0], count] = locs[
                         :, 0] + locs[:, 1] * 1j
-                except:
+                except BaseException:
                     pass
                 self.pixsize[count] = locs.shape[0]
             self.vals = np.empty((self.count + 1,
@@ -2167,6 +3417,8 @@ class TimeOperations(object):
         with open(os.path.splitext(path)[0] + '.tex',
                   'w') as out:
             out.write(time_array)
+
+
 with open(CONST_LOC + "/config.yaml", 'r') as stream:
     try:
         CONST = yaml.load(stream)
@@ -2182,9 +3434,12 @@ dict_oper = DictionaryOperations()
 draw_oper = DrawingOperations()
 edges = Edges()
 file_oper = FileOperations()
+gd_oper = GroundTruthOperations()
+imfold_oper = ImagesFolderOperations()
 latex = Latex()
 lims = Lim()
 log_oper = LoggingOperations()
+macro_metrics = MacroMetricsCalculation()
 masks = Mask()
 meas = Measure()
 models = Model()
@@ -2192,6 +3447,7 @@ paths = Path()
 points = Point()
 plot_oper = PlotOperations()
 pol_oper = PolarOperations()  # depends on Measure class
+preproc_oper = PreprocessingOperations()
 table_oper = TableOperations()
 thres = Threshold()
 type_conv = TypeConversions()

@@ -36,6 +36,7 @@ ID_VIDEO_SAVE = wx.NewId()
 ID_MASK_RECOMPUTE = wx.NewId()
 ID_ACT_SAVE = wx.NewId()
 ID_BAG_RECORD = wx.NewId()
+ID_SAMPLES_SAVE = wx.NewId()
 CURR_DIR = os.getcwd()
 ACTIONS_SAVE_PATH = os.path.join(CURR_DIR, 'actions')
 ROSBAG_WHOLE_RES_SAVE_PATH = os.path.join(CURR_DIR, 'whole_result')
@@ -598,6 +599,7 @@ class MainFrame(wx.Frame):
                                 majorDimension=1, style=wx.RA_SPECIFY_ROWS)
         self.rbox.SetSelection(0)
         self.append = wx.CheckBox(self.act_pnl, -1, 'Append to existent data')
+        self.samples_cb = wx.CheckBox(self.act_pnl, label = 'Montage Samples')
         self.append.SetValue(1)
         self.load_csv = TButton(self.act_pnl, ID_LOAD_CSV, 'Load csv')
         self.process_bag = TButton(
@@ -645,7 +647,8 @@ class MainFrame(wx.Frame):
         act_bot_but_sizer = wx.BoxSizer(wx.HORIZONTAL)
         act_bot_but_sizer.AddMany([(
             self.act_save, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),(
-            self.append, 1, wx.EXPAND | wx.ALIGN_LEFT |wx.ALL)])
+            self.append, 1, wx.EXPAND | wx.ALIGN_LEFT |wx.ALL), (
+            self.samples_cb, 1, wx.EXPAND | wx.ALIGN_LEFT |wx.ALL)])
         act_sizer.AddMany([(act_top_but_sizer, 0, wx.EXPAND |
                             wx.ALIGN_LEFT | wx.ALL),
                            (self.txt_inp, 0, wx.EXPAND |
@@ -704,6 +707,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_load_csv, id=ID_LOAD_CSV)
         self.Bind(wx.EVT_BUTTON, self.on_process, id=ID_BAG_PROCESS)
         self.Bind(wx.EVT_BUTTON, self.on_record, id=ID_BAG_RECORD)
+        self.Bind(wx.EVT_CHECKBOX, self.on_samples_save)
         self.Bind(wx.EVT_BUTTON, self.on_process_all, id=ID_PROCESS_ALL)
         self.Bind(wx.EVT_BUTTON, self.on_play, id=ID_PLAY)
         self.Bind(wx.EVT_BUTTON, self.on_stop, id=ID_STOP)
@@ -791,6 +795,11 @@ class MainFrame(wx.Frame):
         finally:
             dlg.Destroy()
         return 1
+
+    def on_samples_save(self, event):
+        cb = event.GetEventObject()
+        if 'Samples' in cb.GetLabel():
+            self.rosbag_process.save_samples = int(cb.GetValue()) * 9
 
     def on_actions_save(self, event):
         self.actionfarming.run(self.lst,self.bag_path, append=self.append.GetValue())

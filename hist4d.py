@@ -2,6 +2,7 @@ from matplotlib import cm
 import numpy as np
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 from matplotlib import colors
 from matplotlib.widgets import Slider
 import matplotlib.gridspec as gridspec
@@ -40,12 +41,13 @@ class DiscreteSlider(Slider):
             func(discrete_val)
 
 class Hist4D(object):
-    def __init__(self):
+    def __init__(self, save_only=False):
         self.fig=None
         self.cubes_info=None
         self.slow=None
         self.shigh=None
         self.colormap=None
+        self.save_only = save_only
     def draw_cubes(self,_axes, vals, edges):
         '''
         ax=Axes3D handle
@@ -64,7 +66,7 @@ class Hist4D(object):
         edy = edy[:-1, :-1, :-1].ravel()
         edz = edz[:-1, :-1, :-1].ravel()
         vals = vals.ravel()
-        vdraw_cube = np.vectorize(self.draw_cube, excluded='axes')
+        vdraw_cube = np.vectorize(self.draw_cube, excluded='_axes')
         cubes_handles = vdraw_cube(_axes, edx[vals>0],
                                    edx_rolled[vals>0],
                                    edy[vals>0],
@@ -75,7 +77,8 @@ class Hist4D(object):
         cubes_data = [a for a in zip(vals[vals>0],cubes_handles)]
         self.cubes_info=dict()
         for k, v in cubes_data:
-            self.cubes_info[k] = self.cubes_info.get(k, ()) + tuple(v)
+            self.cubes_info[k] = self.cubes_info.get(k, ()) + tuple(v) #+(v,)
+
     def set_sliders(self,splot1,splot2):
         maxlim=max(self.cubes_info.keys())
         axcolor = 'lightgoldenrodyellow'
@@ -97,6 +100,7 @@ class Hist4D(object):
                      self.shigh.val]
         for (k,sublist) in visible:
             for item in sublist:
+                print item.set_alpha
                 item.set_alpha(k)
         for item in [item for sublist in invisible for item in sublist]:
             item.set_alpha(0)
@@ -123,6 +127,14 @@ class Hist4D(object):
             :, [5, 7]].copy(), tmp3[:, [0, 2]].copy()
         points = np.concatenate((tmp1, tmp2, tmp3), axis=1)
         points = points.T.reshape(6, 4, 3)
+        '''
+        collection = Poly3DCollection(points,
+                           facecolors=self.colormap(float(color_ind)),
+                           linewidths=0
+                            )
+        _axes.add_collection3d(collection)
+        return collection
+        '''
         surf = []
         for count in range(6):
             surf.append(_axes.plot_surface(points[count, :, 0].reshape(2, 2),
@@ -133,7 +145,6 @@ class Hist4D(object):
                                           antialiased=True,
                                           shade=False))
         return surf
-
     def array2cmap(self,X):
         N = X.shape[0]
         r = np.linspace(0., 1., N+1)
@@ -192,6 +203,7 @@ class Hist4D(object):
                                       axis=1)
         self.colormap=self.array2cmap(colors.hsv_to_rgb(hsv_colormap))
 
+    
     def draw(self,hist,edges,
              fig=None,gs=None,subplot=None,
              color=np.array([1,0,0]),all_axes=None):
@@ -230,7 +242,8 @@ class Hist4D(object):
         _axes.w_xaxis.set_pane_color((0.8, 0.8, 0.8, 1.0))
         _axes.w_yaxis.set_pane_color((0.8, 0.8, 0.8, 1.0))
         _axes.w_zaxis.set_pane_color((0.8, 0.8, 0.8, 1.0))
-        self.set_sliders(ax1, ax2)
+        if not self.save_only:
+            self.set_sliders(ax1, ax2)
         return _axes,ax1,ax2
 
 

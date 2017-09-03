@@ -17,134 +17,76 @@ def makedir(path):
             raise
 
 
-class MixedClassifier(clfs.Classifier):
+class CombinedGesturesClassifier(clfs.Classifier):
 
     def __init__(self, dynamic_classifier=None,
                  passive_classifier=None, log_lev='INFO',
                  visualize=False, add_info=None,
                  *args, **kwargs):
         self.enhanced_dyn = EnhancedDynamicClassifier(dynamic_classifier,
-                                                      passive_classifier)
+                                                      passive_classifier,
+                                                      in_sync=True)
+        classifiers_used = 'Combined RDF'
         clfs.Classifier.__init__(self, log_lev=log_lev, visualize=visualize,
                                  masks_needed=False,
-                                 action_type='Dynamic', use='RDF', name='',
-                                 features=['Passive Cl:'
+                                 action_type='All',
+                                 classifiers_used=classifiers_used, name='',
+                                 descriptors=['Passive Cl:'
                                            + str(passive_classifier.classifier_folder),
                                            'Dynamic Cl:' +
                                            str(self.enhanced_dyn.classifier_folder)],
                                  add_info=add_info, *args, **kwargs)
         self.parameters['sub_classifiers'] = [
             passive_classifier.classifier_folder,
-            dynamic_classifier.clsasifier_folder]
-        from sklearn.ensemble import RandomForestClassifier
-        self.unified_classifier = RandomForestClassifier(10)
+            dynamic_classifier.classifier_folder]
         self.train_classes = np.hstack((self.passive_actions,
                                         self.dynamic_actions)).tolist()
 
-    def single_run_training(self, action_path, action):
+    def single_run_training(self, action_path, action_name):
         self.enhanced_dyn.testing_initialized = False
-        passive_scores, en_scores = self.enhanced_dyn.run_testing(action_path,
+        passive_scores, en_scores = self.enhanced_dyn.run_testing(
+            os.path.join(co.CONST['actions_path'],action_name),
                                                                   online=False,
                                                                   just_scores=True,
                                                                   display_scores=False,
                                                                   compute_perform=False,
                                                                   construct_gt=False,
-                                                                  load=not self.train_all)
+                                                                  load=not
+                                                                  self.train_all)
         traindata = np.concatenate((passive_scores, en_scores), axis=1)
-        ground_truth, _ = (self.construct_ground_truth(
+        ground_truth = co.gd_oper.construct_ground_truth(
             data=action_path,
-            ground_truth_type='constant-' + action))
+            ground_truth_type='constant-' + action_name,
+            classes_namespace=self.train_classes)[0]
         return traindata, ground_truth
 
-    def run_training(self, save=True, load=True,
-                     classifier_savename=None, train_all=False):
-        self.enhanced_dyn.run_training(load=not train_all)
-        self.train_all = train_all
-        if classifier_savename is not None:
-            self.classifier_savename = classifier_savename
-        if (self.unified_classifier is not None or not load):
-            traindata, ground_truth = self.apply_to_training(
-                self.single_run_training)
-            traindata = np.concatenate(traindata, axis=0)
-            ground_truth = np.concatenate(ground_truth, axis=0)
-            fmask = (np.isfinite(np.sum(traindata, axis=1)).astype(int) *
-                     np.isfinite(ground_truth).astype(int)).astype(bool)
-            self.unified_classifier = self.unified_classifier.fit(traindata[fmask, :],
-                                                  ground_truth[fmask])
-            LOG.info('Saving classifier: ' + self.classifier_savename)
-            co.file_oper.save_labeled_data(['Classifier'] + self.classifier_id,
-                                           [self.unified_classifier,
-                                            self.training_parameters])
-        else:
-            (self.unified_classifier,
-             self.training_parameters) = co.file_oper.load_labeled_data(
-                 ['Classifier'] + self.classifier_id)
-        if self.classifier_savename not in self.classifiers_list:
-            with open('trained_classifiers_list.yaml', 'a') as out:
-                out.write(self.classifier_savename + ': ' +
-                          str(len(self.classifiers_list)) + '\n')
-            self.classifiers_list[self.classifier_savename] = str(
-                len(self.classifiers_list))
 
-    def run_testing(self, data=None, online=True, against_training=False,
-                    scores_filter_shape=5,
-                    std_small_filter_shape=co.CONST['STD_small_filt_window'],
-                    std_big_filter_shape=co.CONST['STD_big_filt_window'],
-                    ground_truth_type=co.CONST['test_actions_ground_truth'],
-                    img_count=None, save=True, scores_savepath=None,
-                    load=False, testname=None, display_scores=True,
-                    derot_angle=None, derot_center=None,
-                    construct_gt=True, just_scores=False):
-        if not self.testing_initialized or not online:
-            self.init_testing(data=data,
-                              online=online,
-                              save=save,
-                              load=load,
-                              testname=testname,
-                              scores_savepath=scores_savepath,
-                              scores_filter_shape=5,
-                              std_small_filter_shape=co.CONST[
-                                  'STD_small_filt_window'],
-                              std_big_filter_shape=co.CONST[
-                                  'STD_big_filt_window'])
+    def prepare_training_data(self, *args, **kwargs):
+        self.enhanced_dyn.run_training(load=not self.train_all)
+        traindata, ground_truth = self.apply_to_training(
+            self.single_run_training)
+        traindata = np.concatenate(traindata, axis=0)
+        ground_truth = np.concatenate(ground_truth, axis=0)
+        fmask = (np.isfinite(np.sum(traindata, axis=1)).astype(int) *
+                 np.isfinite(ground_truth).astype(int)).astype(bool)
+        self.training_data = traindata[fmask, :]
+        self.train_ground_truth = ground_truth[fmask]
 
+
+
+    def offline_testdata_processing(self, data):
+        LOG.info('Processing test data..')
         testdata = np.hstack(
-            self.enhanced_dyn.run_testing(data, online=online, just_scores=True,
+            self.enhanced_dyn.run_testing(data, online=False, just_scores=True,
                                           compute_perform=False))
-        self.scores = np.zeros_like(testdata)
-        self.scores[:] = None
-        fmask = np.isfinite(np.sum(testdata, axis=1))
-        self.scores[fmask] = self.unified_classifier.predict_proba(testdata[
-                                                           fmask, :])
-        #self.filtered_scores = self.scores
-        self.filtered_scores = co.noise_proc.masked_filter(self.scores,
-                                                           3)
-        recognized_classes = []
-        for score in self.filtered_scores:
-            if np.sum(score) is None:
-                recognized_classes.append(None)
-                continue
-            if (np.max(score) >= 0.6 or len(
-                recognized_classes) == 0 or
-                    recognized_classes[-1] is None):
-                recognized_classes.append(score.argmax())
-            else:
-                recognized_classes.append(
-                    recognized_classes[-1])
-        self.recognized_classes = np.array(recognized_classes)
-        if not online:
-            self.test_ground_truth, _ = self.construct_ground_truth(
-                data=data,
-                ground_truth_type=ground_truth_type)
-        self.correlate_with_ground_truth(save=save,
-                                         display=display_scores)
-        self.plot_result(self.filtered_scores,
-                         labels=self.train_classes,
-                         info='Filtered Scores',
-                         xlabel='Frames',
-                         save=save)
+        return testdata
 
-
+    def process_single_sample(self, data, img_count,
+                              derot_angle=None, derot_center=None):
+        return self.enhanced_dyn.run_testing(data, img_count=img_count,
+                                             online=True,
+                                             derot_angle=derot_angle,
+                                             derot_center=derot_center)
 
 
 
@@ -160,12 +102,12 @@ def construct_mixed_classifier(testname='actions', train=False,
     '''
     dynamic_classifier = clfs.construct_dynamic_actions_classifier(
         test=False, visualize=False, test_against_all=False,
-        features=['GHOG', 'ZHOF'])
+        descriptors=['GHOG', 'ZHOF'])
     passive_classifier = clfs.construct_passive_actions_classifier(test=False,
                                                                    visualize=False,
                                                                    test_against_all=False)
 
-    mixed = MixedClassifier(
+    mixed = CombinedGesturesClassifier(
         dynamic_classifier=dynamic_classifier,
         passive_classifier=passive_classifier)
     mixed.run_training(load=not train, train_all=train_all)

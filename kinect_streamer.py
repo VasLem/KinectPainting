@@ -37,7 +37,8 @@ class Kinect(object):
         self.mog2 = moda.Mog2()
         self.used_classifier = cs.construct_passive_actions_classifier(train=False, test=False,
                                                         visualize=False,
-                                                        test_against_all=True)
+                                                        test_against_all=True,
+                                                        for_app=True)
         self.open_kernel = np.ones((5, 5), np.uint8)
         self.time = []
         ####
@@ -70,11 +71,21 @@ class Kinect(object):
                 return
             mog2_res = self.mog2.run(False,
                                      frame.astype(np.float32))
+            if mog2_res is None:
+                return
             mask1 = cv2.morphologyEx(mog2_res.copy(), cv2.MORPH_OPEN, self.open_kernel)
             check_sum = np.sum(mask1 > 0)
             if not check_sum or check_sum == np.sum(frame > 0):
                 return
-            frame = frame * mog2_res
+            _, contours, _ = cv2.findContours(mask1, cv2.RETR_EXTERNAL,
+                                              cv2.CHAIN_APPROX_NONE)
+            cont_ind = np.argmax([cv2.contourArea(contour) for
+                                  contour in contours])
+            final_mask = np.zeros_like(mask1)
+            cv2.drawContours(final_mask, contours, cont_ind, 1, -1)
+            #cv2.imshow('test',mask1*255)
+            #cv2.waitKey(10)
+            frame = frame * final_mask
             scores_exist,_ = self.used_classifier.run_testing(frame,
                                             online=True)
             #DEBUGGING

@@ -30,12 +30,12 @@ class EnhancedDynamicClassifier(clfs.Classifier):
     explained in detail in <run_testing> .It uses both classifiers,
     to produce a better estimation, which is useful in realtime,
     where the SVMs classifier can not cope well due to the increased
-    features dimensionality.
+    descriptors dimensionality.
     '''
 
     def __init__(self, dynamic_classifier=None, passive_classifier=None,
                  log_lev='INFO', visualize=False, separated_actions=True,
-                 add_info=None, show_all_actions=True, *args, **kwargs):
+                 add_info=None, in_sync=True, *args, **kwargs):
         # matrix rows are poses labels`
         # matrix columns are actions labels
         # matrix entries are coherence probabilities
@@ -43,23 +43,24 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             raise Exception(self.__doc__)
         self.passive_actions_classifier = passive_classifier  # passive gestures classifier
         self.dynamic_actions_classifier = dynamic_classifier  # dynamic gestures classifier
-        if show_all_actions:
-            use = 'In Sync'
+        if in_sync:
+            classifiers_used = 'In Sync'
             action_type = 'All'
         else:
-            use = 'CDBIMM'
+            classifiers_used = 'CDBIMM'
             action_type = 'Dynamic'
+        self.in_sync = in_sync
         clfs.Classifier.__init__(self, log_lev=log_lev, visualize=visualize,
-                                 features=str(co.dict_oper.create_sorted_dict_view({'Cl_{pas}':
+                                 descriptors=str(co.dict_oper.create_sorted_dict_view({'Cl_{pas}':
                                             str(passive_classifier.classifier_id),
                                             'Cl_{dyn}':
                                            str(dynamic_classifier.classifier_id)})),
                                  masks_needed=False,
                                  buffer_size=self.dynamic_actions_classifier.buffer_size,
-                                 action_type=action_type, use=use, name='actions',
+                                 action_type=action_type, classifiers_used=classifiers_used, name='actions',
                                  add_info=add_info, *args, **kwargs)
         self.parameters['sub_classifiers'] = [
-            'Cl$_{\\textup{pas}}$',
+            '$\\mathregular{Cl_{pas}}$',
             'CDBIMM']
         self.add_train_classes(co.CONST['actions_path'])
         self.passive_actions_classifier_test = None
@@ -92,10 +93,10 @@ class EnhancedDynamicClassifier(clfs.Classifier):
     def single_extract_pred_and_gt(self, action_path, action_name):
         self.passive_actions_classifier.reset_offline_test()
         actions_ground_truth = (
-            self.dynamic_actions_classifier.construct_ground_truth(
+            co.gd_oper.construct_ground_truth(
                 data=action_path,
                 ground_truth_type='constant-' + action_name,
-                classes_namespace=self.train_classes['Dynamic']))
+                classes_namespace=self.dynamic_actions)[0])
         self.dynamic_actions_ground_truth += (
             actions_ground_truth.tolist())
         self.passive_actions_classifier.run_testing(
@@ -107,7 +108,7 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             display_scores=False,
             save_results=False)
         poses_pred = self.passive_actions_classifier.recognized_classes
-        self.passive_actions_predictions += poses_pred
+        self.passive_actions_predictions += poses_pred.tolist()
         self.dynamic_actions_classifier.run_testing(
             data=action_path,
             online=False,
@@ -271,28 +272,28 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             plt.savefig(os.path.join(
                 save_fold, 'Coherence Matrix.pdf'))
 
-    def run_mixer(self, passive_scores, dynamic_scores=None, img_count=None, save=False,
+    def run_mixer(self, scores=None, img_count=None, save=False,
                   online=True, just_scores=False, compute_perform=True,
                   display=True,
                   *args, **kwargs):
-        self.passive_scores = passive_scores.copy()
-        if isinstance(passive_scores, tuple):
-            dynamic_scores = passive_scores[1]
-            passive_scores = passive_scores[0]
-        dynamic_scores = dynamic_scores.reshape(dynamic_scores.shape[0], -1)
+        if isinstance(scores, tuple):
+            self.dynamic_scores = scores[1]
+            self.passive_scores = scores[0]
+        self.dynamic_scores = self.dynamic_scores.reshape(
+            self.dynamic_scores.shape[0], -1)
         if img_count is not None:
             self.img_count = img_count
         fmask_dynamic = np.prod(
-            np.isfinite(np.array(dynamic_scores)),axis=1).astype(bool)
+            np.isfinite(np.array(self.dynamic_scores)),axis=1).astype(bool)
         fmask_passive = np.prod(
-            np.isfinite(np.array(passive_scores)),axis=1).astype(bool)
+            np.isfinite(np.array(self.passive_scores)),axis=1).astype(bool)
         partial_lack = np.logical_xor(fmask_dynamic, fmask_passive)
         partial_lack_dynamic = np.logical_and(partial_lack,
                                               np.logical_not(fmask_dynamic))
         partial_lack_passive = np.logical_and(partial_lack,
                                               np.logical_not(fmask_passive))
         total = np.logical_or(fmask_dynamic, fmask_passive)
-        fin_dynamic_probs = dynamic_scores[fmask_dynamic, :]
+        fin_dynamic_probs = self.dynamic_scores[fmask_dynamic, :]
         thres = 1 / float(len(self.dynamic_actions))
         if 'SVM' in self.dynamic_actions_classifier.parameters['classifier']:
             _mins = np.min(fin_dynamic_probs, axis=1)[:, None]
@@ -302,22 +303,22 @@ class EnhancedDynamicClassifier(clfs.Classifier):
                                  (- _mins).astype(float) +
                                  (1 - thres) * ((1 - below_z) * fin_dynamic_probs /
                                                 _maxs.astype(float)))
-        exp_dynamic_probs = np.zeros_like(dynamic_scores)
+        exp_dynamic_probs = np.zeros_like(self.dynamic_scores)
         exp_dynamic_probs[:] = np.nan
         exp_dynamic_probs[partial_lack_dynamic, :] = thres
         exp_dynamic_probs[fmask_dynamic, :] = fin_dynamic_probs
         fin_dynamic_probs = exp_dynamic_probs[total, :]
         fin_dynamic_probs = fin_dynamic_probs.T
 
-        if passive_scores[total, :].shape[0] == 0:
-            fin_inv_passive_scores = np.zeros_like(passive_scores) + 1 / float(
+        if self.passive_scores[total, :].shape[0] == 0:
+            fin_inv_passive_scores = np.zeros_like(self.passive_scores) + 1 / float(
                 thres)
         else:
-            fin_passive_scores = passive_scores[fmask_passive, :]
+            fin_passive_scores = self.passive_scores[fmask_passive, :]
             fin_inv_passive_scores = np.zeros_like(fin_passive_scores)
             fin_inv_passive_scores[fin_passive_scores != 0] = 1 / fin_passive_scores[
                 fin_passive_scores != 0]
-            inv_passive_scores = np.zeros_like(passive_scores)
+            inv_passive_scores = np.zeros_like(self.passive_scores)
             inv_passive_scores[fmask_passive, :] = fin_inv_passive_scores
             inv_passive_scores[partial_lack_passive, :] = 1 / float(thres)
             fin_inv_passive_scores = inv_passive_scores[total, :]
@@ -358,11 +359,14 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         # join passive predictions with updated dynamic predictions
         # the way they are joined depends on the way dynamic and passive actions
         # were exposed to ground truth constructor
-        dyn_scores = np.zeros((dynamic_scores.shape))
+        dyn_scores = np.zeros((self.dynamic_scores.shape))
         dyn_scores[:] = np.NaN
         dyn_scores[total, :] = fin_scores
-        pas_scores = passive_scores
-        self.scores = {'Passive': pas_scores, 'Dynamic': dyn_scores}
+        pas_scores = self.passive_scores
+        if self.in_sync:
+            self.scores = {'Passive': pas_scores, 'Dynamic': dyn_scores}
+        else:
+            self.scores = dyn_scores
         return self.classify(just_scores, online,
                              compute_perform, display,
                              save)
@@ -373,11 +377,15 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             if not online:
                 self.recognized_classes = self.classify_offline(display=display,
                                                                 compute_perform=compute_perform,
-                                                                extraction_method='std_check',
+                                                                extraction_method=
+                                                                self.parameters[
+                                                                    'testing_params'][
+                                                                    'post_scores_processing_method'],
                                                                 tol=0.7)
                 self.correlate_with_ground_truth(save=save,
                                                  display=display,
-                                                 compute_perform=compute_perform)
+                                                 compute_perform=compute_perform,
+                                                 utterances_inds=self.utterances_inds)
                 self.display_scores_and_time(save=save)
             else:
                 self.classify_online(self.scores.ravel(),
@@ -389,90 +397,11 @@ class EnhancedDynamicClassifier(clfs.Classifier):
 
             return self.recognized_classes, self.scores
         else:
-            return self.passive_scores, self.scores
+            return self.passive_scores, self.dynamic_scores
 
-    def run_testing(self, data=None, online=True, against_training=False,
-                    scores_filter_shape=5,
-                    std_small_filter_shape=co.CONST['STD_small_filt_window'],
-                    std_big_filter_shape=co.CONST['STD_big_filt_window'],
-                    ground_truth_type=co.CONST['test_actions_ground_truth'],
-                    img_count=None, save=True, scores_savepath=None,
-                    load=True, testname=None, display_scores=True,
-                    derot_angle=None, derot_center=None,
-                    construct_gt=True, just_scores=False,
-                    compute_perform=True):
-        '''
-        Mixed bayesian model, meant to provide unified action scores.
-        P(p_i|a_j) = c_ij in Coherence Map C
-        P(a_j|t) = probabilities produced by dynamic scores
-        P(p_i|t) = passive gestures RF probability scores
-        Combined Prediction = Sum{i}{c[i,j]*P[a_j]/P[p_i]*Sum{k}{c[i,k]*P[a_j]}}
-        If S is the matrix [P(a_j|t)[j,t]], j=0:n-1, t=0:T-1
-        and R is the matrix [1/P[p_i|t][i,t]], i=0:m, t=0:T-1
-        then the combined prediction becomes S'= S x (C.T * (R x (C*S)))
-        where '*' is the dot product and 'x' is the Hadamard product.
-        If S[:,t] is missing, it is replaced by a uniform hypothesis of
-        probability.
-
-        Overrides <clfs.Classifier.run_testing>, but the input arguments are
-        the same, so for help consult <classifiers.Classifiers>
-        '''
-        loaded = False
-        if not online:
-            LOG.info('Testing:' + data)
-            try:
-                self.test_ind = self.available_tests.index(data)
-                test_name = data
-                self.test_name = data
-            except:
-                if data.split(os.sep)[-1] in self.available_tests:
-                    self.test_ind =(
-                    self.available_tests.index(data.split(os.sep)[-1]))
-                    test_name =data.split(os.sep)[-1]
-                    self.test_name = data.split(os.sep)[-1]
-                elif data in self.dynamic_actions or data in self.passive_actions:
-                    self.test_ind = None
-                elif data.split(os.sep)[-1] in self.dynamic_actions or \
-                        data.split(os.sep)[-1] in self.passive_actions:
-                    self.test_ind = None
-                else:
-                    raise Exception('test data must be inside test_save_path,'+
-                                ' check config.yaml')
-            if construct_gt and ground_truth_type is None:
-                ground_truth_type=os.path.join(
-                        co.CONST['ground_truth_fold'],
-                        self.test_name + '.csv')
-        elif isinstance(data, tuple):
-            derot_angle = data[1]
-            derot_center = data[2]
-            data = data[0]
-        if online:
-            if img_count is not None:
-                self.scores_exist += ((img_count - self.img_count) * [False])
-                self.img_count = img_count
-            else:
-                self.img_count += 1
-        if not self.testing_initialized or not online:
-            self.init_testing(data=data,
-                              online=online,
-                              save=save,
-                              load=load,
-                              testname=testname,
-                              scores_savepath=scores_savepath,
-                              scores_filter_shape=5,
-                              std_small_filter_shape=co.CONST[
-                                  'STD_small_filt_window'],
-                              std_big_filter_shape=co.CONST[
-                                  'STD_big_filt_window'])
-        if not online:
-            if (load and self.testdata[self.available_tests.index(data)] is not None):
-                LOG.info('Loading saved scores, created by '
-                         + 'testing \'' + self.full_info + '\' with \'' +
-                         self.testdataname + '\'')
-                (passive_scores, dynamic_scores) = self.testdata[
-                    self.available_tests.index( data)]
-                loaded = True
-        if not loaded:
+    def testdata_processing(self, data, online, construct_gt,
+                            ground_truth_type, load, testname,
+                            derot_angle, derot_center):
             passive_exist, _ = self.passive_actions_classifier.run_testing(data=data,
                                                                            online=online,
                                                                            construct_gt=False,
@@ -527,35 +456,159 @@ class EnhancedDynamicClassifier(clfs.Classifier):
                     addnan[:] = None
                     passive_scores = np.concatenate(
                         (passive_scores, addnan), axis=0)
+            self.passive_scores = passive_scores
+            self.dynamic_scores = dynamic_scores
+            return {'Passive':passive_scores,
+                     'Dynamic':dynamic_scores}
+
+
+
+    def run_testing(self, data=None, online=True, against_training=False,
+                    scores_filter_shape=5,
+                    std_small_filter_shape=co.CONST['STD_small_filt_window'],
+                    std_big_filter_shape=co.CONST['STD_big_filt_window'],
+                    ground_truth_type=co.CONST['ground_truth_fold'],
+                    img_count=None, save=True, scores_savepath=None,
+                    load=True, testname=None, display_scores=True,
+                    derot_angle=None, derot_center=None,
+                    construct_gt=True, just_scores=False,
+                    compute_perform=True):
+        '''
+        Mixed bayesian model, meant to provide unified action scores.
+        P(p_i|a_j) = c_ij in Coherence Map C
+        P(a_j|t) = probabilities produced by dynamic scores
+        P(p_i|t) = passive gestures RF probability scores
+        Combined Prediction = Sum{i}{c[i,j]*P[a_j]/P[p_i]*Sum{k}{c[i,k]*P[a_j]}}
+        If S is the matrix [P(a_j|t)[j,t]], j=0:n-1, t=0:T-1
+        and R is the matrix [1/P[p_i|t][i,t]], i=0:m, t=0:T-1
+        then the combined prediction becomes S'= S x (C.T * (R x (C*S)))
+        where '*' is the dot product and 'x' is the Hadamard product.
+        If S[:,t] is missing, it is replaced by a uniform hypothesis of
+        probability.
+
+        Overrides <clfs.Classifier.run_testing>, but the input arguments are
+        the same, so for help consult <classifiers.Classifiers>
+        '''
+        loaded = False
+        if not online:
+            LOG.info('Testing:' + data)
+            try:
+                self.test_ind = self.available_tests.index(data)
+                self.test_name = data
+            except BaseException:
+                if data.split(os.sep)[-1] in self.available_tests:
+                    self.test_ind =(
+                    self.available_tests.index(data.split(os.sep)[-1]))
+                    self.test_name = data.split(os.sep)[-1]
+                elif data in self.dynamic_actions or data in self.passive_actions:
+                    self.test_ind = None
+                elif data.split(os.sep)[-1] in self.dynamic_actions or \
+                        data.split(os.sep)[-1] in self.passive_actions:
+                    self.test_ind = None
+                else:
+                    raise Exception('test data must be inside test_save_path,'+
+                                ' check config.yaml')
+            if construct_gt and ground_truth_type is None:
+                ground_truth_type=os.path.join(
+                        co.CONST['ground_truth_fold'],
+                        self.test_name + '.csv')
+        elif isinstance(data, tuple):
+            derot_angle = data[1]
+            derot_center = data[2]
+            data = data[0]
+        if online:
+            if img_count is not None:
+                self.scores_exist += ((img_count - self.img_count) * [False])
+                self.img_count = img_count
+            else:
+                self.img_count += 1
+        if not self.testing_initialized or not online:
+            self.init_testing(data=data,
+                              online=online,
+                              save=save,
+                              load=load,
+                              testname=testname,
+                              scores_savepath=scores_savepath,
+                              scores_filter_shape=5,
+                              std_small_filter_shape=co.CONST[
+                                  'STD_small_filt_window'],
+                              std_big_filter_shape=co.CONST[
+                                  'STD_big_filt_window'])
+        if not online:
+            if self.test_ind is not None and (
+                    load and self.accuracies[self.available_tests.index(self.test_name)]
+                    is not None):
+                LOG.info('Tests already performed, loaded data')
+                try:
+                    self.scores = self.results['Scores']
+                    if self.in_sync:
+                        self.passive_scores = self.scores['Passive']
+                        self.dynamic_scores = self.scores['Dynamic']
+                    else:
+                        self.dynamic_scores = self.scores
+                    loaded = True
+                except:
+                    pass
+        if not loaded:
+            testdata = self.testdata_processing(data, online, construct_gt,
+                            ground_truth_type, load, testname,
+                            derot_angle, derot_center)
         if not online and construct_gt:
-            self.test_ground_truth = {'Passive': self.construct_ground_truth(
-                data, ground_truth_type=ground_truth_type,
-                classes_namespace=self.train_classes['Passive']),
-                'Dynamic': self.construct_ground_truth(
-                    data,
-                    ground_truth_type=ground_truth_type,
-                    classes_namespace=
-                    self.train_classes['Dynamic'])}
-        if just_scores:
-            if loaded:
-                output = (passive_scores, dynamic_scores)
+            if self.in_sync:
+                passive_gd, passive_breakpoints = co.gd_oper.construct_ground_truth(
+                os.path.join(co.CONST['test_save_path'], self.test_name)
+, ground_truth_type=os.path.join(ground_truth_type,
+                                 self.test_name+'.csv'),
+                    classes_namespace=self.passive_actions,
+                    ret_breakpoints=True)
+            dynamic_gd, dynamic_breakpoints = co.gd_oper.construct_ground_truth(
+                os.path.join(co.CONST['test_save_path'], self.test_name)
+                , ground_truth_type=os.path.join(ground_truth_type,
+                                                 self.test_name+'.csv'),
+                classes_namespace=self.dynamic_actions,
+                ret_breakpoints=True)
+
+            if self.in_sync:
+                self.test_ground_truth = {'Passive': passive_gd,
+                    'Dynamic': dynamic_gd}
+                self.test_breakpoints = {'Passive': passive_breakpoints,
+                                         'Dynamic': dynamic_breakpoints}
+                self.utterances_inds = {'Passive': co.gd_oper.merge_utterances_vectors(
+                    co.gd_oper.create_utterances_vectors(
+                        self.test_breakpoints['Passive'],
+                        len(self.test_ground_truth['Passive'])),
+                    self.passive_actions),
+                    'Dynamic': co.gd_oper.merge_utterances_vectors(
+                        co.gd_oper.create_utterances_vectors(
+                            self.test_breakpoints['Dynamic'],
+                            len(self.test_ground_truth['Dynamic'])),
+                        self.dynamic_actions)}
             else:
-                output = self.run_mixer(passive_scores, dynamic_scores,
-                                        save=save, online=online,
-                                        just_scores=just_scores,
-                                        compute_perform=compute_perform,
-                                        display=display_scores)
+                self.test_ground_truth = dynamic_gd
+                self.test_breakpoints = dynamic_breakpoints
+                self.utterances_inds = co.gd_oper.merge_utterances_vectors(
+                    co.gd_oper.create_utterances_vectors(
+                        self.test_breakpoints, len(self.test_ground_truth)),
+                    self.train_classes)
+        if loaded:
+            if self.in_sync:
+                output = (self.passive_scores, self.dynamic_scores)
+                self.scores = {'Passive': self.passive_scores,
+                               'Dynamic': self.dynamic_scores}
+            else:
+                output = self.dynamic_scores
+                self.scores = self.dynamic_scores
+            output = self.classify(just_scores, online, compute_perform,
+                                   display=display_scores, save=save)
         else:
-            if loaded:
-                output = self.classify(just_scores, online, compute_perform,
-                                       display=display_scores, save=save)
-            else:
-                output = self.run_mixer(passive_scores, dynamic_scores,
-                                        save=save, online=online,
-                                        just_scores=just_scores,
-                                        compute_perform=compute_perform,
-                                        display=display_scores)
+            output = self.run_mixer(save=save, online=online,
+                                    just_scores=just_scores,
+                                    compute_perform=compute_perform,
+                                    display=display_scores,
+                                    **testdata)
+
         if self.test_ind is not None:
+            self.testdata[self.test_ind]['Results']['Scores'] = self.scores
             co.file_oper.save_labeled_data(['Testing']+self.tests_ids[
                 self.test_ind],self.testdata[self.test_ind])
         return output
@@ -570,19 +623,20 @@ def construct_enhanced_dynamic_actions_classifier(testname='actions', train=Fals
     '''
     dynamic_classifier = clfs.construct_dynamic_actions_classifier(
         train=False, test=False, visualize=False, test_against_all=False,
-        features=['GHOG', '3DHOF'],use=
-    'RDF',post_scores_processing_method='std_check' )
+        descriptors=['GHOG', 'ZHOF'],classifiers_used=
+    'SVM',post_scores_processing_method='CSTD' )
     passive_classifier = clfs.construct_passive_actions_classifier(train=False,
                                                                    test=False,
                                                                    visualize=False,
                                                                    test_against_all=False,
-                                                                   features=['GHOG'],
+                                                                   descriptors=['3DXYPCA'],
                                                                    post_scores_processing_method=
-                                                                    'prob_check')
+                                                                    'CSTD')
 
     enhanced = EnhancedDynamicClassifier(
         dynamic_classifier=dynamic_classifier,
-        passive_classifier=passive_classifier)
+        passive_classifier=passive_classifier,
+        in_sync=False)
     enhanced.run_training(load=not train, train_all=train_all)
     if test or visualize:
         if test_against_all:

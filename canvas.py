@@ -1,4 +1,5 @@
 import logging
+LOGLEVEL = 'DEBUG'
 LOG = logging.getLogger(__name__)
 FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
 CH = logging.StreamHandler()
@@ -90,23 +91,28 @@ class StrokeData(object):
         self.strokes = strokes
 
 class StrokeRecognitionThread(threading.Thread):
-    def __init__(self,parent,data):
+    def __init__(self,parent,data, loglevel='INFO'):
         threading.Thread.__init__(self)
         self._parent = parent
         self._data = data
+        self._loglevel= loglevel
     def run(self):
         '''
         Overrides Thread.run . Call Thread.start(), not this.
         '''
         print('Initializing Stroke Recognition subscriber..')
-        subscriber = StrokeRecognition(self._parent, self._data)
+        subscriber = StrokeRecognition(self._parent, self._data, self._loglevel)
         print('Waiting for strokes input..')
 
 class StrokeRecognition(object):
-    def __init__(self, parent, data):
+    def __init__(self, parent, data, loglevel):
         self.strokes = [[]]
         self.time = time.time()
         self.gdb = Recognizer()
+        self.logger = logging.getLogger('StrokeRecognition')
+        self.logger.setLevel(loglevel)
+        self.logger.addHandler(CH)
+        self.logger.info('Creating Gestures Templates..')
         circle = [[Vector(int(10+10*cos(t)),
                                               int(10+10*sin(t)))
                                        for t in np.linspace(0,2*pi,8)]]
@@ -141,13 +147,14 @@ class StrokeRecognition(object):
                             strokes_sensitive=False,
                              orientation_sensitive=False,
                             permute=False)
+        self.logger.info('Templates created')
         self.found_gesture = False
         self.gesture = None
         self._data = data
         self._parent = parent
         self.ran = False
         self.gdb.bind(on_search_complete=self.search_stop)
-        self.dist_thres = 1000
+        self.dist_thres = 0
         self.time_thres = 2
         self.skel_sub = mfilters.Subscriber(
             "skeleton", Image)
@@ -198,11 +205,19 @@ class StrokeRecognition(object):
         best = pt.best
         dist = best['dist']
         self.gesture = best['name']
-        if dist < self.dist_thres and self.gesture is not None:
+        if dist > self.dist_thres and self.gesture is not None:
             self.found_gesture = True
+            self.logger.debug('Gesture found as ' + str(self.gesture) +
+                              ' having cos distance ' + str(dist))
         else:
             self.found_gesture = False
-
+            self.logger.debug('Gesture not found. \n\tBest candidate was '+
+                              str(self.gesture) +' with cos distance:' + str(dist))
+        self.logger.debug('\tThe number of strokes was ' +
+                          str(len(self.strokes)-1))
+        self.logger.debug('\tStrokes:')
+        for stroke in self.strokes[:-1]:
+            self.logger.debug('\t\t'+str(stroke))
     def add_stroke(self):
         if len(self.strokes[-1])>0: #add stroke only if last stroke is not empty
             self.strokes.append([])
@@ -216,27 +231,35 @@ class StrokeRecognition(object):
             self.strokes[-1].append(Vector(xpoint,ypoint))
 
 class ROSThread(threading.Thread):
-    def __init__(self, parent, data):
+    def __init__(self, parent, data, loglevel):
         threading.Thread.__init__(self)
         self._parent = parent
         self._data = data
+        self._loglevel = loglevel
+        self.logger = logging.getLogger('ROSThread')
+        self.logger.addHandler(CH)
+        self.logger.setLevel(loglevel)
     def run(self):
         '''
         Overrides Thread.run . Call Thread.start(), not this.
         '''
-        print('Initializing ROS subscriber..')
+        self.logger.info('Initializing ROS subscriber..')
         subscriber = ROSSubscriber(self._parent,
-                                   self._data)
-        print('Initializing node..')
+                                   self._data,
+                                   self._loglevel)
+        self.logger.info('Initializing node..')
         rospy.init_node('ROSThread', anonymous=True, disable_signals=True)
-        print('Waiting for input..')
+        self.logger.info('Waiting for input..')
         rospy.spin()
 
 
 class ROSSubscriber(object):
-    def __init__(self, parent, data):
+    def __init__(self, parent, data, loglevel):
         self._parent = parent
         self._data = data
+        self.logger = logging.getLogger('ROSSubscriber')
+        self.logger.addHandler(CH)
+        self.logger.setLevel(loglevel)
         self.hand_sub = mfilters.Subscriber(
             "hand", Image)
         self.skel_sub = mfilters.Subscriber(
@@ -278,7 +301,7 @@ class Canvas(wx.Panel):
 
 
 class MainFrame(wx.Frame):
-    def __init__(self,parent, id_, title):
+    def __init__(self,parent, id_, title, loglevel='INFO'):
         wx.Frame.__init__(self,parent, id_, title)
         self.canvas_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.Bind(EVT_ROS, self.on_ros_process)
@@ -286,11 +309,12 @@ class MainFrame(wx.Frame):
         self.data = HandData()
         self.drawing_im = None
         self.canvas = None
-        self.ros_thread = ROSThread(self,self.data)
+        self.ros_thread = ROSThread(self,self.data, loglevel)
         self.ros_thread.start()
         self.stroke_data = StrokeData()
         self.stroke_recog_thread = StrokeRecognitionThread(self,
-                                                           self.stroke_data)
+                                                           self.stroke_data,
+                                                           loglevel)
         self.stroke_recog_thread.start()
         self.init_depth = 0
         self.draw = 0
@@ -328,16 +352,19 @@ class MainFrame(wx.Frame):
                 self.init_depth = self.data.hand[self.data.skel[-1, -1, 0],
                                                  self.data.skel[-1, -1, 1]]
             try:
-                dep = self.data.hand[self.data.skel[-1,-1,0],
-                                 self.data.skel[-1,-1,1]]
+                ypnt = self.data.skel[-1,-1,0]
+                xpnt = self.data.skel[-1, -1,1]
+                tip = self.data.hand[ypnt-20:ypnt+20,xpnt-20:xpnt+20]
+                dep = np.median(tip[tip!=0])
             except IndexError:
                 print self.data.skel
-            if dep!=0:
-                if len(self.depths)<20:
-                    self.depths.append(dep)
-                else:
-                    self.depths= self.depths[1:]+[dep]
-                dep = np.median(np.array(self.depths))
+            if np.isfinite(dep):
+                self.depths.append(dep)
+                del self.depths[:-20]
+            else:
+                if len(self.depths)==0:
+                    return
+            dep = np.median(np.array(self.depths))
             init_dep = dep
             if dep < self.min_depth and dep != 0: #erase everything if hand comes close to kinect
                 self.drawing_im = np.zeros_like(inp)
@@ -361,16 +388,24 @@ class MainFrame(wx.Frame):
                         self.stroke = self.stroke[-4:] #keep last 4 points
                         if self.prev_gest == 'Index':
                             if norm(np.diff(np.array(self.stroke[-2:]),axis=0))<10:
+                                if self.write_mode:
+                                    color = [255, 255, 255]
+                                else:
+                                    color = [255, 0 ,0]
                                 cv2.line(self.temporary_im,
                                          tuple(self.stroke[-2]),tuple(self.stroke[-1]),
-                                         [255, 255, 255], self.size)
+                                         color, self.size)
                         else:
                             cv2.circle(self.temporary_im,(self.data.skel[-1, -1, 1],
                                                         self.data.skel[-1, -1, 0]), self.size,
                                        [255,255,255], -1)
                     elif self.data.class_name == 'Tiger':
-                        if self.prev_gest != 'Tiger':
+                        if self.prev_gest == 'Palm':
                             self.write_mode = not self.write_mode
+                            if self.write_mode:
+                                self.temporary_im = \
+                                np.zeros_like(self.drawing_im)
+
                 else:
                     if self.data.class_name == 'Tiger':
                        self.initialized = True
@@ -384,8 +419,8 @@ class MainFrame(wx.Frame):
                 cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]),
                          [255, 0, 0], 3)
             inp = cv2.flip(inp, -1)
-            co.tag_im(inp, 'Action: ' + self.data.class_name+
-                      '\nWrite Mode: ' + ('on' if self.write_mode else 'off')+
+            co.tag_im(inp, 'Gesture: ' + self.data.class_name+
+                      '\nMode: ' + ('Free' if self.write_mode else 'Guided')+
                       '\nPen Size: ' + str(self.size),color=(255,0,0),
                       fontscale=0.7, thickness=2 )
             co.tag_im(inp, 'Median depth: ' + str(init_dep) +
@@ -449,6 +484,8 @@ class MainFrame(wx.Frame):
             else:
                 if self.write_mode:
                     self.drawing_im += self.temporary_im
+                else:
+                    self.temporary_im = np.zeros_like(self.drawing_im)
         except Exception as e:
              exc_type, exc_value, exc_traceback = sys.exc_info()
              traceback.print_exception(exc_type,
@@ -463,7 +500,7 @@ def main():
     main function
     '''
     app = wx.App(0)
-    frame = MainFrame(None, -1, 'Painter')
+    frame = MainFrame(None, -1, 'Painter',loglevel=LOGLEVEL)
     frame.Show(True)
     app.MainLoop()
 

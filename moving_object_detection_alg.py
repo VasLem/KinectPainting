@@ -11,7 +11,6 @@ import hand_segmentation_alg as hsa
 import action_recognition_alg as ara
 from scipy import ndimage
 import array
-import label_contours
 import logging
 LOG = logging.getLogger('__name__')
 CH = logging.StreamHandler()
@@ -25,11 +24,21 @@ class Mog2(object):
     Implementation for handling of depth video
     '''
 
-    def __init__(self):
-        self.fgbg = None
-        self.frame_count = 0
+    def __init__(self, remove_noise=True,
+                 gmm_num=co.CONST['gmm_num'],
+                   bg_ratio=co.CONST['bg_ratio'],
+                   var_thres=co.CONST['var_thres'],
+                   history=co.CONST['history']):
+        self.initialize(gmm_num, bg_ratio, var_thres, history)
+        self.sync_count = -1
         self.kernel = np.ones((5, 5), np.uint8)
-
+        self.init_num = co.CONST['calib_secs']*30
+        self.valid_img = None
+        self.untrusty_pixels = None
+        self.initial_background = None
+        self.initial_im_set = []
+        self.filtered_data = None
+        self.mog2_examples = []
     def initialize(self,
                    gmm_num=co.CONST['gmm_num'],
                    bg_ratio=co.CONST['bg_ratio'],
@@ -42,43 +51,66 @@ class Mog2(object):
         # self.fgbg.setNMixtures(int(gmm_num))
         self.fgbg.setBackgroundRatio(bg_ratio)
         self.fgbg.setComplexityReductionThreshold(0.9)
+        self.preprocessed_examples = []
+        self.raw_examples = []
+        self.threshold = None
 
-    def run(self, display=True, data=None,
-            gmm_num=co.CONST['gmm_num'],
-            bg_ratio=co.CONST['bg_ratio'],
-            var_thres=co.CONST['var_thres'],
-            history=co.CONST['history']):
+    def get_valid_data(self, img):
+        return (img > 0).astype(bool)
+
+    def run(self, save_example=False, data=None):
         '''
         Run detection
         '''
-        self.frame_count += 1
-        if self.fgbg is None:
-            self.initialize(gmm_num, bg_ratio, var_thres, history)
+        self.sync_count += 1
+
         if data is None:
             LOG.warning('MOG2: Reading data from co.data.depth_im')
             data = co.data.depth_im.copy()
-        self.fgbg.setHistory(int(history))
-        inp = data.copy()
-        mog2_res = self.fgbg.apply(inp, 0.8)
-        '''
-        found_objects_mask = cv2.morphologyEx(mog2_objects.copy(), cv2.MORPH_OPEN,
-                                              np.ones((9, 9), np.uint8))
-        _, contours, _ = cv2.findContours(found_objects_mask.copy(), cv2.CHAIN_APPROX_SIMPLE,
-                                          cv2.RETR_LIST)
-
-        labels, filtered_image, _min, _max = label_contours.label(data.astype(float), contours,
-                                                                  med_filt=True, dil_size=11,
-                                                                  er_size=3)
-        co.meas.found_objects_mask = ((filtered_image *
-                                       mog2_objects) > 0).astype(np.uint8)
-        '''
+        if self.filtered_data is None:
+            self.filtered_data = np.zeros_like(data)
+        if self.sync_count < self.init_num:
+            self.initial_im_set.append(data)
+            if self.valid_img is None:
+                self.valid_img = np.zeros_like(data)
+            flag = self.get_valid_data(data)
+            self.valid_img[flag] = data[flag]
+            return None
+        elif self.sync_count == self.init_num:
+            self.initial_background = np.median(
+                np.array(self.initial_im_set), axis=0)
+            self.untrusty_pixels = (np.abs(self.initial_background -
+                                           self.valid_img) >= 10)
+            self.untrusty_pool = np.array(self.initial_im_set)[:,
+                                                               self.untrusty_pixels]
+        if save_example:
+            co.draw_oper.save_pure_image(self.untrusty_pixels, 'untrusty_pixels.png')
+        untrusty_pixels = self.untrusty_pixels.copy()
+        untrusty_pixels[untrusty_pixels] = (
+            np.sum(data[self.untrusty_pixels] == self.untrusty_pool,
+                         axis=0)).astype(bool)
+        if save_example:
+            co.draw_oper.save_pure_image(untrusty_pixels, 'mod_untrusty_pixels.png')
+        if save_example:
+            self.raw_examples.append(data)
+        flag = (np.logical_not(self.get_valid_data(data)) +
+                untrusty_pixels).astype(bool)
+        self.filtered_data = data.copy()
+        self.filtered_data[flag] = self.valid_img[flag]
+        inp = self.filtered_data
+        if save_example:
+            self.preprocessed_examples.append(inp)
+        mog2_res = self.fgbg.apply(inp.astype(np.float32), 0.8)
         mog2_res = (mog2_res == 127).astype(np.uint8)
-
+        if save_example:
+            self.mog2_examples.append(mog2_res*255)
         return mog2_res
 
     def reset(self):
         self.fgbg = None
-        self.frame_count = 0
+        self.sync_count = -1
+        self.preprocessed_examples = []
+        self.raw_examples = []
         '''
         if display:
             found_objects_mask[found_objects_mask > 0] = 255
