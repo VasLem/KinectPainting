@@ -1,13 +1,13 @@
-
+import logging
 import sys
 import os
 import warnings
-import logging
 import glob
 from math import pi
 import numpy as np
 from numpy.linalg import pinv
 import cv2
+from . import initialize_logger, timeit, PRIM_X, PRIM_Y, FLNT, find_nonzero
 import class_objects as co
 import sparse_coding as sc
 import hand_segmentation_alg as hsa
@@ -16,26 +16,9 @@ from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.widgets import Button
 import cPickle as pickle
-import time
+import descriptors
 
-# Kinect Intrinsics
-PRIM_X = 256.92
-PRIM_Y = 204.67
-FLNT = 365.98
-# Senz3d Intrinsics
-'''
-PRIM_X = 317.37514566554989
-PRIM_Y = 246.61273826510859
-FLNT = 595.333159044648 / (30.48 / 1000.0)
-'''
-def initialize_logger(logger):
-    if not getattr(logger, 'handler_set', None):
-        CH = logging.StreamHandler()
-        CH.setFormatter(logging.Formatter(
-            '%(name)s-%(funcName)s()(%(lineno)s)-%(levelname)s:%(message)s'))
-        logger.addHandler(CH)
-        logger.handler_set = True
-    logger.propagate = False
+
 
 def checktypes(objects, classes):
     '''
@@ -51,24 +34,7 @@ def checktypes(objects, classes):
     finally:
         del frame
 
-def timeit(func):
-    '''
-    Decorator to time extraction
-    '''
-    def wrapper(self,*arg, **kw):
-        t1 = time.time()
-        res = func(self,*arg, **kw)
-        t2 = time.time()
-        self.time.append(t2-t1)
-        del self.time[:-5000]
-        return res
-    return wrapper
 
-def find_nonzero(arr):
-    '''
-    Finds nonzero elements positions
-    '''
-    return np.fliplr(cv2.findNonZero(arr).squeeze())
 
 
 def prepare_dexter_im(img):
@@ -130,23 +96,6 @@ def prepare_im(img, contour=None, square=False):
     return hand_patch, hand_patch_pos, contour
 
 
-class SpaceHistogram(object):
-    '''
-    Create Histograms for 3DHOG and GHOF
-    '''
-
-    def __init__(self):
-        self.bin_size = None
-        self.range = None
-
-    def hist_data(self, sample):
-        '''
-        Compute normalized N-D histograms
-        '''
-        hist, edges = np.histogramdd(sample, self.bin_size, range=self.range)
-        return hist, edges
-
-
 class BufferOperations(object):
 
     def __init__(self, parameters, reset_time=True):
@@ -190,7 +139,6 @@ class BufferOperations(object):
     def reset(self, reset_time=False):
         self.__init__(self.parameters, reset_time=reset_time)
 
-
     def check_buffer_integrity(self, buffer):
         check_sam = True
         check_cont = True
@@ -215,7 +163,7 @@ class BufferOperations(object):
         reshaped = False
         if self.buffer_size == 1:
             return
-        if np.shape(inp)[0] == 1 or len(np.shape(inp))==1:
+        if np.shape(inp)[0] == 1 or len(np.shape(inp)) == 1:
             reshaped = True
             inp = np.reshape(inp, (self.buffer_size, -1))
         mean, inp = cv2.PCACompute(
@@ -237,6 +185,7 @@ class BufferOperations(object):
         if depth is not None:
             self.depth_components.append(depth)
             del self.depth_components[:-self.buffer_size]
+
     def add_buffer(self, buffer=None, depth=None, sample_count=None,
                    already_checked=False):
         '''
@@ -257,12 +206,12 @@ class BufferOperations(object):
         else:
             check = True
         if not self.parameters['testing_params']['online']:
-                self.real_samples_inds += [-1] * (self.frames_inds[-1] + 1 -
-                               len(self.buffer))
-                self.depth += [None] * (self.frames_inds[-1] + 1
-                                         - len(self.buffer))
-                self.buffer += [None] * (self.frames_inds[-1] + 1
-                                         - len(self.buffer))
+            self.real_samples_inds += [-1] * (self.frames_inds[-1] + 1 -
+                                              len(self.buffer))
+            self.depth += [None] * (self.frames_inds[-1] + 1
+                                    - len(self.buffer))
+            self.buffer += [None] * (self.frames_inds[-1] + 1
+                                     - len(self.buffer))
         if check:
             self.buffer_start_inds.append(self.frames_inds[-self.buffer_size])
             self.buffer_end_inds.append(self.frames_inds[-1])
@@ -275,7 +224,7 @@ class BufferOperations(object):
                 self.depth = depth
             if not self.parameters['testing_params']['online']:
                 self.real_samples_inds[self.frames_inds[-1]] = (np.unique(self.samples_inds[
-                -self.buffer_size:])[0])
+                    -self.buffer_size:])[0])
         else:
             if self.parameters['testing_params']['online']:
                 self.buffer = None
@@ -301,7 +250,7 @@ class BufferOperations(object):
             if not buffer_len:
                 self.logger.debug('No valid buffer')
                 return None
-        npbuffer = np.zeros((len(self.buffer),buffer_len))
+        npbuffer = np.zeros((len(self.buffer), buffer_len))
         for buffer_count in range(len(self.buffer)):
             if self.buffer[buffer_count] is None:
                 self.buffer[buffer_count] = np.zeros(buffer_len)
@@ -328,6 +277,7 @@ class Action(object):
         self.end_inds = []
         self.real_data = []
 
+
 class Actions(object):
     '''
     Class to hold multiple actions
@@ -344,12 +294,12 @@ class Actions(object):
         self.slflogger.addHandler(FH)
         self.slflogger.setLevel(logging.INFO)
         self.parameters = parameters
-        
+
         self.sparsecoded = parameters['sparsecoded']
-        self.available_descriptors = {'3DHOF': Descriptor3DHOF,
-                                      'ZHOF': DescriptorZHOF,
-                                      'GHOG': DescriptorGHOG,
-                                      '3DXYPCA': Descriptor3DXYPCA}
+        self.available_descriptors = {'3DHOF': descriptors.TDHOF,
+                                      'ZHOF': descriptors.ZHOF,
+                                      'GHOG': descriptors.GHOG,
+                                      '3DXYPCA': descriptors.TDXYPCA}
         self.actions = []
         self.names = []
         self.coders = coders
@@ -366,12 +316,12 @@ class Actions(object):
         self.all_data = [None] * len(self.parameters['descriptors'])
         self.name = None
         self.frames_preproc = None
-        self.descriptors = {feature:None for feature in
+        self.descriptors = {feature: None for feature in
                             self.parameters['descriptors']}
         self.descriptors_id = [None] * len(self.parameters['descriptors'])
         self.coders_info = [None] * len(self.parameters['descriptors'])
-        self.buffer_class= ([BufferOperations(self.parameters)] *
-                            len(self.parameters['descriptors']))
+        self.buffer_class = ([BufferOperations(self.parameters)] *
+                             len(self.parameters['descriptors']))
 
     def save_action_features_to_mem(self, data, filename=None,
                                     action_name=None):
@@ -399,9 +349,9 @@ class Actions(object):
             co.file_oper.save_labeled_data([descriptor,
                                             str(co.dict_oper.
                                                 create_sorted_dict_view(
-                                            self.parameters[
-                                                'features_params'][
-                                                    descriptor]))],
+                                                    self.parameters[
+                                                        'features_params'][
+                                                        descriptor]))],
                                            self.candid_d_actions[dcount],
                                            filename, fold_lev=1)
 
@@ -427,8 +377,8 @@ class Actions(object):
                 self.candid_d_actions.append(
                     co.file_oper.load_labeled_data([descriptor,
                                                     str(co.dict_oper.create_sorted_dict_view(
-                                                    self.parameters[
-                                                        'features_params'][
+                                                        self.parameters[
+                                                            'features_params'][
                                                             descriptor]))],
                                                    filename, fold_lev=1))
             '''
@@ -440,7 +390,7 @@ class Actions(object):
                 dcount])
             if instance is not None:
                 self.slflogger.info('Finding action \'' + self.name +
-                            '\' inside matching instance')
+                                    '\' inside matching instance')
                 if self.name in instance and np.array(
                         instance[self.name][0]).size > 0:
                     self.slflogger.info('Action Found')
@@ -453,8 +403,6 @@ class Actions(object):
                 self.slflogger.info('No matching instance exists')
 
         return features_to_extract, data
-
-
 
     def train_sparse_dictionary(self):
         '''
@@ -472,36 +420,36 @@ class Actions(object):
                         name=self.parameters['descriptors'][count])
                     finite_samples = np.prod(np.isfinite(data),
                                              axis=1).astype(bool)
-                    coder.train_sparse_dictionary(data[finite_samples,:])
+                    coder.train_sparse_dictionary(data[finite_samples, :])
                     co.file_oper.save_labeled_data(info, coder)
                 else:
                     raise Exception('No data available, run add_action first')
                 self.coders[count] = coder
-                co.file_oper.save_labeled_data(self.coders_info[count], self.coders[count])
+                co.file_oper.save_labeled_data(
+                    self.coders_info[count], self.coders[count])
 
     def load_sparse_coder(self, count):
-        self.coders_info[count] = (['Sparse Coders']+
-                                   [self.parameters['sparsecoded']]+
-                    [str(self.parameters['descriptors'][
-                        count])]+
-                    [str(co.dict_oper.create_sorted_dict_view(
-                        self.parameters['coders_params'][
-                    str(self.parameters['descriptors'][count])]))])
+        self.coders_info[count] = (['Sparse Coders'] +
+                                   [self.parameters['sparsecoded']] +
+                                   [str(self.parameters['descriptors'][
+                                       count])] +
+                                   [str(co.dict_oper.create_sorted_dict_view(
+                                       self.parameters['coders_params'][
+                                           str(self.parameters['descriptors'][count])]))])
         if self.coders[count] is None:
             self.coders[count] = co.file_oper.load_labeled_data(
                 self.coders_info[count])
         return self.coders_info[count]
 
-
     def retrieve_descriptor_possible_ids(self, count, assume_existence=False):
         descriptor = self.parameters['descriptors'][count]
         file_ids = [co.dict_oper.create_sorted_dict_view(
-            {'Descriptor':descriptor}),
-                    co.dict_oper.create_sorted_dict_view(
-            {'ActionType':self.parameters['action_type']}),
-                    co.dict_oper.create_sorted_dict_view(
-                        {'DescriptorParams':co.dict_oper.create_sorted_dict_view(
-                        self.parameters['features_params'][descriptor]['params'])})]
+            {'Descriptor': descriptor}),
+            co.dict_oper.create_sorted_dict_view(
+            {'ActionType': self.parameters['action_type']}),
+            co.dict_oper.create_sorted_dict_view(
+            {'DescriptorParams': co.dict_oper.create_sorted_dict_view(
+                self.parameters['features_params'][descriptor]['params'])})]
         ids = ['Features']
         if self.sparsecoded:
             self.load_sparse_coder(count)
@@ -509,35 +457,34 @@ class Actions(object):
                 and (self.coders[count] is not None or assume_existence)):
             file_ids.append(co.dict_oper.create_sorted_dict_view(
                 {'SparseFeaturesParams':
-                             co.dict_oper.create_sorted_dict_view(
-                                 self.parameters[
-                'features_params'][descriptor]['sparse_params'])}))
+                 co.dict_oper.create_sorted_dict_view(
+                     self.parameters[
+                         'features_params'][descriptor]['sparse_params'])}))
             ids.append('Sparse Features')
         file_ids.append(co.dict_oper.create_sorted_dict_view(
             {'BufferParams':
-                         co.dict_oper.create_sorted_dict_view(
-                             self.parameters['dynamic_params'])}))
+             co.dict_oper.create_sorted_dict_view(
+                 self.parameters['dynamic_params'])}))
         ids.append('Buffered Features')
-        if self.parameters['action_type']!='Passive':
+        if self.parameters['action_type'] != 'Passive':
             if (self.parameters['sparsecoded'] == 'Buffer'
                     and (self.coders[count] is not None or assume_existence)):
                 file_ids.append(co.dict_oper.create_sorted_dict_view(
                     {'SparseBufferParams':
-                                 co.dict_oper.create_sorted_dict_view(
-                                     self.parameters[
-                    'features_params'][descriptor]['sparse_params'])}))
+                     co.dict_oper.create_sorted_dict_view(
+                         self.parameters[
+                             'features_params'][descriptor]['sparse_params'])}))
                 ids.append('Sparse Buffers')
             if not (self.parameters['sparsecoded'] == 'Buffer'
                     and self.coders[count] is None) or assume_existence:
                 if self.parameters['PTPCA']:
                     file_ids.append(co.dict_oper.create_sorted_dict_view(
                         {'PTPCAParams':
-                                     co.dict_oper.create_sorted_dict_view(
-                                         self.parameters[
-                    'PTPCA_params'])}))
+                         co.dict_oper.create_sorted_dict_view(
+                             self.parameters[
+                                 'PTPCA_params'])}))
                     ids.append('PTPCA')
         return ids, file_ids
-
 
     def add_action(self, data=None,
                    mv_obj_fold_name=None,
@@ -605,35 +552,36 @@ class Actions(object):
                     try:
                         nloaded_file_id = nloaded_ids[_id]
                         nloaded_id = _id
-                    except:
+                    except BaseException:
                         continue
                     if nloaded_id == 'Features':
                         if not readimagedata:
                             (imgs, masks, sync, angles,
                              centers,
                              samples_inds) = co.imfold_oper.load_frames_data(
-                                 data,mv_obj_fold_name,
+                                 data, mv_obj_fold_name,
                                  hnd_mk_fold_name, masks_needed,
-                                 derot_centers,derot_angles)
+                                 derot_centers, derot_angles)
                             if 'raw' in to_visualize:
                                 montage = co.draw_oper.create_montage(imgs[:],
                                                                       max_ims=n_vis_frames,
                                                                       draw_num=False)
                                 fig = plt.figure()
                                 tmp_axes = fig.add_subplot(111)
-                                tmp_axes.imshow(montage[:,:,:-1])
+                                tmp_axes.imshow(montage[:, :, :-1])
                                 plt.axis('off')
                                 fig.savefig('frames_sample.pdf',
                                             bbox_inches='tight')
                                 to_visualize.remove('raw')
                                 if (not to_visualize and
-                                    exit_after_visualization):
+                                        exit_after_visualization):
                                     return
                             for cnt in range(len(samples_indices)):
                                 samples_indices[cnt] = samples_inds.copy()
                             readimagedata = True
                         if not self.frames_preproc:
-                            self.frames_preproc = FramesPreprocessing(self.parameters)
+                            self.frames_preproc = FramesPreprocessing(
+                                self.parameters)
                         else:
                             self.frames_preproc.reset()
                         if not self.descriptors[descriptor]:
@@ -641,11 +589,11 @@ class Actions(object):
                                 descriptor] = self.available_descriptors[
                                     descriptor](parameters=self.parameters,
                                                 datastreamer=self.frames_preproc,
-                                               viewer=(
-                                                   FeatureVisualization(
-                                                    offline_vis=offline_vis,
-                                                    n_frames=len(imgs)) if
-                                               to_visualize else None))
+                                                viewer=(
+                                                    FeatureVisualization(
+                                                        offline_vis=offline_vis,
+                                                        n_frames=len(imgs)) if
+                                                    to_visualize else None))
                         else:
                             self.descriptors[descriptor].reset()
                         features[count] = []
@@ -658,18 +606,21 @@ class Actions(object):
                             cv2.waitKey(30)
                             '''
                             check = self.frames_preproc.update(img,
-                                                  sync[img_count],
-                                                  mask=masks[img_count],
-                                                  angle=angles[img_count],
-                                                          center=centers[img_count])
+                                                               sync[img_count],
+                                                               mask=masks[img_count],
+                                                               angle=angles[img_count],
+                                                               center=centers[img_count])
                             if 'features' in to_visualize:
-                                self.descriptors[descriptor].set_curr_frame(img_count)
+                                self.descriptors[descriptor].set_curr_frame(
+                                    img_count)
                             if check:
 
-                                extracted_features = self.descriptors[descriptor].extract()
+                                extracted_features = self.descriptors[descriptor].extract(
+                                )
                                 if extracted_features is not None:
                                     features[count].append(extracted_features)
-                                    median_depth[count].append(np.median(self.frames_preproc.curr_patch))
+                                    median_depth[count].append(
+                                        np.median(self.frames_preproc.curr_patch))
                                 else:
                                     features[count].append(None)
                                     median_depth[count].append(None)
@@ -677,11 +628,11 @@ class Actions(object):
                                     self.descriptors[descriptor].visualize()
                                     self.descriptors[descriptor].draw()
                                     if (len(to_visualize) == 1 and
-                                        exit_after_visualization):
+                                            exit_after_visualization):
                                         continue
                             else:
                                 if (len(to_visualize) == 1
-                                    and exit_after_visualization):
+                                        and exit_after_visualization):
                                     self.descriptors[descriptor].draw()
                                     continue
                                 features[count].append(None)
@@ -691,25 +642,25 @@ class Actions(object):
                         times['Features'] += self.descriptors[descriptor].time
                         if self.preproc_time is None:
                             self.preproc_time = []
-                        self.preproc_time+=self.frames_preproc.time
+                        self.preproc_time += self.frames_preproc.time
                         loaded_ids[nloaded_id] = nloaded_file_id
                         co.file_oper.save_labeled_data([nloaded_id]
-                                                       +loaded_ids[nloaded_id]+
+                                                       + loaded_ids[nloaded_id] +
                                                        [self.name],
                                                        [np.array(features[count]),
                                                         (sync,
-                                                        samples_indices[count]),
+                                                         samples_indices[count]),
                                                         median_depth[count],
                                                         times])
                     elif nloaded_id == 'Sparse Features':
                         if features[count] is None:
                             [features[count],
                              (sync,
-                             samples_indices[count]),
+                              samples_indices[count]),
                              median_depth[count],
                              times] = co.file_oper.load_labeled_data(
-                                 [ids[ids.index(nloaded_id)-1]]+
-                                 loaded_ids[ids[ids.index(nloaded_id)-1]]+[self.name])
+                                 [ids[ids.index(nloaded_id) - 1]] +
+                                 loaded_ids[ids[ids.index(nloaded_id) - 1]] + [self.name])
                         if self.coders[count] is None:
                             self.load_sparse_coder(count)
                         features[count] = self.coders[
@@ -720,11 +671,11 @@ class Actions(object):
                             count].time
                         loaded_ids[nloaded_id] = nloaded_file_id
                         co.file_oper.save_labeled_data([nloaded_id] +
-                                                       loaded_ids[nloaded_id]+
+                                                       loaded_ids[nloaded_id] +
                                                        [self.name],
                                                        [np.array(features[count]),
                                                         (sync,
-                                                        samples_indices[count]),
+                                                         samples_indices[count]),
                                                         median_depth[count],
                                                         times])
                     elif nloaded_id == 'Buffered Features':
@@ -732,10 +683,10 @@ class Actions(object):
                             [features[
                                 count],
                              (sync,
-                             samples_indices[count]),
+                              samples_indices[count]),
                              median_depth[count],
-                            times] = co.file_oper.load_labeled_data(
-                                [ids[ids.index(nloaded_id) -1]] +
+                             times] = co.file_oper.load_labeled_data(
+                                [ids[ids.index(nloaded_id) - 1]] +
                                 loaded_ids[
                                     ids[ids.index(nloaded_id) - 1]] +
                                 [self.name])
@@ -745,36 +696,39 @@ class Actions(object):
                             self.buffer_class[count].update_buffer_info(
                                 sync[sample_count],
                                 samples_indices[count][sample_count],
-                                samples = features[count][sample_count],
+                                samples=features[count][sample_count],
                                 depth=median_depth[count][sample_count])
                             self.buffer_class[count].add_buffer()
-                        features[count],samples_indices[count],median_depth[count] = self.buffer_class[count].extract_buffer_list()
+                        features[count], samples_indices[count], median_depth[count] = self.buffer_class[count].extract_buffer_list(
+                        )
                         loaded_ids[nloaded_id] = nloaded_file_id
-                        co.file_oper.save_labeled_data([nloaded_id]+loaded_ids[nloaded_id]
-                                                       +[self.name],
+                        co.file_oper.save_labeled_data([nloaded_id] + loaded_ids[nloaded_id]
+                                                       + [self.name],
                                                        [np.array(features[count]),
                                                         samples_indices[count],
                                                         median_depth[count],
-                                                         times])
+                                                        times])
                     elif nloaded_id == 'Sparse Buffers':
                         if features[count] is None:
                             [features[count],
                              samples_indices[count],
                              median_depth[count],
                              times] = co.file_oper.load_labeled_data(
-                                ['Buffered Features']+loaded_ids['Buffered Features']
-                            +[self.name])
+                                ['Buffered Features'] +
+                                loaded_ids['Buffered Features']
+                                + [self.name])
                         if self.coders[count] is None:
                             self.load_sparse_coder(count)
-                        features[count] = self.coders[count].multicode(features[count])
+                        features[count] = self.coders[count].multicode(
+                            features[count])
                         if 'Sparse Buffer' not in times:
                             times['Sparse Buffer'] = []
                         times['Sparse Buffer'] += self.coders[
                             count].time
                         loaded_ids[nloaded_id] = nloaded_file_id
-                        co.file_oper.save_labeled_data([nloaded_id] + 
+                        co.file_oper.save_labeled_data([nloaded_id] +
                                                        loaded_ids[nloaded_id]
-                                                       +[self.name],
+                                                       + [self.name],
                                                        [np.array(features[count]),
                                                         samples_indices[count],
                                                         median_depth[count],
@@ -785,9 +739,9 @@ class Actions(object):
                              samples_indices[count],
                              median_depth[count],
                              times] = co.file_oper.load_labeled_data(
-                                [ids[ids.index('PTPCA')-1]] +
+                                [ids[ids.index('PTPCA') - 1]] +
                                  loaded_ids[ids[ids.index('PTPCA') - 1]]
-                                +[self.name])
+                                + [self.name])
                         self.buffer_class[count].reset()
                         features[count] = [
                             self.buffer_class[count].perform_post_time_pca(
@@ -798,7 +752,7 @@ class Actions(object):
                             count].time
                         loaded_ids[nloaded_id] = nloaded_file_id
                         co.file_oper.save_labeled_data([nloaded_id] +
-                                                       loaded_ids[nloaded_id]+
+                                                       loaded_ids[nloaded_id] +
                                                        [self.name],
                                                        [np.array(
                                                            features[count]),
@@ -808,9 +762,9 @@ class Actions(object):
                 if features[count] is None:
                     try:
                         [features[count],
-                        samples_indices[count],
-                        median_depth[count],
-                        times] = loaded_data
+                         samples_indices[count],
+                         median_depth[count],
+                         times] = loaded_data
                         if isinstance(samples_indices[count], tuple):
                             samples_indices[count] = samples_indices[count][-1]
                     except TypeError:
@@ -825,18 +779,18 @@ class Actions(object):
                         self.all_data[count] = np.array(finite_features)
                     else:
                         self.all_data[count] = np.concatenate((self.all_data[count],
-                            finite_features),axis=0)
+                                                               finite_features), axis=0)
             try:
                 if np.unique([len(feat) for feat in features]).size == 1:
                     valid = True
                     redo = False
                 else:
                     self.logger.warning('Unequal samples dimension of loaded features:'
-                                + str([len(feat) for feat in features])
-                                +' ...repeating')
+                                        + str([len(feat) for feat in features])
+                                        + ' ...repeating')
                     redo = True
             except Exception as e:
-                for count,feat in enumerate(features):
+                for count, feat in enumerate(features):
                     if feat is None:
                         print 'Features[' + str(count) + '] is None'
                 self.logger.warning(str(e))
@@ -844,10 +798,10 @@ class Actions(object):
                 pass
         return (features,
                 samples_indices[np.argmax([len(sample) for sample in
-                                                        samples_indices])],
+                                           samples_indices])],
                 median_depth[np.argmax([len(median_depth) for
-                                                 median_depth in
-                                                 samples_indices])],
+                                        median_depth in
+                                        samples_indices])],
                 self.name, self.coders, self.descriptors_id)
 
     def save(self, save_path=None):
@@ -895,13 +849,13 @@ class ActionsSparseCoding(object):
         '''
         try:
             self.sparse_coders[feat_count].display = display
-        except:
+        except BaseException:
             self.sparse_coders[feat_count] = sc.SparseCoding(
                 sparse_dim_rat=self.sparse_dim_rat[feat_count],
                 name=str(feat_count))
             self.sparse_coders[feat_count].display = display
             self.logger.info('Training Dictionaries using data of shape:'
-                     + str(data.shape))
+                             + str(data.shape))
             if save_traindata:
                 savepath = ('SparseTraining-' +
                             self.parameters['descriptors'][
@@ -982,25 +936,11 @@ class ActionsSparseCoding(object):
             pickle.dump((self.sparse_coders, self.codebooks), output, -1)
 
 
-def grad_angles(patch):
-    '''
-    Compute gradient angles on image patch for GHOG
-    '''
-    y_size = 30
-    x_size = int(y_size/float(np.shape(patch)[0])
-                               * np.shape(patch)[1])
-    patch = cv2.resize(patch, (x_size, y_size),
-                               interpolation=cv2.INTER_NEAREST)
-    grady, gradx = np.gradient(patch)
-    ang = np.arctan2(grady, gradx)
-    #ang[ang < 0] = ang[ang < 0] + pi
-
-    return ang.ravel()  # returns values 0 to pi
 
 
 class FramesPreprocessing(object):
 
-    def __init__(self, parameters,reset_time=True):
+    def __init__(self, parameters, reset_time=True):
         self.logger = logging.getLogger(self.__class__.__name__)
         initialize_logger(self.logger)
         self.parameters = parameters
@@ -1035,7 +975,7 @@ class FramesPreprocessing(object):
         if reset_time:
             self.time = []
 
-    def reset(self,reset_time=False):
+    def reset(self, reset_time=False):
         self.__init__(self.parameters, reset_time=reset_time)
 
     @timeit
@@ -1050,7 +990,7 @@ class FramesPreprocessing(object):
                 img)
         else:
             cnt = None
-            #try:
+            # try:
             if masks_needed and mask is None:
                 mask1 = cv2.morphologyEx(
                     img.copy(), cv2.MORPH_OPEN, self.kernel)
@@ -1066,8 +1006,8 @@ class FramesPreprocessing(object):
                     if self.skeleton is None:
                         self.skeleton = hsa.FindArmSkeleton(img.copy())
                     skeleton_found = self.skeleton.run(img, cnt,
-                                             'longest_ray')
-                    if skeleton_found:    
+                                                       'longest_ray')
+                    if skeleton_found:
                         mask = self.skeleton.hand_mask
                         last_link = (self.skeleton.skeleton[-1][1] -
                                      self.skeleton.skeleton[-1][0])
@@ -1076,7 +1016,6 @@ class FramesPreprocessing(object):
                         center = self.skeleton.hand_start
                     else:
                         img = None
-
 
             if img is not None and not isderotated and angle is None:
                 raise Exception('mask is not None, derotation is True ' +
@@ -1089,7 +1028,7 @@ class FramesPreprocessing(object):
                                                  img)
                 imgs = [self.prev_full_depth_im,
                         self.curr_full_depth_im]
-                #if self.prev_full_depth_im is None:
+                # if self.prev_full_depth_im is None:
                 #    return False
             else:
                 imgs = [img]
@@ -1125,7 +1064,7 @@ class FramesPreprocessing(object):
                 # DEBUGGING
                 # cv2.imshow('test',((hand_patch)%255).astype(np.uint8))
                 # cv2.waitKey(10)
-                #if hand_patch is None:
+                # if hand_patch is None:
                 #    return False
                 (self.prev_depth_im,
                  self.curr_depth_im) = (self.curr_depth_im,
@@ -1143,7 +1082,7 @@ class FramesPreprocessing(object):
                     if not any_none:
                         (hand_patch_original,
                          hand_patch_pos_original,
-                        self.hand_contour_original) = prepare_im(
+                         self.hand_contour_original) = prepare_im(
                             im)
                     else:
                         (hand_patch_original,
@@ -1156,451 +1095,9 @@ class FramesPreprocessing(object):
                      self.curr_patch_pos_original) = (
                          self.curr_patch_pos_original,
                          hand_patch_pos_original)
-            #except ValueError:
+            # except ValueError:
             #    return False
         return not (any_none or self.curr_patch is None)
-
-
-class Descriptor(object):
-    '''
-    <parameters>: dictionary with parameters
-    <datastreamer> : FramesPreprocessing Class
-    <viewer>: FeatureVisualization Class
-    '''
-
-
-    def __init__(self, parameters, datastreamer, viewer=None,
-                 reset_time=True):
-        self.name = ''
-        self.features = None
-        self.roi = None
-        self.roi_original = None
-        self.parameters = parameters
-        self.plots = None
-        self.edges = None
-        self.ds = datastreamer
-        self.action_type = parameters['action_type']
-        if reset_time:
-            self.time = []
-        self.view = viewer
-
-
-    def reset(self, visualize=False, reset_time=False):
-        self.__init__(self.parameters, self.ds, visualize,
-                      reset_time=reset_time)
-
-    def draw_flow(self, img, flow, step=16):
-        h, w = img.shape[:2]
-        y, x = np.mgrid[step / 2:h:step, step /
-                        2:w:step].reshape(2, -1).astype(int)
-        fx, fy = flow[y, x].T
-        lines = np.vstack([x, y, x + fx, y + fy]).T.reshape(-1, 2, 2)
-        lines = np.int32(lines + 0.5)
-        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        cv2.polylines(vis, lines, 0, (0, 255, 0))
-        for (x1, y1), (x2, y2) in lines:
-            cv2.circle(vis, (x1, y1), 1, (0, 255, 0), -1)
-        return vis
-
-    def draw_hsv(self, flow):
-        h, w = flow.shape[:2]
-        fx, fy = flow[:, :, 0], flow[:, :, 1]
-        ang = np.arctan2(fy, fx) + np.pi
-        v = np.sqrt(fx * fx + fy * fy)
-        hsv = np.zeros((h, w, 3), np.uint8)
-        hsv[..., 0] = ang * (180 / np.pi / 2)
-        hsv[..., 1] = 255
-        hsv[..., 2] = np.minimum(v * 4, 255)
-        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-        return bgr
-
-    def convert_to_uint8(self, patch, _min=None, _max=None):
-        # We keep 0 value to denote pixels outside of mask and use the rest band
-        # for the other depth values
-        uint8 = np.zeros(patch.shape, np.uint8)
-        nnz_pixels_mask = patch > 0
-        nnz_pixels = patch[patch > 0]
-        uint8[nnz_pixels_mask] = ((nnz_pixels - _min) / float(
-            _max - _min) * 254 + 1).astype(np.uint8)
-        return uint8
-
-    def visualize_projection(self):
-        self.view.plot_3d_projection(self.roi,
-                                     self.ds.prev_roi_patch,
-                                     self.ds.curr_roi_patch)
-
-    def visualize_roi(self):
-        self.view.plot_2d_patches(self.ds.prev_roi_patch,
-                                  self.ds.curr_roi_patch)
-
-    def visualize(self):
-        self.view.plot(self.name.lower(), self.features, self.edges)
-
-    def draw(self):
-        self.view.draw()
-
-    def plot(self):
-        self.view.plot()
-
-    def set_curr_frame(self, frame):
-        self.view.set_curr_frame(frame)
-
-    def find_outliers(self, data, m=2.):
-        '''
-        median of data must not be 0
-        '''
-        d = np.abs(data - np.median(data))
-        mdev = np.median(d)
-        s = d / mdev if mdev > 0 else 0
-        return s > m
-
-    def find_roi(self, prev_patch, curr_patch, prev_patch_pos, curr_patch_pos):
-        '''
-        Find unified ROI, concerning 2 consecutive frames
-        '''
-        if prev_patch is None:
-            prev_patch = curr_patch
-            prev_patch_pos = curr_patch_pos
-        roi = np.array([[
-            min(prev_patch_pos[0], curr_patch_pos[0]),
-            max((prev_patch.shape[0] + prev_patch_pos[0],
-                 curr_patch.shape[0] + curr_patch_pos[0]))],
-            [min(prev_patch_pos[1], curr_patch_pos[1]),
-             max(prev_patch.shape[1] + prev_patch_pos[1],
-                 curr_patch.shape[1] + curr_patch_pos[1])]])
-        return roi
-
-    def extract(self):
-        pass
-
-
-class Descriptor3DHOF(Descriptor):
-
-    def __init__(self, *args, **kwargs):
-        Descriptor.__init__(self, *args, **kwargs)
-        self.name = '3dhof'
-        self.logger = logging.getLogger(self.__class__.__name__)
-        initialize_logger(self.logger)
-        self.bin_size = co.CONST['3DHOF_bin_size']
-        self.hist = SpaceHistogram()
-
-
-    def compute_scene_flow(self):
-        '''
-        Computes scene flow for 3DHOF
-        '''
-        if self.ds.prev_depth_im is None or self.ds.curr_depth_im is None:
-            return None
-        roi = self.roi
-        prev_depth_im = self.ds.prev_depth_im
-        curr_depth_im = self.ds.curr_depth_im
-        self.prev_roi_patch = prev_depth_im[roi[0, 0]:roi[0, 1],
-                                            roi[1, 0]:roi[1, 1]].astype(float)
-        self.curr_roi_patch = curr_depth_im[roi[0, 0]:roi[0, 1],
-                                            roi[1, 0]:roi[1, 1]].astype(float)
-        curr_z = self.curr_roi_patch
-        prev_z = self.prev_roi_patch
-        # DEBUGGING
-        # cv2.imshow('curr_roi_patch',(self.curr_roi_patch_original).astype(np.uint8))
-        # cv2.waitKey(10)
-        prev_nnz_mask = self.prev_roi_patch > 0
-        curr_nnz_mask = self.curr_roi_patch > 0
-        nonzero_mask = prev_nnz_mask * curr_nnz_mask
-        if np.sum(nonzero_mask) == 0:
-            return None
-        _max = max(np.max(self.prev_roi_patch[prev_nnz_mask]),
-                   np.max(self.curr_roi_patch[curr_nnz_mask]))
-        _min = min(np.min(self.prev_roi_patch[prev_nnz_mask]),
-                   np.min(self.curr_roi_patch[curr_nnz_mask]))
-        prev_uint8 = self.convert_to_uint8(self.prev_roi_patch,
-                                           _min=_min, _max=_max)
-        curr_uint8 = self.convert_to_uint8(self.curr_roi_patch,
-                                           _min=_min, _max=_max)
-        flow = cv2.calcOpticalFlowFarneback(prev_uint8,
-                                            curr_uint8, None,
-                                            0.3, 3, 40,
-                                            3, 7, 1.5, 0)
-        # DEBUGGING
-        '''
-        cv2.imshow('flow HSV', self.draw_hsv(flow))
-        cv2.imshow('prev',  prev_uint8)
-        cv2.imshow('flow', self.draw_flow(curr_uint8, flow, step = 14))
-        cv2.waitKey(500)
-        '''
-        y_old, x_old = np.mgrid[:self.prev_roi_patch.shape[0],
-                                :self.prev_roi_patch.shape[1]].reshape(
-                                    2, -1).astype(int)
-        mask = prev_z[y_old, x_old] > 0
-        y_old = y_old[mask.ravel()]
-        x_old = x_old[mask.ravel()]
-        fx, fy = flow[y_old, x_old].T
-        y_new, x_new = ((y_old + fy).astype(int), (x_old + fx).astype(int))
-        y_new = np.minimum(curr_z.shape[0] - 1, y_new)
-        y_new = np.maximum(0, y_new)
-        x_new = np.minimum(curr_z.shape[1] - 1, x_new)
-        x_new = np.maximum(0, x_new)
-        mask = (self.find_outliers(curr_z[y_new, x_new], 5)
-                + self.find_outliers(prev_z[y_old, x_old], 5)) == 0
-        if np.size(mask)<10:
-            return None
-        y_new = y_new[mask]
-        y_old = y_old[mask]
-        x_new = x_new[mask]
-        x_old = x_old[mask]
-        princ_coeff = co.pol_oper.derotate_points(
-            self.ds.curr_depth_im,
-            np.array([PRIM_Y - self.roi_original[0, 0],
-                      PRIM_X - self.roi_original[0, 1]]),
-            self.ds.angle,
-            self.ds.center)
-        y_true_old = ((y_old - princ_coeff[0]) *
-                      prev_z[y_old,
-                             x_old] / float(FLNT))
-        x_true_old = ((x_old - princ_coeff[1]) *
-                      prev_z[y_old,
-                             x_old] / float(FLNT))
-        y_true_new = ((y_new - princ_coeff[0]) *
-                      curr_z[y_new,
-                             x_new] / float(FLNT))
-        x_true_new = ((x_new - princ_coeff[1]) *
-                      curr_z[y_new,
-                             x_new] / float(FLNT))
-        # DEBUGGING
-        #cv2.imshow('test', (self.curr_roi_patch).astype(np.uint8))
-        # cv2.waitKey(10)
-        dx = x_true_new - x_true_old
-        dy = y_true_new - y_true_old
-        dz = curr_z[y_new, x_new] - prev_z[y_old, x_old]
-
-        return np.concatenate((dx.reshape(-1, 1),
-                               dy.reshape(-1, 1),
-                               dz.reshape(-1, 1)), axis=1)
-    @timeit
-    def extract(self,bin_size=None):
-        '''
-        Compute 3DHOF features
-        '''
-        self.roi = self.find_roi(self.ds.prev_patch, self.ds.curr_patch,
-                                 self.ds.prev_patch_pos, self.ds.curr_patch_pos)
-        self.roi_original = self.find_roi(
-            self.ds.prev_patch_original, self.ds.curr_patch_original,
-            self.ds.prev_patch_pos_original,
-            self.ds.curr_patch_pos_original)
-        if bin_size is None:
-            self.hist.bin_size = self.bin_size
-        self.hist.range = [[-1.0, 1.0], [-1.0, 1.0], [-1.0, 1.0]]
-        disp = self.compute_scene_flow()
-        if disp is None:
-            return None
-        disp_norm = np.sqrt((disp[:, 0] * disp[:, 0] + disp[:, 1] *
-                             disp[:, 1] + disp[:, 2] * disp[:, 2]))[:, None]
-        disp_norm[disp_norm == 0] = 1
-        disp = disp / disp_norm.astype(float)
-        hist, edges = self.hist.hist_data(disp)
-        self.edges = edges
-        self.features = hist / float(np.sum(hist))
-        self.features = self.features.ravel()
-        return self.features
-
-
-class DescriptorZHOF(Descriptor):
-
-    def __init__(self, *args, **kwargs):
-        Descriptor.__init__(self, *args, **kwargs)
-        self.name = 'zhof'
-        self.logger = logging.getLogger(self.__class__.__name__)
-        initialize_logger(self.logger)
-        self.bin_size = co.CONST['ZHOF_bin_size']
-        self.hist = SpaceHistogram()
-
-
-    def z_flow(self, prev_depth_im, curr_depth_im):
-        '''
-        Computes vertical displacement to the camera, using static frame
-        xy-coordinates and changing z ones.
-        '''
-        roi = self.roi
-        self.prev_roi_patch = prev_depth_im[
-            roi[0, 0]:roi[0, 1],
-            roi[1, 0]:roi[1, 1]].astype(float)
-        self.curr_roi_patch = curr_depth_im[
-            roi[0, 0]:roi[0, 1],
-            roi[1, 0]:roi[1, 1]].astype(float)
-        '''
-        y_size = 30
-        resize_rat =y_size/float(np.shape(self.prev_roi_patch)[0]) 
-        x_size = int(resize_rat * np.shape(self.prev_roi_patch)[1])
-        self.prev_roi_patch = cv2.resize(self.prev_roi_patch, (x_size, y_size),
-                               interpolation=cv2.INTER_NEAREST)
-        self.curr_roi_patch = cv2.resize(self.curr_roi_patch, (x_size, y_size),
-                               interpolation=cv2.INTER_NEAREST)
-        '''
-        resize_rat = 1
-        nonzero_mask = (self.prev_roi_patch * self.curr_roi_patch) > 0
-        if np.sum(nonzero_mask) == 0:
-            return None
-        '''
-        #DEBUGGING
-        cv2.imshow('test_prev',(self.prev_roi_patch%255).astype(np.uint8))
-        cv2.imshow('test_curr', (self.curr_roi_patch%255).astype(np.uint8))
-        cv2.waitKey(30)
-        '''
-        try:
-            yx_coords = (find_nonzero(
-            nonzero_mask.astype(np.uint8)).astype(float)/resize_rat
-            -
-            np.array([[PRIM_Y - self.roi[0, 0],
-                       PRIM_X - self.roi[1, 0]]]))
-        except ValueError:
-            return None
-        prev_z_coords = self.prev_roi_patch[nonzero_mask][:,
-                                                          None].astype(float)
-        curr_z_coords = self.curr_roi_patch[nonzero_mask][:,
-                                                          None].astype(float)
-        dz_coords = (curr_z_coords - prev_z_coords).astype(float)
-        # invariance to environment height variance:
-        dz_outliers = self.find_outliers(dz_coords, 3.).ravel()
-        dz_coords = dz_coords[dz_outliers == 0]
-        yx_coords = yx_coords[dz_outliers == 0, :]
-        yx_coords_in_space = (yx_coords * dz_coords / FLNT)
-        return np.concatenate((yx_coords_in_space,
-                               dz_coords), axis=1)
-
-    @timeit
-    def extract(self, bin_size=None):
-        '''
-        Compute ZHOF features
-        '''
-        '''
-        #DEBUGGING
-        if self.ds.prev_patch_pos is not None:
-            print 'extract',self.ds.prev_patch.shape, self.ds.curr_patch.shape
-        '''
-        if self.ds.prev_patch is None or self.ds.curr_patch is None:
-            return None
-        '''
-        #DEBUGGING
-        print self.ds.prev_patch_pos, self.ds.curr_patch_pos
-        exit()
-        '''
-        if self.ds.curr_count - self.ds.prev_count > co.CONST[
-            'min_frame_count_diff']:
-            return None
-        self.roi = self.find_roi(self.ds.prev_patch, self.ds.curr_patch,
-                                 self.ds.prev_patch_pos, self.ds.curr_patch_pos)
-        self.roi_original = self.find_roi(
-            self.ds.prev_patch_original, self.ds.curr_patch_original,
-            self.ds.prev_patch_pos_original,
-            self.ds.curr_patch_pos_original)
-        '''
-        #DEBUGGING
-        print self.roi
-        '''
-        if bin_size is None:
-            self.hist.bin_size = self.bin_size
-        else:
-            self.hist.bin_size = self.bin_size
-        self.hist.range = [[-1.0, 1.0], [-1.0, 1.0], [-1.0, 1.0]]
-        disp = self.z_flow(self.ds.prev_depth_im, self.ds.curr_depth_im)
-        if disp is None:
-            return None
-        # print disp.max(axis=0), disp.min(axis=0)
-        disp_norm = np.sqrt((disp[:, 0] * disp[:, 0] + disp[:, 1] *
-                             disp[:, 1] + disp[:, 2] * disp[:, 2]))[:, None]
-        disp_norm[disp_norm == 0] = 1
-        disp = disp / disp_norm.astype(float)
-        # print np.unique(np.around(disp,1))
-        hist, edges = self.hist.hist_data(disp)
-        self.edges = edges
-        features = hist / float(np.sum(hist))
-        features = features.ravel()
-        return features
-
-
-class DescriptorGHOG(Descriptor):
-
-    def __init__(self, *args, **kwargs):
-        Descriptor.__init__(self, *args, **kwargs)
-        self.name = 'ghog'
-        self.logger = logging.getLogger(self.__class__.__name__)
-        initialize_logger(self.logger)
-        self.bin_size = co.CONST['GHOG_bin_size']
-        self.hist = SpaceHistogram()
-
-
-    @timeit
-    def extract(self, bin_size=None):
-        '''
-        Compute GHOG features
-        '''
-        im_patch = self.ds.curr_patch.astype(int)
-        if bin_size is None:
-            self.hist.bin_size = self.bin_size
-        else:
-            self.hist.bin_size = bin_size
-        # DEBUGGING: added -pi (check grad_angles too)
-        self.hist.range = [[-pi, pi]]
-        gradients = grad_angles(im_patch)
-        hist, edges = self.hist.hist_data(gradients)
-        self.edges = edges
-        #hist[0] = max(0, hist[0] - np.sum(im_patch==0))
-        hist = hist / float(np.sum(hist))
-
-        return hist
-
-
-class Descriptor3DXYPCA(Descriptor):
-
-    def __init__(self, *args, **kwargs):
-        Descriptor.__init__(self, *args, **kwargs)
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.name = '3dxypca'
-        initialize_logger(self.logger)
-        self.pca_resize_size = co.CONST['3DXYPCA_size']
-        self.edges = [['X' + str(cnt) for cnt in range(self.pca_resize_size)]+
-                      ['Y' + str(cnt) for cnt in range(self.pca_resize_size)]]
-
-    @timeit
-    def extract(self, resize_size=None):
-        '''
-        Compute 3DXYPCA features
-        '''
-        if resize_size is not None:
-            self.pca_resize_size = resize_size
-        _, pca_along_2 = cv2.PCACompute(
-            cv2.findNonZero(self.ds.curr_patch.astype(np.uint8)).squeeze().
-            astype(float),
-            np.array([]), maxComponents=1)
-        rot_angle = np.arctan2(pca_along_2[0][1], pca_along_2[0][0])
-        patch = co.pol_oper.derotate(self.ds.curr_patch, rot_angle,
-                                     (self.ds.curr_patch.shape[0] / 2,
-                                      self.ds.curr_patch.shape[1] / 2))
-        # DEBUGGING
-        # cv2.imshow('test',patch.astype(np.uint8))
-        # cv2.waitKey(10)
-        patch_res = cv2.resize(patch, (self.pca_resize_size,
-                                       self.pca_resize_size),
-                               interpolation=cv2.INTER_NEAREST)
-        patch_res_mask = patch_res == 0
-
-        masked_array = np.ma.array(patch_res, mask=patch_res_mask)
-        masked_mean_0 = np.ma.mean(masked_array, axis=0)
-        masked_mean_1 = np.ma.mean(masked_array, axis=1)
-        cor_patch_res_0 = patch_res.copy()
-        cor_patch_res_1 = patch_res.copy()
-        cor_patch_res_0[patch_res_mask] = np.tile(masked_mean_0[None,
-                                                                :], (patch_res.shape[0], 1))[
-            patch_res_mask]
-        cor_patch_res_1[patch_res_mask] = np.tile(masked_mean_1[:, None], (
-            1, patch_res.shape[1]))[
-            patch_res_mask]
-        _, pca_along_0 = cv2.PCACompute(
-            cor_patch_res_0, np.array(
-                []), maxComponents=1)
-        _, pca_along_1 = cv2.PCACompute(cor_patch_res_1.T, np.array([]),
-                                        maxComponents=1)
-        features = np.concatenate((pca_along_0[0], pca_along_1[0]), axis=0)
-        return features
 
 
 class FeatureVisualization(object):
@@ -1698,6 +1195,7 @@ class FeatureVisualization(object):
                     fig=self.fig,
                     all_axes=self.hof_plots)
                 self.hof = self.convert_plot2array(self.fig)
+
     def plot_xypca(self, pca_features, xticklabels):
         if self.to_plot():
             width = 0.35
@@ -1729,7 +1227,9 @@ class FeatureVisualization(object):
                                         curr_z_coords[curr_z_coords != 0],
                                         zdir='z', s=4, c='g', depthshade=False, alpha=0.5)
             if self.offline_vis:
-                self.patches3d.append(self.convert_plot2array(self.patches3d_fig))
+                self.patches3d.append(
+                    self.convert_plot2array(
+                        self.patches3d_fig))
             '''
             zprevmin,zprevmax=self.patches3d_plot.get_zlim()
             yprevmin,yprevmax=self.patches3d_plot.get_ylim()
@@ -1740,7 +1240,8 @@ class FeatureVisualization(object):
             self.patches3d_plot.set_xlim([minlim,maxlim])
             self.patches3d_plot.set_ylim([minlim,maxlim])
             '''
-    def convert_plot2array(self,fig):
+
+    def convert_plot2array(self, fig):
         data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
         data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
 
@@ -1771,7 +1272,9 @@ class FeatureVisualization(object):
                                         depthshade=False,
                                         alpha=0.5)
             if self.offline_vis:
-                self.patches3d.append(self.convert_plot2array(self.patches3d_fig))
+                self.patches3d.append(
+                    self.convert_plot2array(
+                        self.patches3d_fig))
 
     def plot_2d_patches(self, prev_roi_patch, curr_roi_patch):
         self.patches2d_plot.clear()
@@ -1786,7 +1289,7 @@ class FeatureVisualization(object):
             fig.canvas.draw()
             try:
                 fig.canvas.start_event_loop(30)
-            except:
+            except BaseException:
                 time.sleep(1)
 
     def draw(self):
@@ -1798,11 +1301,11 @@ class FeatureVisualization(object):
                 self._draw_single(self.fig)
                 self._draw_single(self.patches3d_fig)
                 self._draw_single(self.patches2d_fig)
-            
+
             if self.curr_frame == self.n_frames - 1:
                 import pickle
-                with open('visualized_features','w') as out:
-                    pickle.dump((self.hof,self.hogs,
+                with open('visualized_features', 'w') as out:
+                    pickle.dump((self.hof, self.hogs,
                                  self.patches2d,
                                  self.patches3d), out)
                 tmp_fig = plt.figure()
@@ -1810,31 +1313,29 @@ class FeatureVisualization(object):
                 if self.hogs:
                     hogs_im = co.draw_oper.create_montage(
                         self.hogs, draw_num=False)
-                    tmp_axes.imshow(hogs_im[:,:,:3])
+                    tmp_axes.imshow(hogs_im[:, :, :3])
                     plt.axis('off')
                     tmp_fig.savefig('ghog.pdf', bbox_inches='tight')
                 if self.hof is not None:
-                    tmp_axes.imshow(self.hof[:,:,:3])
+                    tmp_axes.imshow(self.hof[:, :, :3])
                     plt.axis('off')
                     tmp_fig.savefig('3dhof.pdf', bbox_inches='tight')
                 if self.patches2d:
                     patches2d_im = co.draw_oper.create_montage(
                         self.patches2d, draw_num=False)
-                    tmp_axes.imshow(patches2d_im[:,:,:3])
+                    tmp_axes.imshow(patches2d_im[:, :, :3])
                     plt.axis('off')
                     tmp_fig.savefig('patches2d.pdf', bbox_inches='tight')
                 if self.patches3d:
                     patches3d_im = co.draw_oper.create_montage(
                         self.patches3d, draw_num=False)
-                    tmp_axes.imshow(patches3d_im[:,:,:3])
+                    tmp_axes.imshow(patches3d_im[:, :, :3])
                     plt.axis('off')
                     tmp_fig.savefig('patches3d.pdf', bbox_inches='tight')
                 if self.xypca:
-                    tmp_axes.imshow(self.hof[:,:,:3])
+                    tmp_axes.imshow(self.hof[:, :, :3])
                     plt.axis('off')
                     tmp_fig.savefig('3dxypca.pdf', bbox_inches='tight')
-
-
 
     def unpause(self, val):
         plt.gcf().canvas.stop_event_loop()
@@ -1855,11 +1356,8 @@ class ActionRecognition(object):
         self.actions = Actions(parameters,
                                coders=self.sparse_helper.sparse_coders,
                                feat_filename=feat_filename)
-        self.log_lev = log_lev
-        self.logger = logging.getLogger('ActionRecognition')
-        initialize_logger(self.logger)
-        self.logger.setLevel(log_lev)
-        # self.logger.setLevel('SAVE_LOAD_FEATURES')
+        self.logger = None
+        initialize_logger(self, log_lev)
 
     def add_action(self, *args, **kwargs):
         '''
@@ -1920,8 +1418,8 @@ class ActionRecognition(object):
                     range(len(self.actions.actions))]
                 for ind, d in enumerate(data):
                     self.logger.info('Descriptor of ' + feat_name + ' for action \'' +
-                             str(self.actions.actions[ind].name) +
-                             '\' has shape ' + str(d.shape))
+                                     str(self.actions.actions[ind].name) +
+                                     '\' has shape ' + str(d.shape))
                 data = np.concatenate(
                     data, axis=0)
                 frames_num = data.shape[0]
@@ -1951,8 +1449,8 @@ class ActionRecognition(object):
                     self.sparse_helper.save(save_dict=codebooks_dict)
                     if coders_savepath is not None:
                         self.logger.info('Saving ' +
-                                 str(self.parameters['descriptors'][count]) +
-                                 ' coder..')
+                                         str(self.parameters['descriptors'][count]) +
+                                         ' coder..')
                         with open(coders_savepath, 'w') as output:
                             pickle.dump(all_sparse_coders, output, -1)
         self.parameters['sparse_params']['trained_coders'] = True
