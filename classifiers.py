@@ -54,7 +54,7 @@ class Classifier(object):
                  ptpca=False,
                  ptpca_components=None,
                  action_type='Dynamic',
-                 classifiers_used='SVM', num_of_cores=4, name='',
+                 classifiers_used='svm', num_of_cores=4, name='',
                  svm_c=None,
                  AdaBoost_n_estimators=None,
                  RDF_n_estimators=None,
@@ -111,40 +111,42 @@ class Classifier(object):
         self.RDF_n_estimators = RDF_n_estimators
         self.AdaBoost_n_estimators = AdaBoost_n_estimators
         self.sparse_dim_rat = sparse_dim_rat
-        if 'SVM' in classifiers_used and kernel is None:
+        classifiers_used = classifiers_used.lower()
+        if 'svm' in classifiers_used and kernel is None:
             self.kernel = 'linear'
-        if 'SVM' in classifiers_used:
+        if 'svm' in classifiers_used:
             if svm_c is None:
                 self.svm_c = co.CONST['SVM_C']
-            if post_scores_processing_method == 'CProb':
+            if (post_scores_processing_method == 'CProb' and 'platt' not in
+                classifiers_used):
                 LOG.warning('Invalid post_scores_processing_method for SVM')
                 if hardcore:
                     raise Exception
                 else:
                     LOG.warning('Changing method to CSTD')
                     post_scores_processing_method = 'CSTD'
-        if 'RDF' in classifiers_used or 'AdaBoost' in classifiers_used:
+        if 'rdf' in classifiers_used or 'adaboost' in classifiers_used:
             if svm_c is not None:
                 LOG.warning(
                     'svm_c is not None for RDF or AdaBoost experimentation')
                 if hardcore:
                     raise Exception
         if post_scores_processing_method is None:
-            if 'RDF' in classifiers_used or 'AdaBoost' in classifiers_used:
+            if 'rdf' in classifiers_used or 'adaboost' in classifiers_used:
                 post_scores_processing_method = 'CProb'
             else:
                 post_scores_processing_method = 'CSTD'
         classifier_params = {}
-        if 'RDF' in classifiers_used and RDF_n_estimators is None:
+        if 'rdf' in classifiers_used and RDF_n_estimators is None:
             self.RDF_n_estimators = co.CONST['RDF_trees']
-        if 'AdaBoost' in classifiers_used and AdaBoost_n_estimators is None:
+        if 'adaboost' in classifiers_used and AdaBoost_n_estimators is None:
             self.AdaBoost_n_estimators = co.CONST['AdaBoost_Estimators']
-        if 'SVM' in classifiers_used:
+        if 'svm' in classifiers_used:
             classifier_params['SVM_kernel'] = self.kernel
             classifier_params['SVM_C'] = self.svm_c
-        if 'RDF' in classifiers_used:
+        if 'rdf' in classifiers_used:
             classifier_params['RDF_n_estimators'] = self.RDF_n_estimators
-        if 'AdaBoost' in classifiers_used:
+        if 'adaboost' in classifiers_used:
             classifier_params['AdaBoost_n_estimators'] = self.AdaBoost_n_estimators
         if action_type != 'Passive':
             dynamic_params = {'buffer_size': buffer_size,
@@ -172,6 +174,7 @@ class Classifier(object):
         testing_params = {'online': None}
         testing_params['post_scores_processing_method'] = \
         post_scores_processing_method
+        self.post_scores_processing_method = post_scores_processing_method
         fil = os.path.join(co.CONST['rosbag_location'],
                            'gestures_type.csv')
         self.passive_actions = None
@@ -232,17 +235,20 @@ class Classifier(object):
         else:
             self.available_tests = []
         self.update_experiment_info()
-        if 'SVM' in self.classifiers_used:
+        if 'svm' in self.classifiers_used:
             from sklearn.svm import LinearSVC
+            from sklearn.calibration import CalibratedClassifierCV
             self.classifier_type = LinearSVC(
                 class_weight='balanced', C=self.svm_c,
                 multi_class='ovr',
                 dual=False)
-        elif 'RDF' in self.classifiers_used:
+            if 'platt' in self.classifiers_used:
+                self.classifier_type = CalibratedClassifierCV(self.classifier_type)
+        elif 'rdf' in self.classifiers_used:
             from sklearn.ensemble import RandomForestClassifier
             self.classifier_type =\
                 RandomForestClassifier(self.RDF_n_estimators)
-        elif 'AdaBoost' in self.classifiers_used:
+        elif 'adaboost' in self.classifiers_used:
             from sklearn.ensemble import AdaBoostClassifier
             self.classifier_type =\
                 AdaBoostClassifier(n_estimators=self.AdaBoost_n_estimators)
@@ -398,13 +404,13 @@ class Classifier(object):
         for feature in self.parameters['descriptors']:
             info += ' ' + feature
         info += ' descriptors '
-        if 'SVM' in self.parameters['classifier']:
+        if 'svm' in self.parameters['classifier']:
             info += 'with ' + self.parameters[
                 'classifier_params']['SVM_kernel'] + ' kernel'
-        elif 'RDF' in self.parameters['classifier']:
+        elif 'rdf' in self.parameters['classifier']:
             info += ('with ' + str(self.parameters['classifier_params'][
                 'RDF_n_estimators']) + ' estimators')
-        elif 'AdaBoost' in self.parameters['classifier']:
+        elif 'adaboost' in self.parameters['classifier']:
             info += ('with ' + str(self.parameters['classifier_params'][
                 'AdaBoost_n_estimators']) + ' estimators')
 
@@ -457,10 +463,14 @@ class Classifier(object):
         Add type to classifier and set methods
         '''
         self.unified_classifier = classifier
-        if 'SVM' in self.classifiers_used:
-            self.unified_classifier.decide = self.unified_classifier.decision_function
+        if 'svm' in self.classifiers_used:
+            if 'platt' not in self.classifiers_used:
+                self.unified_classifier.decide = self.unified_classifier.decision_function
+            else:
+                self.unified_classifier.decide = \
+                    self.unified_classifier.predict_proba
             self.unified_classifier.predict = self.unified_classifier.predict
-        elif 'RDF' in self.classifiers_used or 'AdaBoost' in self.classifiers_used:
+        elif 'rdf' in self.classifiers_used or 'adaboost' in self.classifiers_used:
             self.unified_classifier.decide = self.unified_classifier.predict_proba
             self.unified_classifier.predict = self.unified_classifier.predict
         co.file_oper.save_labeled_data(['Classifier'] + self.classifier_id,
@@ -545,7 +555,7 @@ class Classifier(object):
                                in self.train_classes]
         if (self.dynamic_actions is not None and
                 self.passive_actions is not None):
-            if 'Sync' in self.classifiers_used:
+            if 'sync' in self.classifiers_used:
                 self.train_classes = {'Passive': passive_actions,
                                       'Dynamic': dynamic_actions}
             else:
@@ -1014,7 +1024,7 @@ class Classifier(object):
                     load=False, testname=None, display_scores=True,
                     construct_gt=True, just_scores=False, testdatapath=None,
                     compute_perform=True,
-                    save_results=True):
+                    save_results=True, extract_proba=False):
         '''
         Test Classifiers using data (.png files) located in <data>. If <online>, the
         testing is online, with <data> being a numpy array, which has been
@@ -1100,8 +1110,18 @@ class Classifier(object):
                 LOG.info('Testing Classifiers using testdata with size: '
                          + str(testdata.shape))
                 fmask = np.prod(np.isfinite(testdata), axis=1).astype(bool)
-                fin_scores = self.unified_classifier.decide(
-                    testdata[fmask, :])
+                if (not extract_proba and
+                    self.post_scores_processing_method.lower()!='cprob'):
+                    fin_scores = self.unified_classifier.decide(
+                        testdata[fmask, :])
+                else:
+                    try:
+                        fin_scores = self.unified_classifier.predict_proba(
+                            testdata[fmask, :])
+                    except:
+                        raise('Classifiers used '+ str(self.classifiers_used)
+                              + ' do not calculate probabilities')
+
                 self.scores = np.zeros(
                     (testdata.shape[0], fin_scores.shape[1]))
                 self.scores[:] = None
@@ -1127,10 +1147,11 @@ class Classifier(object):
                                       self.parameters[
                                           'testing_params']['post_scores_processing_method'])
 
-                self.correlate_with_ground_truth(save=save,
-                                                 display=display_scores,
-                                                 compute_perform=compute_perform,
-                                                 utterances_inds=utterances_inds)
+                if construct_gt:
+                    self.correlate_with_ground_truth(save=save,
+                                                     display=display_scores,
+                                                     compute_perform=compute_perform,
+                                                     utterances_inds=utterances_inds)
                 self.display_scores_and_time(save=save)
             if self.test_ind is not None:
                 co.file_oper.save_labeled_data(['Testing'] +self.tests_ids[
@@ -1519,9 +1540,13 @@ class Classifier(object):
     def extract_actions(self, scores, method='CProb', tol=0.7,
                         filterr=True):
 
-        if filterr:
-            scores = co.noise_proc.masked_filter(scores,
+        try:
+            if filterr:
+                scores = co.noise_proc.masked_filter(scores,
                                                  self.scores_filter_shape)
+        except:
+            print(scores)
+            raise
         extracted_actions = []
         if method == 'CProb':
             for count, score in enumerate(scores):
@@ -1598,7 +1623,7 @@ class Classifier(object):
 
         Process scores using stds as proposed by the paper
         '''
-        if 'Sync' in self.classifiers_used:
+        if isinstance(self.scores, dict):
             if extraction_method is None:
                 extraction_method = 'CProb'
             if not isinstance(extraction_method, list):
@@ -1657,7 +1682,7 @@ class Classifier(object):
         f1_scores = []
         existing_classes = []
         accuracies = []
-        if not 'Sync' in self.classifiers_used:
+        if not isinstance(self.scores, dict):
             recognized_classes = {self.action_type: recognized_classes}
             ground_truths = {self.action_type: ground_truths}
             act_namespaces = {self.action_type: act_namespaces}
@@ -1673,6 +1698,7 @@ class Classifier(object):
         for act_type in recognized_classes:
             ground_truth = np.array(ground_truths[act_type]).ravel()
             recognized_actions = np.array(recognized_classes[act_type])
+            print(act_namespaces)
             act_names = act_namespaces[act_type]
             fmask = np.isnan(ground_truth)
             ground_truth[fmask] = -1
@@ -1749,7 +1775,7 @@ class Classifier(object):
             prefix.title() + ' Confusion Matrix: \n' +
             np.array2string(
                 confusion_matrix))
-        if 'Sync' in self.classifiers_used:
+        if 'sync' in self.classifiers_used:
             LOG.info(prefix.title() + ' Partial Accuracies:' + str(accuracies))
         LOG.info(prefix.title() + ' Accuracy: ' + str(accuracy))
         LOG.info('Labels of actions:' + str(labels))
@@ -1758,7 +1784,7 @@ class Classifier(object):
         accuracies = self.testdata[self.test_ind]['Accuracy']
         partial_accuracies = self.testdata[
             self.test_ind]['PartialAccuracies']
-        if 'Sync' in self.classifiers_used:
+        if 'sync' in self.classifiers_used:
             acc_labels = (['Class.' + str(clas) for clas in
                            self.parameters['sub_classifiers']] +
                           ['Total Mean'])
@@ -1841,7 +1867,7 @@ class Classifier(object):
                 row.append('')
             row.append(parameters[0]['passive'])
             if (not parameters[0]['passive'] or
-                    'Sync' in parameters[0]['classifier']):
+                    'sync' in parameters[0]['classifier']):
                 '''
                 if parameters[0]['classifier']=='Double':
                     row.append('%d'%parameters[0]['classifier_params'][
@@ -2026,6 +2052,7 @@ class Classifier(object):
             if isinstance(self.crossings, list):
                 self.crossings = np.array(self.crossings)
         if self.test_ground_truth is not None and compute_perform:
+            print type(self.recognized_classes)
             self.compute_performance_measures(
                 self.recognized_classes,
                 ground_truths=self.test_ground_truth,
@@ -2059,7 +2086,7 @@ class Classifier(object):
                     recognized_actions = self.classified_dict[name][
                         self.testdataname][0]
                     if (parameters['action_type'] == self.action_type):
-                        if 'Sync' in parameters['classifier']:
+                        if 'sync' in parameters['classifier']:
                             iterat.append(recognized_actions[self.action_type])
                         else:
                             iterat.append(recognized_actions)
@@ -2087,7 +2114,7 @@ class Classifier(object):
                     else:
                         iterat_name = str(0)
                     higher_acc = [0]
-                    if 'Sync' in self.classifiers_used:
+                    if 'sync' in self.classifiers_used:
                         new_iter = []
                         ref = 0
                         for key in iterat[0]:
@@ -2125,7 +2152,7 @@ class Classifier(object):
                 alphas.append(1)
                 markers.append('o')
                 markers_sizes.append(5)
-                if 'Sync' in self.classifiers_used:
+                if 'sync' in self.classifiers_used:
                     labels.append('Utterances\n'+
                                    'Predicted\n'+
                                   'break-\npoints\n'+
@@ -2155,7 +2182,7 @@ class Classifier(object):
                 zorders.append(3)
                 width -= dec_q
                 width = max(min_q, width)
-            if 'Sync' in self.classifiers_used:
+            if 'sync' in self.classifiers_used:
                 yticks = []
                 for key in self.train_classes:
                     yticks += list(self.train_classes[key])
@@ -2174,7 +2201,7 @@ class Classifier(object):
                                               info='Classification Results',
                                               save=False)
             if self.test_breakpoints is not None:
-                if 'Sync' in self.classifiers_used:
+                if 'sync' in self.classifiers_used:
                     tg_ref = 0
                     for key in (self.test_ground_truth):
                         self.draw_breakpoints(axes,
@@ -2350,7 +2377,7 @@ def construct_dynamic_actions_classifier(testname='test2', train=False,
                                          ptpca_components=1,
                                          just_sparse=False,
                                          debug=False,
-                                         classifiers_used='SVM',
+                                         classifiers_used='svm',
                                          action_type='Dynamic',
                                          post_scores_processing_method='CSTD'):
     '''
@@ -2406,7 +2433,7 @@ def construct_passive_actions_classifier(testname='test2',
     Constructs a random forests passive_actions classifier with input 3DXYPCA descriptors
     '''
     classifier = Classifier('INFO', action_type='Passive',
-                            name='actions', classifiers_used='RDF',
+                            name='actions', classifiers_used='rdf',
                             sparsecoding_level=False,
                             descriptors=descriptors,
                             post_scores_processing_method=
@@ -2480,7 +2507,7 @@ def main():
         visualize=True,
         test_against_all=True,
         ptpca=False,
-        classifiers_used='RDF',
+        classifiers_used='rdf',
         descriptors=['GHOG','ZHOF'],
         post_scores_processing_method='CSTD')
     exit()
@@ -2491,7 +2518,7 @@ def main():
                                                                      visualize=True,
                                                                      test_against_all=True,
                                                                      sparsecoding_level='Features',
-                                                                     classifiers_used='RDF')
+                                                                     classifiers_used='rdf')
     ACTIONS_CLASSIFIER_SIMPLE_POST_PCA = construct_dynamic_actions_classifier(
         train=True,
         test=True,
@@ -2537,36 +2564,36 @@ def main():
     '''
     ACTIONS_CLASSIFIER_SIMPLE_WITH_ZHOF = construct_dynamic_actions_classifier(
         train=True, test=True, visualize=True, test_against_all=True,
-        descriptors=['3DXYPCA','GHOG','3DHOF','ZHOF'], classifiers_used='SVM')
+        descriptors=['3DXYPCA','GHOG','3DHOF','ZHOF'], classifiers_used='svm')
     '''
     # Let's try RDF for dynamic actions
     construct_dynamic_actions_classifier(
         train=True, test=True, visualize=True, test_against_all=True,
         descriptors=['GHOG', 'ZHOF'], ptpca=False, sparsecoding_level=False,
-        classifiers_used='RDF')
+        classifiers_used='rdf')
     exit()
     # Let's try RDF with all descriptors for dynamic actions
     construct_dynamic_actions_classifier(
         train=True, test=True, visualize=True, test_against_all=True,
         descriptors=['GHOG', '3DHOF', '3DXYPCA'], ptpca=False, sparsecoding_level=False,
-        classifiers_used='RDF')
+        classifiers_used='rdf')
 
     # Let's try RDF for all descriptors for all actions
     construct_dynamic_actions_classifier(
         train=True, test=True, visualize=True, test_against_all=True,
         descriptors=['GHOG', '3DHOF', '3DXYPCA'], action_type='All', ptpca=False, sparsecoding_level=False,
-        classifiers_used='RDF')
+        classifiers_used='rdf')
     # Let's try RDF with all descriptors for dynamic actions
     construct_dynamic_actions_classifier(
         train=True, test=True, visualize=True, test_against_all=True,
         descriptors=['GHOG', 'ZHOF', '3DXYPCA'], action_type='Dynamic', ptpca=False, sparsecoding_level=False,
-        classifiers_used='RDF')
+        classifiers_used='rdf')
 
     # Let's try RDF for all descriptors for all actions
     construct_dynamic_actions_classifier(
         train=True, test=True, visualize=True, test_against_all=True,
         descriptors=['GHOG', 'ZHOF', '3DXYPCA'], action_type='All', ptpca=False, sparsecoding_level=False,
-        classifiers_used='RDF')
+        classifiers_used='rdf')
     ACTIONS_CLASSIFIER_SPARSE_WITH_ZHOF = construct_dynamic_actions_classifier(
         train=True,
         test=True, visualize=True, test_against_all=True,

@@ -1,5 +1,5 @@
 import logging
-LOGLEVEL = 'DEBUG'
+LOGLEVEL = 'INFO'#'DEBUG'
 LOG = logging.getLogger(__name__)
 FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
 CH = logging.StreamHandler()
@@ -198,6 +198,8 @@ class StrokeRecognition(object):
                                     exc_traceback, limit=2, file=sys.stdout)
                  print e
         else:
+            if len(self.strokes[0])>0:
+                self.progress = self.gdb.recognize(self.strokes[:-1])
             self.strokes = [[]]
 
 
@@ -284,26 +286,42 @@ class ROSSubscriber(object):
         evt = CreateEvent(EVT_ROS_TYPE, -1)
         wx.PostEvent(self._parent, evt)
 
-class Canvas(wx.Panel):
-    def __init__(self, parent, data):
-        wx.Panel.__init__(self, parent)
+class Canvas(wx.Window):
+    def __init__(self, parent, data, *args, **kwargs):
+        self.init = True
+        wx.Window.__init__(self, parent, *args, **kwargs)
         [self.height, self.width] = data.shape[:2]
         self.SetMinSize(wx.Size(self.width, self.height))
         self.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
         self.Bind(wx.EVT_PAINT, self.on_paint)
+        self.Bind(wx.EVT_SIZE, self.on_size)
         self.data = data
 
     def on_paint(self, event):
         painter = wx.AutoBufferedPaintDC(self)
+        self.scale_frame()
         painter.Clear()
         painter.DrawBitmap(
             getbitmap(self, self.data), 0, 0)
+
+    def on_size(self, event):
+        if not self.init:
+            self.width, self.height = self.GetClientSize()
+            self.scale_frame()
+        self.init = False
+
+
+    def scale_frame(self):
+        r = min(self.height / float(self.data.shape[0]),
+                self.width / float(self.data.shape[1]))
+        dim = (int(self.data.shape[1] * r), int(self.data.shape[0] * r))
+        self.data = cv2.resize(self.data, dim, interpolation=cv2.INTER_AREA)
+
 
 
 class MainFrame(wx.Frame):
     def __init__(self,parent, id_, title, loglevel='INFO'):
         wx.Frame.__init__(self,parent, id_, title)
-        self.canvas_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.Bind(EVT_ROS, self.on_ros_process)
         self.Bind(EVT_STRK, self.on_stroke_process)
         self.data = HandData()
@@ -323,6 +341,7 @@ class MainFrame(wx.Frame):
         self.prev_size = 1
         self.depths = []
         self.prev_gest = None
+        self.frame = None
         self.stroke = []
         self.write_mode = True
         self.initialized = False
@@ -333,6 +352,8 @@ class MainFrame(wx.Frame):
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         self.Bind(wx.EVT_CLOSE, self.on_close)
+
+
 
     def on_close(self, event):
         if self.timer.IsRunning():
@@ -386,19 +407,19 @@ class MainFrame(wx.Frame):
                         self.stroke.append([self.data.skel[-1, -1, 1],
                                            self.data.skel[-1, -1, 0]])
                         self.stroke = self.stroke[-4:] #keep last 4 points
+                        if self.write_mode:
+                            color = [255, 255, 255]
+                        else:
+                            color = [255, 0 ,0]
                         if self.prev_gest == 'Index':
                             if norm(np.diff(np.array(self.stroke[-2:]),axis=0))<10:
-                                if self.write_mode:
-                                    color = [255, 255, 255]
-                                else:
-                                    color = [255, 0 ,0]
                                 cv2.line(self.temporary_im,
                                          tuple(self.stroke[-2]),tuple(self.stroke[-1]),
                                          color, self.size)
                         else:
                             cv2.circle(self.temporary_im,(self.data.skel[-1, -1, 1],
                                                         self.data.skel[-1, -1, 0]), self.size,
-                                       [255,255,255], -1)
+                                       color, -1)
                     elif self.data.class_name == 'Tiger':
                         if self.prev_gest == 'Palm':
                             self.write_mode = not self.write_mode
@@ -427,17 +448,19 @@ class MainFrame(wx.Frame):
                       '\nFPS: ' + str(self.data.fps),loc='bot right',
                       fontscale=0.4, color=(255,255,255))
             if self.canvas is None:
-                self.canvas = Canvas(self, inp)
-                self.canvas_sizer.Add(self.canvas)
-                self.SetSizerAndFit(self.canvas_sizer)
-            else:
-                self.canvas.data = inp
+                self.canvas = Canvas(self, inp, size=wx.Size(inp.shape[1],
+                                                             inp.shape[0]))
+                self.Fit()
+            self.frame = inp
+            self.canvas.data = inp
             self.canvas.Refresh(False)
         except Exception as e:
              exc_type, exc_value, exc_traceback = sys.exc_info()
              traceback.print_exception(exc_type,
                                 exc_value,
                                 exc_traceback, limit=2, file=sys.stdout)
+
+
 
     def on_stroke_process(self, event):
         try:

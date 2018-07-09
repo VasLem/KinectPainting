@@ -20,7 +20,7 @@ def perform_single_experiment(dict_param, filt=None, metric='Accuracy',
             clas = CombinedGesturesClassifier(**dict_param)
     except Exception as e:
         print e
-        return None, None
+        return None, None, None, None
     clas.run_training()
     metrics = []
     names = []
@@ -38,7 +38,7 @@ def perform_single_experiment(dict_param, filt=None, metric='Accuracy',
     if len(save_folds)> 1:
         return metrics, clas, save_folds, names
     else:
-        return metrics, clas, names
+        return metrics, clas, None, names
 
 
 def perform_experiments_generic(params, filt, metric_typ='Macro'):
@@ -51,7 +51,7 @@ def perform_experiments_generic(params, filt, metric_typ='Macro'):
         dict_param = co.dict_oper.join_list_of_dicts(list(param))
         LOG.info('Experimenting with classifier with the following params:\n'+
                  str(co.dict_oper.join_list_of_dicts(list(param))))
-        metrics, classifier, _ = perform_single_experiment(dict_param, filt)
+        metrics, classifier, _, _ = perform_single_experiment(dict_param, filt)
         if metrics is None:
             continue
         if metric_typ == 'Mean':
@@ -77,9 +77,11 @@ def perform_experiments_on_dynamic_actions(metric_typ='Macro'):
         ['GHOG', '3DXYPCA', 'ZHOF'],
         ['GHOG', '3DXYPCA', '3DHOF']
     ]]
-    classifiers = [{'classifiers_used':x} for x in ['RDF','SVM','AdaBoost']]
-    sparsecoding = [{'sparsecoding_level':x} for x in ['Features',None]]
-    ptpca = [{'ptpca':x} for x in [True, False]]
+    classifiers = [{'classifiers_used':x} for x in ['rdf','svm','platt svm']]
+    sparsecoding = [{'sparsecoding_level':x} for x in [#'Features',
+                                                       None]]
+    ptpca = [{'ptpca':x} for x in [#True,
+                                   False]]
     extraction_method = [{'post_scores_processing_method':x} for x in
                          ['CProb','CSTD']]
     action_type = [{'action_type':x} for x in ['Dynamic']]
@@ -91,7 +93,7 @@ def perform_experiments_on_passive_actions(metric_typ='Macro'):
     descriptors = [{'descriptors':x} for x in
         ['GHOG','3DXYPCA',['GHOG','3DXYPCA']]]
     sparsecoding = [{'sparsecoding_level':x} for x in ['Features', None]]
-    classifiers = [{'classifiers_used':x} for x in ['RDF', 'SVM', 'AdaBoost']]
+    classifiers = [{'classifiers_used':x} for x in ['rdf', 'svm', 'adaboost']]
     extraction_method = [{'post_scores_processing_method':x} for
                          x in ['CProb','CSTD']]
     action_type = [{'action_type':x} for x in ['Passive']]
@@ -100,7 +102,7 @@ def perform_experiments_on_passive_actions(metric_typ='Macro'):
                                        metric_typ=metric_typ)
 
 def retrieve_top_n_experiments(action_type, filt, n=3, bypass=0, ignore=[]):
-    dic = {'classifiers_used': 'RDF', 'descriptors': ['GHOG', 'ZHOF'], 'post_scores_processing_method': 'prob_check', 'ptpca': True, 'action_type': 'Dynamic', 'sparsecoding_level': 'Features'}
+    dic = {'classifiers_used': 'rdf', 'descriptors': ['GHOG', 'ZHOF'], 'post_scores_processing_method': 'prob_check', 'ptpca': True, 'action_type': 'Dynamic', 'sparsecoding_level': 'Features'}
     classifier = Classifier(**dic)
     tests_instances = {}
     tests_envs = {}
@@ -172,7 +174,7 @@ def retrieve_top_n_experiments(action_type, filt, n=3, bypass=0, ignore=[]):
 def create_unified_tex(action_type,  filt, n=3, bypass=0, ignore = []):
     import subprocess,ast
     sorted_test_envs = retrieve_top_n_experiments(action_type,filt, n, bypass, ignore=ignore)
-    dic = {'classifiers_used': 'RDF', 'descriptors': ['GHOG', 'ZHOF'], 'post_scores_processing_method': 'prob_check', 'ptpca': True, 'action_type': 'Dynamic', 'sparsecoding_level': 'Features'}
+    dic = {'classifiers_used': 'rdf', 'descriptors': ['GHOG', 'ZHOF'], 'post_scores_processing_method': 'prob_check', 'ptpca': True, 'action_type': 'Dynamic', 'sparsecoding_level': 'Features'}
     classifier = Classifier(**dic)
     all_catalog = classifier.load_tests_mapping()
     save_res_path = os.path.join(co.CONST['results_fold'],
@@ -432,7 +434,7 @@ def join_rec_dicts(elems):
         return elems
 
 def create_matrix(action_type, ignore=[]):
-    dic = {'classifiers_used': 'RDF', 'descriptors': ['GHOG', 'ZHOF'], 'post_scores_processing_method': 'prob_check', 'ptpca': True, 'action_type': 'Dynamic', 'sparsecoding_level': 'Features'}
+    dic = {'classifiers_used': 'rdf', 'descriptors': ['GHOG', 'ZHOF'], 'post_scores_processing_method': 'prob_check', 'ptpca': True, 'action_type': 'Dynamic', 'sparsecoding_level': 'Features'}
     classifier = Classifier(**dic)
     tests_instances = {}
     tests_envs = {}
@@ -576,7 +578,7 @@ def process_generic(params, metrics, action_type, n=3, sort_met='Micro',
               'w') as out:
         out.write(latex_best)
     if not on_valid:
-        metrics, classifier, _ = perform_single_experiment(best_params,'test')
+        metrics, classifier, _, _ = perform_single_experiment(best_params,'test')
         create_single_tex_from_files(classifier.save_fold,
                           save_path, action_type.title(),
                           preamble='Δεδομένα Test: ',
@@ -647,7 +649,7 @@ def process_dynamic_CDBIMM_actions(in_sync=False, load=False):
         'in_sync':in_sync,
     'post_scores_processing_method':'CProb'}
   
-    metrics, classifier, _ = perform_single_experiment(params_dict,'test',
+    metrics, classifier, _, _ = perform_single_experiment(params_dict,'test',
                                                     variation='enhanced')
     save_path = os.path.join(co.CONST['results_fold'],'Classification',
                                    'TestingBest')
@@ -658,6 +660,33 @@ def process_dynamic_CDBIMM_actions(in_sync=False, load=False):
     with open('cdbimm.pkl', 'w') as out:
         pickle.dump((metrics, classifier), out)
     return metrics, classifier
+
+def process_valid_dynamic_CDBIMM_actions(in_sync=False, load=False):
+    import pickle
+    if load:
+        if 'cdbimm.pkl' in os.listdir('.'):
+            with open('cdbimm.pkl','r') as inp:
+                metrics, classifier = pickle.load(inp)
+    pas_params = process_passive_actions(experiment=False,
+                                         ret_just_params=True)
+    dyn_params = process_dynamic_actions(experiment=False,
+                                         ret_just_params=True)
+    dyn_clas = Classifier(**dyn_params)
+    dyn_clas.run_training()
+    pas_clas = Classifier(**pas_params)
+    pas_clas.run_training()
+
+    params_dict = {
+    'dynamic_classifier':dyn_clas,
+    'passive_classifier':pas_clas,
+        'in_sync':in_sync,
+    'post_scores_processing_method':'CProb'}
+  
+    metrics, classifier, _, _ = perform_single_experiment(
+        params_dict,'validation',
+                                                    variation='enhanced')
+    print metrics
+    return
 
 def process_combined_actions():
     pas_params = process_passive_actions(experiment=False,
@@ -673,7 +702,7 @@ def process_combined_actions():
     'dynamic_classifier':dyn_clas,
     'passive_classifier':pas_clas}
   
-    metrics, classifier, _ = perform_single_experiment(params_dict,'test',
+    metrics, classifier, _, _ = perform_single_experiment(params_dict,'test',
                                                     variation='combined')
     save_path = os.path.join(co.CONST['results_fold'],'Classification',
                                    'TestingBest')
@@ -742,6 +771,7 @@ if __name__=='__main__':
     process_passive_actions(False,on_valid=True)
     create_best_classifiers_table(dyn_row, pas_row)
     _ , cdbimm = process_dynamic_CDBIMM_actions(in_sync=False)
+    process_valid_dynamic_CDBIMM_actions(in_sync=False)
     create_CDBIMM_CLDYN_table()
     process_dynamic_CDBIMM_actions(in_sync=True)
     process_combined_actions()

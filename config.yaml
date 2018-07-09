@@ -16,7 +16,7 @@ save: n
 path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
 path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
-actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/sets
+actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/training
 mv_obj_fold_name : mv_obj
 hnd_mk_fold_name : hnd_mk
 #rosbag files location
@@ -28,7 +28,7 @@ cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 save_depth: Depth
 save_color: Color
 #folders to save datasets and ground truths
-test_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/whole_result
+test_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/testing
 ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths
 #folder to save data
 save_path: /media/vassilis/Thesis/Data/

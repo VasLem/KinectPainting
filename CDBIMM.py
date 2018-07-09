@@ -295,7 +295,9 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         total = np.logical_or(fmask_dynamic, fmask_passive)
         fin_dynamic_probs = self.dynamic_scores[fmask_dynamic, :]
         thres = 1 / float(len(self.dynamic_actions))
-        if 'SVM' in self.dynamic_actions_classifier.parameters['classifier']:
+        if ('svm' in self.dynamic_actions_classifier.parameters['classifier']
+            and 'platt' not in
+            self.dynamic_actions_classifier.parameters['classifier']):
             _mins = np.min(fin_dynamic_probs, axis=1)[:, None]
             _maxs = np.max(fin_dynamic_probs, axis=1)[:, None]
             below_z = fin_dynamic_probs < 0
@@ -624,7 +626,7 @@ def construct_enhanced_dynamic_actions_classifier(testname='actions', train=Fals
     dynamic_classifier = clfs.construct_dynamic_actions_classifier(
         train=False, test=False, visualize=False, test_against_all=False,
         descriptors=['GHOG', 'ZHOF'],classifiers_used=
-    'SVM',post_scores_processing_method='CSTD' )
+    'svm',post_scores_processing_method='CSTD' )
     passive_classifier = clfs.construct_passive_actions_classifier(train=False,
                                                                    test=False,
                                                                    visualize=False,
