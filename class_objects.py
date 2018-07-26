@@ -1,5 +1,6 @@
-import os
+# pylint: disable=E501
 import errno
+import os
 import numpy as np
 import cv2
 from math import pi
@@ -24,11 +25,10 @@ def timeit(method):
         result = method(*args, **kw)
         te = time.time()
 
-        print method.__name__, (te - ts) * 1000, 'ms'
+        print(method.__name__, (te - ts) * 1000, 'ms')
         return result
 
     return timed
-
 
 
 def makedir(path):
@@ -249,7 +249,7 @@ class CountHandHitMisses(object):
                    callable(getattr(self, attr))
                    and not attr.startswith("__")]
         for member in members:
-            print member, ':', getattr(self, member)
+            print(member, ':', getattr(self, member))
 
 
 class Data(object):
@@ -274,25 +274,23 @@ class DrawingOperations(object):
     '''
     Methods for advanced plotting using matplotlib
     '''
-    
-
 
     def plot_utterances(self, breakpoints,
                         labels,
                         ground_truth=None,
                         frames_sync=None,
                         frames=None,
-                        real_values = None,
+                        real_values=None,
                         show_legend=False,
                         leg_labels=[],
                         show_breaks=True, show_occ_tab=True,
                         show_zoomed_occ=True, show_fig_title=True,
-                        show_im_examples=True, categories_to_zoom = None,
+                        show_im_examples=True, categories_to_zoom=None,
                         fig_width=12, examples_height=2, zoomed_occ_size=4,
-                        break_height = 0,
-                                        examples_pad_size=10,show_res=True,
-                        examples_num=None, min_im_zoom_num = 5,
-                        max_im_zoom_num = 40,
+                        break_height=0,
+                        examples_pad_size=10, show_res=True,
+                        examples_num=None, min_im_zoom_num=5,
+                        max_im_zoom_num=40,
                         title=None, dataset_name='',
                         show_warnings=True, *args, **kwargs):
         '''
@@ -331,7 +329,7 @@ class DrawingOperations(object):
         from matplotlib import gridspec
 
         # Initialize constants
-        
+
         cmap = get_cmap('Spectral')
         arr_cmap = get_cmap('tab20b')
         tab_x_size = zoom_size * show_occ_tab
@@ -339,7 +337,7 @@ class DrawingOperations(object):
             gs_title = 1
         else:
             gs_title = 0
-        break_width = (gs_width-tab_x_size) * show_breaks
+        break_width = (gs_width - tab_x_size) * show_breaks
         if not break_height:
             break_height = break_width
         if show_occ_tab:
@@ -360,64 +358,70 @@ class DrawingOperations(object):
             examples_num = 0
 
         gs_examples = gs_examples * show_im_examples
-        
-        ex_categories_to_zoom = [act for act in breakpoints if act.lower() in categories_to_zoom]
+
+        ex_categories_to_zoom = [
+            act for act in breakpoints if act.lower() in categories_to_zoom]
         zoom_cat_num = len(ex_categories_to_zoom)
         zooms_per_row = gs_width / zoom_size
-        zooms_columns = np.ceil(zoom_cat_num / float(zooms_per_row)) * show_zoomed_occ
-        gs_height = int(gs_title + max(tab_y_size,break_height) + gs_examples + zooms_columns*zoom_size)
+        zooms_columns = np.ceil(
+            zoom_cat_num / float(zooms_per_row)) * show_zoomed_occ
+        gs_height = int(gs_title +
+                        max(tab_y_size, break_height) +
+                        gs_examples +
+                        zooms_columns *
+                        zoom_size)
 
         if not gs_height:
             LOG.warning('All show flags are set to false, returning None')
             return None
-       
+
         # Initialize GridSpec and figure objects
-        f = plt.figure(figsize=(gs_width,gs_height))
-        gs = gridspec.GridSpec(gs_height,gs_width)
+        f = plt.figure(figsize=(gs_width, gs_height))
+        gs = gridspec.GridSpec(gs_height, gs_width)
         gs.update(wspace=0.025, hspace=0.05)
         if show_fig_title:
-            ax_title = plt.subplot(gs[0,:])
+            ax_title = plt.subplot(gs[0, :])
             if title is None:
-                title = 'Utterances in dataset \"' + dataset_name +'\"'
+                title = 'Utterances in dataset \"' + dataset_name + '\"'
             ax_title.set_title(title,
-                                    fontsize=20)
+                               fontsize=20)
             ax_title.axis('off')
 
         if show_breaks:
-            ax_plot = plt.subplot(gs[gs_title:gs_title+break_height,
-                                      :break_width])
+            ax_plot = plt.subplot(gs[gs_title:gs_title + break_height,
+                                     :break_width])
             f.add_subplot(ax_plot)
             bbox = ax_plot.get_window_extent().transformed(f.dpi_scale_trans.inverted())
             width, height = bbox.width, bbox.height
             width *= f.dpi
             height *= f.dpi
-            norm_lw = min(width, height)/200
-            
+            norm_lw = min(width, height) / 200
+
         if show_im_examples:
-            ax_ex = plt.subplot(gs[gs_title+break_height:
-                                   gs_title+break_height+gs_examples,:-tab_x_size])
+            ax_ex = plt.subplot(gs[gs_title + break_height:
+                                   gs_title + break_height + gs_examples, :-tab_x_size])
             f.add_subplot(ax_ex)
         else:
             ax_ex = None
         if show_occ_tab:
-            ax_table = plt.subplot(gs[gs_title:tab_y_size+gs_title,-tab_x_size:])
+            ax_table = plt.subplot(
+                gs[gs_title:tab_y_size + gs_title, -tab_x_size:])
             f.add_subplot(ax_table)
         else:
             ax_table = None
         if show_zoomed_occ:
-            axzooms=[]
-            for count,lab in enumerate(ex_categories_to_zoom):
-                zoom_x = int(count  % np.floor(((gs_width)/zoom_size)))
-                zoom_y = int(count  / np.floor(((gs_width)/zoom_size)))
-                axzooms.append(plt.subplot(gs[gs_title+break_height + gs_examples +
+            axzooms = []
+            for count, lab in enumerate(ex_categories_to_zoom):
+                zoom_x = int(count % np.floor(((gs_width) / zoom_size)))
+                zoom_y = int(count / np.floor(((gs_width) / zoom_size)))
+                axzooms.append(plt.subplot(gs[gs_title + break_height + gs_examples +
                                               zoom_y * zoom_size:
-                                              gs_title+break_height + gs_examples +
-                                             (zoom_y + 1) * zoom_size,
+                                              gs_title + break_height + gs_examples +
+                                              (zoom_y + 1) * zoom_size,
                                               zoom_x * zoom_size:
                                               (zoom_x + 1) * zoom_size
                                               ]))
                 axzooms[-1].axis('off')
-
 
         if show_im_examples:
             if frames is None:
@@ -427,35 +431,40 @@ class DrawingOperations(object):
             selected_imgs = []
             selected_inds = []
             selected_acts = []
-            for count in np.arange(examples_num)/float(examples_num-1)*(len(ground_truth)-1):
+            for count in np.arange(
+                    examples_num) / float(examples_num - 1) * (len(ground_truth) - 1):
                 count2 = int(count)
                 sgn = 1
                 cnt = 1
                 while True:
                     try:
-                        if (count2 in frames_sync and 
-                            frames[frames_sync.index(count2)] is not None and 
+                        if (count2 in frames_sync and
+                            frames[frames_sync.index(count2)] is not None and
                             0 not in np.shape(frames[frames_sync.index(count2)]) and
-                            np.isfinite(ground_truth[count2])):
+                                np.isfinite(ground_truth[count2])):
                             break
-                    except:
+                    except BaseException:
                         pass
-                    count2 = int(count) + sgn*cnt
+                    count2 = int(count) + sgn * cnt
                     sgn = -sgn
                     if sgn == 1:
-                        cnt+=1
-                selected_imgs.append(cv2.equalizeHist(frames[frames_sync.index(count2)].astype(np.uint8)))
+                        cnt += 1
+                selected_imgs.append(cv2.equalizeHist(
+                    frames[frames_sync.index(count2)].astype(np.uint8)))
                 selected_inds.append(count2)
-                selected_acts.append(ground_truth[count2]+1)
-
+                selected_acts.append(ground_truth[count2] + 1)
 
             selected_imgs = np.hstack(
-                [np.pad(array=img,mode='constant',pad_width=((0,0),(0,pad_size)), constant_values=255)
+                [np.pad(array=img, mode='constant', pad_width=((0, 0), (0, pad_size)), constant_values=255)
                  for img in selected_imgs]).astype(np.uint8)
-            selected_imgs = selected_imgs[:,:-pad_size]
+            selected_imgs = selected_imgs[:, :-pad_size]
 
-            rat = (ground_truth.size-1)/float(selected_imgs.shape[1]-1)
-            ax_ex.imshow(selected_imgs,interpolation="nearest",cmap='gray',zorder=1)
+            rat = (ground_truth.size - 1) / float(selected_imgs.shape[1] - 1)
+            ax_ex.imshow(
+                selected_imgs,
+                interpolation="nearest",
+                cmap='gray',
+                zorder=1)
             ax_ex.set_title('Example Frames')
             ax_ex.set_aspect('auto')
             if not show_breaks:
@@ -464,41 +473,40 @@ class DrawingOperations(object):
             else:
                 ax_ex.xaxis.set_visible(0)
             ax_ex.yaxis.set_visible(0)
-            
 
         else:
             rat = 1
-
 
         if show_breaks:
 
             max_plotpoints_num = 0
             for act in breakpoints:
                 max_plotpoints_num = max(max_plotpoints_num,
-                                          len(breakpoints[act][0]))
+                                         len(breakpoints[act][0]))
             c_num = max_plotpoints_num
 
-            for act_cnt,act in enumerate(breakpoints):
+            for act_cnt, act in enumerate(breakpoints):
                 drawn = 0
-                for cnt,(start, end) in enumerate(zip(breakpoints[act][0],
-                                      breakpoints[act][1])):
-                    gest_dur = np.arange(int(start/rat),int(end/rat))
-                    ax_plot.plot(gest_dur, np.ones(gest_dur.size)*(
-                        lower_labels.index(act.lower())+1),
+                for cnt, (start, end) in enumerate(zip(breakpoints[act][0],
+                                                       breakpoints[act][1])):
+                    gest_dur = np.arange(int(start / rat), int(end / rat))
+                    ax_plot.plot(gest_dur, np.ones(gest_dur.size) * (
+                        lower_labels.index(act.lower()) + 1),
 
-                                    color=cmap(cnt/float(c_num)),linewidth=norm_lw,
-                                 solid_capstyle="butt",zorder=0)
+                        color=cmap(cnt / float(c_num)), linewidth=norm_lw,
+                        solid_capstyle="butt", zorder=0)
 
             if real_values is not None:
-                ax_plot.plot(real_values, linewidth=norm_lw/2, color='black',
-                             label='Predicted Values',zorder=1)
+                ax_plot.plot(real_values, linewidth=norm_lw / 2, color='black',
+                             label='Predicted Values', zorder=1)
                 if show_legend:
                     ax_plot.legend()
             ax_plot.set_title('Gestures Utterances\nAlong Time')
             ax_plot.set_aspect('auto')
-            ax_plot.set_ylim(0,len(labels)+1)
-            ax_plot.set_yticks(np.arange(len(labels)+1))
-            ax_plot.set_yticklabels(['']+[label.title() for label in labels]+[''])
+            ax_plot.set_ylim(0, len(labels) + 1)
+            ax_plot.set_yticks(np.arange(len(labels) + 1))
+            ax_plot.set_yticklabels([''] + [label.title()
+                                            for label in labels] + [''])
             ax_plot.set_ylabel('Gestures')
             ax_plot.set_xlabel('Frames')
             ax_plot.set_xticklabels((ax_plot.get_xticks() * rat).astype(int))
@@ -514,18 +522,18 @@ class DrawingOperations(object):
             occ_montages = []
             break_spans = []
             break_labels = []
-            for act_cnt,act in enumerate(breakpoints):
+            for act_cnt, act in enumerate(breakpoints):
                 drawn = 0
-                for cnt,(start, end) in enumerate(zip(breakpoints[act][0],
-                                      breakpoints[act][1])):
+                for cnt, (start, end) in enumerate(zip(breakpoints[act][0],
+                                                       breakpoints[act][1])):
                     if drawn:
                         break
                     if (act.lower() in categories_to_zoom
-                        and start in frames_sync and end in frames_sync and end-start > min_im_zoom_num):
+                            and start in frames_sync and end in frames_sync and end - start > min_im_zoom_num):
                         rat_of_nans = sum([img is None for img
                                            in frames[frames_sync.index(start):
-                                                           frames_sync.index(end)]]) / float(
-                            end-start+1)
+                                                     frames_sync.index(end)]]) / float(
+                            end - start + 1)
                         if rat_of_nans < 0.2:
                             occ_montage = self.create_montage(frames[
                                 frames_sync.index(start):
@@ -533,58 +541,56 @@ class DrawingOperations(object):
                                 max_ims=max_im_zoom_num,
                                 im_shape=(imi, imj))
                             occ_montages.append(occ_montage)
-                            break_spans.append([int(start/rat),
-                                          int(end/rat)])
-                            break_labels.append(lower_labels.index(act.lower())+1)
+                            break_spans.append([int(start / rat),
+                                                int(end / rat)])
+                            break_labels.append(
+                                lower_labels.index(act.lower()) + 1)
                             drawn = 1
                         else:
                             continue
-            for axzoom,occ_montage,break_span, break_label in zip(
-                axzooms,occ_montages,break_spans, break_labels) :
-                occ_montage = occ_montage/255.0
-                mont = axzoom.imshow(occ_montage,zorder=1)
-                axzoom.set_title(labels[break_label-1].title())
+            for axzoom, occ_montage, break_span, break_label in zip(
+                    axzooms, occ_montages, break_spans, break_labels):
+                occ_montage = occ_montage / 255.0
+                mont = axzoom.imshow(occ_montage, zorder=1)
+                axzoom.set_title(labels[break_label - 1].title())
 
         if show_breaks and show_zoomed_occ:
-            for cnt,(axzoom,occ_montage,break_span, break_label) in enumerate(zip(
-                axzooms,occ_montages,break_spans, break_labels)) : 
-                con1 = ConnectionPatch(xyA=(break_span[0],break_label), xyB=[0,0], coordsA="data", coordsB="data",
-                                  axesA=ax_plot, axesB=axzoom, color=arr_cmap(cnt), linewidth=1, linestyle='dashdot',
-                                  alpha=1,zorder=25)
-                con2 =  ConnectionPatch(xyA=(break_span[1],break_label), xyB=[occ_montage.shape[1],0], coordsA="data", coordsB="data",
-                                  axesA=ax_plot, axesB=axzoom, color=arr_cmap(cnt), linewidth=1, linestyle='dashdot',
-                                   alpha=1,zorder=25)
+            for cnt, (axzoom, occ_montage, break_span, break_label) in enumerate(zip(
+                    axzooms, occ_montages, break_spans, break_labels)):
+                con1 = ConnectionPatch(xyA=(break_span[0], break_label), xyB=[0, 0], coordsA="data", coordsB="data",
+                                       axesA=ax_plot, axesB=axzoom, color=arr_cmap(cnt), linewidth=1, linestyle='dashdot',
+                                       alpha=1, zorder=25)
+                con2 = ConnectionPatch(xyA=(break_span[1], break_label), xyB=[occ_montage.shape[1], 0], coordsA="data", coordsB="data",
+                                       axesA=ax_plot, axesB=axzoom, color=arr_cmap(cnt), linewidth=1, linestyle='dashdot',
+                                       alpha=1, zorder=25)
 
                 ax_plot.add_patch(con1)
                 ax_plot.add_patch(con2)
 
         if show_im_examples and show_breaks:
             for count, ind in enumerate(selected_inds):
-                xyB = [(0.5+count)*imj
-                       +count*pad_size, 0]
-                xyA = [ind/float(ground_truth.size) * selected_imgs.shape[1],
+                xyB = [(0.5 + count) * imj
+                       + count * pad_size, 0]
+                xyA = [ind / float(ground_truth.size) * selected_imgs.shape[1],
                        selected_acts[count]]
-
 
                 con = ConnectionPatch(
                     xyA=xyA,
-                    xyB =xyB,
+                    xyB=xyB,
                     coordsA="data", coordsB="data",
                     axesA=ax_plot, axesB=ax_ex,
-                    color="red",alpha=0.5,arrowStyle='-|>',
+                    color="red", alpha=0.5, arrowStyle='-|>',
                     linewidth=0.5, zorder=25)
-                con.set_arrowstyle(ArrowStyle('-|>',head_length=.4,
+                con.set_arrowstyle(ArrowStyle('-|>', head_length=.4,
                                               head_width=0.2))
 
                 ax_plot.add_artist(con)
 
-
-
         if show_occ_tab:
-            columns = ('Gestures','#Occurences')
+            columns = ('Gestures', '#Occurences')
             cell_text = []
             for key in breakpoints:
-                cell_text.append([key,len(breakpoints[key][0])])
+                cell_text.append([key, len(breakpoints[key][0])])
 
             ax_table.table(cellText=cell_text,
                            colLabels=columns,
@@ -627,7 +633,7 @@ class DrawingOperations(object):
         while using font family <num_font_family>. Returns montage or None
         '''
         if max_ims is not None and len(imgs) > max_ims:
-            inds = np.linspace(0, len(imgs) - 1,max_ims).astype(
+            inds = np.linspace(0, len(imgs) - 1, max_ims).astype(
                 int)
         else:
             inds = np.arange(len(imgs))
@@ -653,7 +659,7 @@ class DrawingOperations(object):
         montage[:, :, 3] = 255
         im_cnt = 0
 
-        for ind_cnt,cnt in enumerate(inds):
+        for ind_cnt, cnt in enumerate(inds):
             im_cnt = cnt
             try:
                 while imgs[im_cnt] is None:
@@ -693,7 +699,7 @@ class DrawingOperations(object):
         if len(img.shape) == 2:
             img = np.tile(img[:, :, None], (1, 1, 3))
         elif img.shape[2] == 1:
-            img = np.tile(img, (1,1,3))
+            img = np.tile(img, (1, 1, 3))
         return img
 
     def watermark_image_with_text(self, img, text, rat=2, color=(
@@ -775,7 +781,7 @@ class DrawingOperations(object):
                     try:
                         add2graph(graph, node_name, node_val)
                     except BaseException:
-                        print node_name
+                        print(node_name)
                         raise
         graph = pydot.Dot(graph_type='graph')
         add2graph(graph, parent, nested_object)
@@ -1314,7 +1320,8 @@ class ImagesFolderOperations(object):
         imgs_fold_name = os.path.join(path, CONST['frames_fold_name'])
         masks_fold_name = os.path.join(path, CONST['masks_fold_name'])
         masks_needed = os.path.isdir(masks_fold_name)
-        properties_fold_name = os.path.join(path, CONST['properties_fold_name'])
+        properties_fold_name = os.path.join(
+            path, CONST['properties_fold_name'])
         properties_needed = os.path.isdir(properties_fold_name)
         files = []
         masks = []
@@ -1392,7 +1399,6 @@ class GroundTruthOperations(object):
         self.ground_truths = {}
         self.gd_breakpoints = {}
         self.gd_labels = {}
-
 
     def pad_ground_truth(self, ground_truth, data, padding_const=0):
         '''
@@ -1486,14 +1492,14 @@ class GroundTruthOperations(object):
             if fil.endswith('csv'):
                 try:
                     name = os.path.splitext(fil)[0]
-                    gd , br, lb = self.load_ground_truth(
+                    gd, br, lb = self.load_ground_truth(
                         name, ret_labs=True, ret_breakpoints=True)
-                    name = name.replace('_',' ').title()
+                    name = name.replace('_', ' ').title()
                     self.ground_truths[name] = gd
                     self.gd_breakpoints[name] = br
                     self.gd_labels[name] = lb
-                except:
-                    print fil
+                except BaseException:
+                    print(fil)
                     raise
 
     def create_utterances_vectors(self, breakpoints, frames_num=0):
@@ -1512,7 +1518,7 @@ class GroundTruthOperations(object):
         for key in breakpoints:
             res[key] = np.zeros(frames_num) - 1
             for (start, end) in zip(
-                breakpoints[key][0], breakpoints[key][1]):
+                    breakpoints[key][0], breakpoints[key][1]):
                 res[key][start:end + 1] = cnt
                 cnt += 1
         return res
@@ -1525,22 +1531,23 @@ class GroundTruthOperations(object):
         a vector element can have after the merge.
         '''
         selected = np.array([utt_vectors[key] for key in utt_vectors if key in
-               classes_to_merge])
+                             classes_to_merge])
         flag = selected != -1
         check = np.sum(flag, axis=0)
-        if 0:#np.max(check) == 1:
-            fill = np.zeros((flag.shape[0],1))
+        if 0:  # np.max(check) == 1:
+            fill = np.zeros((flag.shape[0], 1))
             fill[0] = 1
-            flag[:,check==0] = fill
-            return selected[flag][None,:]
+            flag[:, check == 0] = fill
+            return selected[flag][None, :]
         else:
-            res = np.zeros((np.max(check),selected.shape[1])) - 1
-            for cnt,col in enumerate(selected.T):
-                uni = np.unique(col[col!=-1])
-                res[:len(uni),cnt] = uni
+            res = np.zeros((np.max(check), selected.shape[1])) - 1
+            for cnt, col in enumerate(selected.T):
+                uni = np.unique(col[col != -1])
+                res[:len(uni), cnt] = uni
             return res
+
     def create_utterances_frequency_plots(self, val_filt='validation',
-                                     test_filt='test'):
+                                          test_filt='test'):
         '''
         Creates ground truth bar plots, that refer to the utterances frequency
         of each class, while separating the plots to validation, testing and
@@ -1560,17 +1567,17 @@ class GroundTruthOperations(object):
         val_ocs = {}
         test_ocs = {}
         train_ocs = {}
-        max_val = {'val':0, 'train':0, 'test':0}
+        max_val = {'val': 0, 'train': 0, 'test': 0}
         for datakey in self.gd_breakpoints:
             if val_filt.lower() in datakey.lower():
                 dic = val_ocs
-                ind='val'
+                ind = 'val'
             elif test_filt.lower() in datakey.lower():
                 dic = test_ocs
-                ind='test'
+                ind = 'test'
             else:
                 dic = train_ocs
-                ind='train'
+                ind = 'train'
             dic[datakey] = {}
             for classkey in self.gd_breakpoints[datakey]:
                 dic[datakey][classkey] = len(
@@ -1578,7 +1585,7 @@ class GroundTruthOperations(object):
                 if (dic[datakey][classkey] == 1 and
                     not (val_filt.lower() in datakey.lower())
                     and not
-                    (test_filt.lower() in datakey.lower())):
+                        (test_filt.lower() in datakey.lower())):
                     dic[datakey][classkey] = 100
                 max_val[ind] = max(max_val[ind],
                                    dic[datakey][classkey])
@@ -1587,8 +1594,8 @@ class GroundTruthOperations(object):
         test_ocs_df = pd.DataFrame(test_ocs).fillna(0).astype(int)
         train_ocs_df = pd.DataFrame(train_ocs).fillna(0).astype(int)
 
-        def plot_barh_frame(df,title=None,save_path=None,
-                           max_val=None, change_last_xtick=None):
+        def plot_barh_frame(df, title=None, save_path=None,
+                            max_val=None, change_last_xtick=None):
             '''
             Takes a pandas dataframe as input
             '''
@@ -1599,9 +1606,9 @@ class GroundTruthOperations(object):
             plt.xlabel('Utterances')
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
             if max_val is not None:
-                ax.set_xlim([0,max_val])
+                ax.set_xlim([0, max_val])
                 xticks = ax.get_xticks()
-                xticks = np.unique(np.hstack((xticks,max_val)))
+                xticks = np.unique(np.hstack((xticks, max_val)))
                 ax.set_xticks(xticks)
             if change_last_xtick is not None:
                 xticks = ax.get_xticks()
@@ -1615,18 +1622,19 @@ class GroundTruthOperations(object):
                              title='Dataset')
             if save_path is not None:
                 fig = ax.get_figure()
-                fig.savefig(save_path, bbox_extra_artists=(leg,), bbox_inches='tight')
-        plot_barh_frame(val_ocs_df,'Gestures Utterances in\n Validation Sets',
-                save_path=os.path.join(results_loc,'validocs.pdf'),
-                       max_val=max_val['val'])
-        plot_barh_frame(test_ocs_df,'Gestures Utterances in\n Test Set',
-                save_path=os.path.join(results_loc,'testocs.pdf'),
-                       max_val=max_val['test'])
-        plot_barh_frame(train_ocs_df,'Gestures Utterances in\n Training Sets',
-                save_path=os.path.join(results_loc,'trainocs.pdf',
-                                      ),
-                       max_val=max_val['train'], change_last_xtick='1')
-
+                fig.savefig(
+                    save_path, bbox_extra_artists=(
+                        leg,), bbox_inches='tight')
+        plot_barh_frame(val_ocs_df, 'Gestures Utterances in\n Validation Sets',
+                        save_path=os.path.join(results_loc, 'validocs.pdf'),
+                        max_val=max_val['val'])
+        plot_barh_frame(test_ocs_df, 'Gestures Utterances in\n Test Set',
+                        save_path=os.path.join(results_loc, 'testocs.pdf'),
+                        max_val=max_val['test'])
+        plot_barh_frame(train_ocs_df, 'Gestures Utterances in\n Training Sets',
+                        save_path=os.path.join(results_loc, 'trainocs.pdf',
+                                               ),
+                        max_val=max_val['train'], change_last_xtick='1')
 
     def construct_ground_truth(self, data=None, classes_namespace=None,
                                length=None, ground_truth_type=None,
@@ -1707,8 +1715,8 @@ class GroundTruthOperations(object):
                                     int(item) for item in items[1].split(',')])
                                 ground_truth_init[items[0]].append([
                                     int(item) for item in items[2].split(',')])
-                            except:
-                                print items
+                            except BaseException:
+                                print(items)
                                 raise
                         max_ind = max(max_ind, max(
                             ground_truth_init[items[0]][1]))
@@ -1871,7 +1879,6 @@ class Latex(object):
     Basic transriptions to latex
     '''
 
-
     def wrap_entry(self, str_to_analyse, ignore_num=True):
         '''
         found_strings = [m.group(1) for m in
@@ -1883,11 +1890,11 @@ class Latex(object):
                               break_on_hyphens=False, replace_whitespace=False)
         try:
             to_app, found_strings = zip(*[[m.group(1), m.group(2)] for m in
-                                      re.finditer('(\\\\.*)\{([^{}]+)\}',
-                                                  str_to_analyse)])
+                                          re.finditer('(\\\\.*)\{([^{}]+)\}',
+                                                      str_to_analyse)])
             to_app = list(to_app)
             found_strings = list(found_strings)
-        except:
+        except BaseException:
             found_strings = []
         if not found_strings:
             found_strings = [str_to_analyse]
@@ -1897,37 +1904,41 @@ class Latex(object):
             if not string.startswith('\\'):
                 found_strings.append(string)
                 to_app.append(0)
-        for string,to_ap in zip(found_strings, to_app):
-            remove = [m.group(1) for m in re.finditer('(\\\\([a-zA-Z0-9]*) )', string)]
+        for string, to_ap in zip(found_strings, to_app):
+            remove = [
+                m.group(1) for m in re.finditer(
+                    '(\\\\([a-zA-Z0-9]*) )', string)]
             for rem in remove:
-                string = string.replace(rem,'')
+                string = string.replace(rem, '')
             if ignore_num:
                 perform_wrapping = False
                 try:
                     float(string)
                     continue
-                except:
+                except BaseException:
                     pass
             wrapped = wrapper.fill(string)
             if wrapped.replace(' ',
-                               '') != string.replace(' ',''):
+                               '') != string.replace(' ', ''):
                 if to_ap:
-                    wrapped = '\n'.join([to_ap+'{' +el + '}' for el in
-                               wrapped.split('\n')])
-                    str_to_analyse = str_to_analyse.replace(to_ap+'{'+
-                                                            string+'}',
-                                   '\\aspecialcell{' +
-                                   wrapped.replace('\n','\\\\')
-                                           + '}')
+                    wrapped = '\n'.join([to_ap + '{' + el + '}' for el in
+                                         wrapped.split('\n')])
+                    str_to_analyse = str_to_analyse.replace(to_ap + '{' +
+                                                            string + '}',
+                                                            '\\aspecialcell{' +
+                                                            wrapped.replace(
+                                                                '\n', '\\\\')
+                                                            + '}')
                 else:
                     str_to_analyse = str_to_analyse.replace(string,
-                                   '\\aspecialcell{' +
-                                   wrapped.replace('\n','\\\\')
-                                           + '}')
+                                                            '\\aspecialcell{' +
+                                                            wrapped.replace(
+                                                                '\n', '\\\\')
+                                                            + '}')
 
         return str_to_analyse
 
-    def wrap_latex_table_entries(self,latex_text, width=8,
+    def wrap_latex_table_entries(self, latex_text, width=8,
                                  ignore_num=True):
         '''
         gets a latex table and wraps its entries,
@@ -1936,28 +1947,27 @@ class Latex(object):
         '''
         import re
 
-
         def wrap_table(latex_table):
-            latex_table = latex_table.replace('\n',' ')
+            latex_table = latex_table.replace('\n', ' ')
             latex_table = ' '.join(latex_table.split())
-            inds = [[m.start(),(1 if m.group(1) is not None
-                                else 2)] for m in
-                                re.finditer('(&)|(\\\\\\\\)',
-                                            latex_table)]
+            inds = [[m.start(), (1 if m.group(1) is not None
+                                 else 2)] for m in
+                    re.finditer('(&)|(\\\\\\\\)',
+                                latex_table)]
             for (start, start_off), (end, end_off) in zip(
-                inds[:-1][::-1],inds[1:][::-1]):
-                latex_table = (latex_table[:start+start_off]+
-                    self.wrap_entry(latex_table[
-                                         start+start_off:
-                                         end])
-                               +latex_table[end:])
+                    inds[:-1][::-1], inds[1:][::-1]):
+                latex_table = (latex_table[:start + start_off] +
+                               self.wrap_entry(latex_table[
+                                   start + start_off:
+                                   end])
+                               + latex_table[end:])
             return latex_table
         tables_start_inds = [m.end() for m in
-                       re.finditer('\\\\begin\{tabular\}',
-                                   latex_text)]
-        tables_end_inds = [m.start()-1 for m in re.
+                             re.finditer('\\\\begin\{tabular\}',
+                                         latex_text)]
+        tables_end_inds = [m.start() - 1 for m in re.
                            finditer('\\end{tabular}',
-                           latex_text)]
+                                    latex_text)]
         for tab_st, tab_en in zip(tables_start_inds[::-1],
                                   tables_end_inds[::-1]):
             latex_table = latex_text[tab_st:tab_en]
@@ -1965,19 +1975,17 @@ class Latex(object):
             latex_text = (latex_text[:tab_st] +
                           latex_table +
                           latex_text[tab_en:])
-        preamble = ('\\newcommand{\\aspecialcell}[2][c]{ \n'+
-                 '\\begin{tabular}[#1]{@{}c@{}}#2\\end{tabular}}\n ')
+        preamble = ('\\newcommand{\\aspecialcell}[2][c]{ \n' +
+                    '\\begin{tabular}[#1]{@{}c@{}}#2\\end{tabular}}\n ')
         if preamble not in latex_text:
             beg_ind = latex_text.find('\\begin{document}')
             if beg_ind == -1:
                 latex_text = preamble + latex_text
             else:
                 latex_text = (latex_text[:beg_ind] +
-                                    preamble +
-                                    latex_text[beg_ind:])
+                              preamble +
+                              latex_text[beg_ind:])
         return latex_text
-
-
 
     def compile(self, path, name):
         '''
@@ -2003,7 +2011,7 @@ class Latex(object):
                     pack_ind = [m.end() for m in
                                 re.finditer('documentclass', data)][0]
                     pack_ind += data[pack_ind:].find('}') + 3
-                except:
+                except BaseException:
                     pack_ind = 0
             pack_data = '\\usepackage'
             if options is not None:
@@ -2017,7 +2025,7 @@ class Latex(object):
         return data
 
     def add_graphics(self, files, tex_path=None, captions=None,
-                     labels=None, 
+                     labels=None,
                      options=None, nomargins=False,
                      shrink_to_fit_only=True):
         if not isinstance(files, list):
@@ -2111,7 +2119,7 @@ class Latex(object):
             if ylabels is None:
                 try:
                     ylabels = arr.index()
-                except:
+                except BaseException:
                     ylabels = arr.index.levels[0]
             arr = arr.values
 
@@ -2186,7 +2194,7 @@ class Latex(object):
         whole_hor_line = '\\cline{1-' + str(x_mat) + '}'
         if title is not None:
             begin += '\\multicolumn'
-            begin += '{'+str(x_mat)+'}{c}'
+            begin += '{' + str(x_mat) + '}{c}'
             begin += '{\\textbf{' + title + '}}\\\\[2ex] \n'
         if sup_x_label is not None:
             if boldlabels:
@@ -2218,15 +2226,15 @@ class Latex(object):
                 try:
                     int(elem)
                     y[-1].append(elem)
-                except:
+                except BaseException:
                     try:
                         float(elem)
                         if round_nums:
                             y[-1].append(
-                                "%.*f" % (max_float,float(elem)))
+                                "%.*f" % (max_float, float(elem)))
                         else:
                             y[-1].append(elem)
-                    except:
+                    except BaseException:
                         y[-1].append(elem)
         str_arr = y
         str_rows = [' & '.join(row) + '\\\\ \n ' for row in str_arr]
@@ -2477,8 +2485,10 @@ class CamShift(object):
         self.track_window = None
         self.rect = None
 
+
 class MacroMetricsCalculation(object):
-    def construct_vectors(self, true_classes, pred_classes, utterances_inds, threshold=0.5):
+    def construct_vectors(self, true_classes, pred_classes,
+                          utterances_inds, threshold=0.5):
         '''
         <pred_classes> are the predicted classes
         <true_classes> are the ground truth classes
@@ -2492,7 +2502,7 @@ class MacroMetricsCalculation(object):
         actual_cats = []
         try:
             utterances_inds[0][0]
-        except:
+        except BaseException:
             utterances_inds = [utterances_inds]
         for utt_row in utterances_inds:
             uni_utt = np.unique(utt_row)
@@ -2514,13 +2524,13 @@ class MacroMetricsCalculation(object):
                         np.argmax(counts)])
                 else:
                     predicted_cats[-1].append(-1)
-        rav_actual_cats = np.array([item for sublist in actual_cats for item in sublist])
+        rav_actual_cats = np.array(
+            [item for sublist in actual_cats for item in sublist])
         rav_predicted_cats = np.array([item for sublist in predicted_cats for item in
                                        sublist])
         select = rav_actual_cats != -1
         res = rav_actual_cats[select], rav_predicted_cats[select]
         return res
-
 
 
 class Measure(object):
@@ -2792,6 +2802,7 @@ class PlotOperations(object):
         lgd = axes.legend(loc='center left', bbox_to_anchor=(1, 0.5))
         return lgd
 
+
 class PreprocessingOperations(object):
     def equalize_samples(self,
                          samples,
@@ -2799,7 +2810,7 @@ class PreprocessingOperations(object):
                          mode='random'):
         '''
         Equalizes dimensions of n_i x m arrays, with i=1:k the array index,
-        in the <samples> list, cutting off random samples. 
+        in the <samples> list, cutting off random samples.
         If <utterance_indices> are given
         (list of n_i vectors, describing samples utterances indices),
         then the cutting off is performed
@@ -2810,30 +2821,34 @@ class PreprocessingOperations(object):
             samples_uniq_inds = []
             inv_inds = []
             for category in utterance_indices:
-                uniq_samples, inv_indices = np.unique(category, return_inverse=True)
-                samples_uniq_inds.append(uniq_samples[uniq_samples!=-1])
+                uniq_samples, inv_indices = np.unique(
+                    category, return_inverse=True)
+                samples_uniq_inds.append(uniq_samples[uniq_samples != -1])
                 try:
-                    inv_indices = inv_indices[inv_indices!= np.where(uniq_samples
-                                                                 == -1)[0]]
-                except:
+                    inv_indices = inv_indices[inv_indices != np.where(uniq_samples
+                                                                      == -1)[0]]
+                except BaseException:
                     pass
                 inv_inds.append(inv_indices)
         else:
             samples_uniq_inds = samples
-            inv_inds = [np.arange(len(samples))]*len(samples)
+            inv_inds = [np.arange(len(samples))] * len(samples)
         num_indices = min([len(cat) for cat in samples_uniq_inds])
         eq_samples = []
         inds_to_return = []
         for category_inds, category, inv_indices in zip(
-            samples_uniq_inds, samples, inv_inds):
+                samples_uniq_inds, samples, inv_inds):
             if mode == 'random':
-                sel_indices = np.random.choice(len(category_inds),num_indices,
-                                           replace=False)
+                sel_indices = np.random.choice(len(category_inds), num_indices,
+                                               replace=False)
             elif mode == 'serial':
                 sel_indices = np.arange(num_indices)
-            mask =  np.any(np.any(inv_indices[None,:]==sel_indices[:,None],axis=0),axis=0)
+            mask = np.any(
+                np.any(inv_indices[None, :] == sel_indices[:, None], axis=0), axis=0)
             eq_samples.append(np.array(category)[mask])
         return eq_samples
+
+
 class Result(object):
     '''class to keep results'''
 
@@ -3368,7 +3383,6 @@ class TimeOperations(object):
         time_array = np.atleast_2d(np.array(time_list).squeeze())
         if isinstance(label, basestring):
             label = [label] * time_array.shape[0]
-        print time_array.shape
         if len(label) != min(time_array.shape):
             raise Exception('Invalid number of labels given')
         self.convert_to_ms = convert_to_ms
@@ -3417,7 +3431,7 @@ with open(CONST_LOC + "/config.yaml", 'r') as stream:
     try:
         CONST = yaml.load(stream)
     except yaml.YAMLError as exc:
-        print exc
+        print(exc)
 # pylint: disable=C0103
 circ_oper = CircularOperations()
 contours = Contour()

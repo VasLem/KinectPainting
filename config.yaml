@@ -1,43 +1,45 @@
-#framerate
+---
+# framerate
 framerate: 30
-#depth maximum value, 0 is the minimum
+# depth maximum value, 0 is the minimum
 max_depth: 12000
-#depth intensity, above which everything is considered noise
+# depth intensity, above which everything is considered noise
 noise_thres: 0.35
-#read=d/f/k; read from data/file/kinect
+# read=d/f/k; read from data/file/kinect
 read: k
-#if read from kinect, live or recorded
+# if read from kinect, live or recorded
 stream: live
-#if recorded stream, the .bag path
+# if recorded stream, the .bag path
 bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/rosbag_files/data.bag
-#save=y/n
+# save=y/n
 save: n
-#directories to load images/test data
+# directories to load images/test data
 path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
 path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
-#directories to load train data
+# directories to load train data
 actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/training
-frames_fold_name : frames
-masks_fold_name : masks
-properties_fold_name : properties
-#rosbag files location
-rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions
-rosbag_temporary_location : /media/vassilis/Thesis
-#pathname of calibrated image edges
+frames_fold_name: frames
+masks_fold_name: masks
+properties_fold_name: properties
+# rosbag files location
+rosbag_location: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions
+rosbag_temporary_location: /media/vassilis/Thesis
+# pathname of calibrated image edges
 cal_edges_path: /home/vassilis/Thesis/KinectPainting/Calibration_Edges.jpg
 cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
-#files to save images
+# files to save images
 save_depth: Depth
 save_color: Color
-#folders to save datasets and ground truths
-test_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/testing
-ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/GroundTruth
-#folder to save data
+# folders to save datasets and ground truths
+test_save_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/testing
+ground_truth_fold: >
+  /media/vassilis/Thesis/Datasets/PersonalFarm/actions/GroundTruth
+# folder to save data
 save_path: /media/vassilis/Thesis/Data/
 class_save_path: /media/vassilis/Thesis/Data/Classifiers
-#folder to display data
-results_fold : /media/vassilis/Data/Thesis/KinectPainting/Results
-#save parameters
+# folder to display data
+results_fold: /media/vassilis/Data/Thesis/KinectPainting/Results
+# save parameters
 max_depth_im_num_to_save: 200
 # Choose object detection method ( segmentation or noise_model or mog2)
 detection_method: mog2
@@ -49,51 +51,51 @@ depth_thres: 10
 lap_thres: 0.01
 running_mean_depth_count: 5
 outlier_shape_time: 1.5
-#Variables for object detection by scene segmentation
+# Variables for object detection by scene segmentation
 similar_bg_min_dist: 2
 cond_erosions_num: 10
 segmentation_data: SegmData
 max_objects_size_ratio: 0.04
 min_displacement: 2
-depth_tolerance: 20 #Too high, needs fixing
-#Variables for object detection by mog2
-gmm_num : 10
-bg_ratio : 0.2
-var_thres : 20
-history : 4000
-#Variables necessary for sparse coding
+depth_tolerance: 20  # Too high, needs fixing
+# Variables for object detection by mog2
+gmm_num: 10
+bg_ratio: 0.2
+var_thres: 20
+history: 4000
+# Variables necessary for sparse coding
 sparse_dim_rat: 2
-sparse_alpha : 1
+sparse_alpha: 1
 sparse_fss_max_iter: 1000
 sparse_fss_min_coeff_rat: 0.05
 sparse_fss_min_coeff: 3
 sparse_fss_gamma: 1
-#the rosbag for training
-train_bag_path: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
-#Variables for action recognition
+# the rosbag for training
+train_bag_path: >
+  /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/train.bag
+# Variables for action recognition
 ZHOF_bin_size: 4
 3DHOF_bin_size: 4
 GHOG_bin_size: 64
-3DXYPCA_size: 32 # per dimension
-GHOG_resize_size: 30 # in y dimension, proportional for x dimension
-ZHOF_resize_size: 30 # in y dimension, proportional for x dimension
-RDF_trees: 29 
+3DXYPCA_size: 32  # per dimension
+GHOG_resize_size: 30  # in y dimension, proportional for x dimension
+ZHOF_resize_size: 30  # in y dimension, proportional for x dimension
+RDF_trees: 29
 SVM_C: 83
 AdaBoost_Estimators: 100
-#Dynamic Params
-STD_small_filt_window: 20 #window of buffers, not frames
-STD_big_filt_window: 40 #window of buffers, not frames
+# Dynamic Params
+STD_small_filt_window: 20  # window of buffers, not frames
+STD_big_filt_window: 40  # window of buffers, not frames
 action_separation_thres: 0
 buffer_max_misses: 4
 buffer_size: 10
 buffer_confidence_tol: 0.25
 filt_window_confidence_tol: 0.75
-kernel : linear #for SVMs classifier
-#PTPCA Params
+kernel: linear  # for SVMs classifier
+# PTPCA Params
 PTPCA_components: 3
-    
-#Variables for hand segmentation
-max_link_number : 6
+# Variables for hand segmentation
+max_link_number: 6
 max_hsa_contours_num: 5
 min_area: 50
 angle_resolution: 0.01
@@ -101,10 +103,10 @@ abnormality_tol: 1
 angle_tol: 0.01
 dist_tol: 1.1
 longest_ray_closing_size: 15
-HOG_bin_size : 30
-HOG_max_window_length : 40
-HOG_overlap : 20
-#Variables to keep memory 
+HOG_bin_size: 30
+HOG_max_window_length: 40
+HOG_overlap: 20
+# Variables to keep memory
 memory_fade_const: 0.05
 memory_fade_exp: 0.2
 memory_power: 0.5
@@ -113,7 +115,7 @@ memory_strength: 0.2
 max_count: 80
 par_eps: 300
 hist_resol: 60
-#Variables necessary for approximate wrist detection
+# Variables necessary for approximate wrist detection
 interp_window: 7
 cutoff_angle_ratio: 15
 wearing_dist_rate: 0.05
@@ -123,43 +125,43 @@ length_power_weight: 1.5
 num_of_checked_segments: 10
 lambda_bound: 0.3
 
-#Variables for data mining
+# Variables for data mining
 free_ram_path: /media/vassilis/Thesis
 
-#Variables for feature extraction
+# Variables for feature extraction
 min_frame_count_diff: 5
 max_gamma: 0.0001
-#Show results and where (display,file,no)
+# Show results and where (display,file,no)
 results: display
-#App configuration
+# App configuration
 AppData: AppData
-#ROS Nodes names
-#Kinect channel to use
+# ROS Nodes names
+# Kinect channel to use
 ROSNodes:
   - Subscriber:
-    - name: KinectSubscriber
-    - subscribing_to: /kinect2/sd/image_depth
-    - publishing_to: depth
-  - ArmExtractor: 
-    - name: ArmExtractor
-    - subscribing_to: depth
-    - publishing_to: [arm, arm_contour]
+      - name: KinectSubscriber
+      - subscribing_to: /kinect2/sd/image_depth
+      - publishing_to: depth
+  - ArmExtractor:
+      - name: ArmExtractor
+      - subscribing_to: depth
+      - publishing_to: [arm, arm_contour]
   - Skeletonizer:
-    - name: Skeletonizer
-    - subscribing_to: [arm, arm_contour]
-    - publishing_to: [skeleton, surrounding_skel]
+      - name: Skeletonizer
+      - subscribing_to: [arm, arm_contour]
+      - publishing_to: [skeleton, surrounding_skel]
   - HandExtractor:
-    - name: HandExtractor
-    - subscribing_to: [arm, skeleton, surrounding_skel]
-    - publishing_to: hand
+      - name: HandExtractor
+      - subscribing_to: [arm, skeleton, surrounding_skel]
+      - publishing_to: [hand, angle, center]
   - GestureRecognizer:
-    - name: GestureRecognizer
-    - subscribing_to: [hand, skeleton]
-    - publishing_to: gesture
+      - name: GestureRecognizer
+      - subscribing_to: [hand, angle, center]
+      - publishing_to: gesture
   - StrokeRecognizer:
-    - name: StrokeRecognizer
-    - subscribing_to: [hand, skeleton, gesture]
-    - publishing_to: stroke
+      - name: StrokeRecognizer
+      - subscribing_to: [hand, skeleton, gesture]
+      - publishing_to: stroke
 ROSChannelsTypes:
   - depth: Image
   - hand: Image
@@ -169,4 +171,3 @@ ROSChannelsTypes:
   - surrounding_skel: Image
   - gesture: TimeReference
   - stroke: TimeReference
-

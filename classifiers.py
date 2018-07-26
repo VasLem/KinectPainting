@@ -2046,7 +2046,6 @@ class Classifier(object):
             if isinstance(self.crossings, list):
                 self.crossings = np.array(self.crossings)
         if self.test_ground_truth is not None and compute_perform:
-            print type(self.recognized_classes)
             self.compute_performance_measures(
                 self.recognized_classes,
                 ground_truths=self.test_ground_truth,

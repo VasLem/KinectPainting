@@ -128,22 +128,22 @@ def detection_by_scene_segmentation():
     if co.counters.im_number == 0:
         co.segclass.needs_segmentation = 1
         if not co.segclass.exists_previous_segmentation:
-            print 'No existing previous segmentation. The initialisation will delay...'
+            print('No existing previous segmentation. The initialisation will delay...')
         else:
-            print 'Checking similarity..'
+            print('Checking similarity..')
             old_im = co.meas.background
             check_if_segmented = np.sqrt(np.sum(
                 (co.data.depth_im[co.meas.trusty_pixels.astype(bool)].astype(float) -
                  old_im[co.meas.trusty_pixels.astype(bool)].astype(float))**2))
-            print 'Euclidean Distance of old and new background is ' +\
-                str(check_if_segmented)
-            print 'Minimum Distance to approve previous segmentation is ' +\
-                str(co.CONST['similar_bg_min_dist'])
+            print('Euclidean Distance of old and new background is ' +\
+                  str(check_if_segmented))
+            print('Minimum Distance to approve previous segmentation is ' +\
+                  str(co.CONST['similar_bg_min_dist']))
             if check_if_segmented < co.CONST['similar_bg_min_dist']:
-                print 'No need to segment again'
+                print('No need to segment again')
                 co.segclass.needs_segmentation = 0
             else:
-                print 'Segmentation is needed'
+                print('Segmentation is needed')
 
     if co.segclass.needs_segmentation and co.counters.im_number >= 1:
         if co.counters.im_number == (co.CONST['framerate'] *
@@ -188,24 +188,24 @@ def detection_by_scene_segmentation():
                 co.segclass.z_objects.xsize.append(xsize)
                 co.segclass.z_objects.ysize.append(ysize)
 
-            print 'Found or partitioned',\
-                co.segclass.nz_objects.count +\
-                co.segclass.z_objects.count + 2, 'background objects'
+            print('Found or partitioned',\
+                   co.segclass.nz_objects.count +\
+                   co.segclass.z_objects.count + 2, 'background objects')
             co.segclass.needs_segmentation = 0
             with open(co.CONST['segmentation_data'] + '.pkl', 'wb') as output:
                 pickle.dump((co.segclass, co.meas), output, -1)
-            print 'Saved segmentation data for future use.'
+            print('Saved segmentation data for future use.')
     elif (not co.segclass.needs_segmentation) and co.counters.im_number >= 2:
         if not co.segclass.initialised_centers:
             try:
                 co.segclass.nz_objects.find_object_center(1)
             except BaseException as err:
-                print 'Centers initialisation Exception'
+                print('Centers initialisation Exception')
                 raise err
             try:
                 co.segclass.z_objects.find_object_center(0)
             except BaseException as err:
-                print 'Centers initialisation Exception'
+                print('Centers initialisation Exception')
                 raise err
             co.segclass.initialise_neighborhoods()
             co.segclass.initialised_centers = 1
@@ -213,7 +213,7 @@ def detection_by_scene_segmentation():
             try:
                 co.segclass.nz_objects.find_object_center(1)
             except BaseException as err:
-                print 'Centers calculation Exception'
+                print('Centers calculation Exception')
                 raise err
         if co.segclass.nz_objects.center.size > 0:
             co.segclass.nz_objects.find_centers_displacement()
@@ -321,7 +321,7 @@ def init_noise_model():
     min_background_thres = (co.meas.background - noise_deviation) * \
         ((co.meas.background - noise_deviation) > 0)
     cv2.imwrite('Min_Background.jpg', (255 * min_background_thres).astype(int))
-    print "Recognition starts now"
+    print("Recognition starts now")
     return min_background_thres, max_background_thres
 
 

@@ -444,6 +444,10 @@ class HandExtractor(object):
                                       point_close_to_corn1[0]) / 2.0,
                                      (point_close_to_corn0[1] +
                                       point_close_to_corn1[1]) / 2.0])
+        last_link = (self.skeleton.skeleton[-1][1] -
+                                 self.skeleton.skeleton[-1][0])
+        self.angle = np.arctan2(
+            last_link[0], last_link[1])
         cv2.drawContours(self.hand_mask, [cv2.convexHull(
             new_box).squeeze()[:, ::-1]], 0, 1, -1)
 
@@ -467,7 +471,6 @@ class FindArmSkeleton(object):
         # surrounding_skel holds the contour points that refer to each link
         self.surrounding_skel = []
         # hand_start holds the starting point of the hand, relatively to rest of the arm
-        self.hand_start = None
         self.init_point = None
         self.entry = None
         self.entry_inds = None

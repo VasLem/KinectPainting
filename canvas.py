@@ -1,29 +1,27 @@
+'''
+Module to create canvas
+'''
+#pylint: disable=R0903
 import logging
 import sys
-import traceback
-from ast import literal_eval
-import abc
-import time
-from math import pi, cos, sin
-import numpy as np
-import cv2
-import rospy
-import wx
-from cv_bridge import CvBridge, CvBridgeError
-# pylint: disable=unused-import
-from sensor_msgs.msg import Image
-from sensor_msgs.msg import TimeReference
-# pylint: enable=unused-import
 import threading
 from subprocess import Popen
 import shlex
 import signal
-import message_filters as mfilters
-import class_objects as co
+import traceback
+import abc
+import time
+from math import pi, cos, sin
+import numpy as np
+from numpy.linalg import norm
+import cv2
+import rospy
 from kivy.multistroke import Recognizer
 from kivy.clock import Clock as clock
 from kivy.vector import Vector
-from numpy.linalg import norm
+import wx
+from ros_pipeline.base import ROSPipelineElement
+import class_objects as co
 LOGLEVEL = 'INFO'  # 'DEBUG'
 LOG = logging.getLogger(__name__)
 FORMAT = '%(funcName)20s(%(lineno)s)-%(levelname)s:%(message)s'
@@ -37,21 +35,16 @@ SHAPE = (500, 900)
 #  pylint: disable=W0221
 
 
-def getbitmap(main_panel, img):
+def getbitmap(img):
+    '''
+    Get wx image bitmap using an input numpy array
+    '''
     image = wx.Image(img.shape[1], img.shape[0])
     image.SetData(img.tostring())
     wx_bitmap = image.ConvertToBitmap()
     return wx_bitmap
 
 
-class Time(object):
-    '''
-    Class to keep time
-    '''
-
-    def __init__(self):
-        self.secs = 0
-        self.nsecs = 0
 
 
 class CreateEvent(wx.PyCommandEvent):
@@ -70,20 +63,6 @@ EVT_STRK_TYPE = wx.NewEventType()
 EVT_STRK = wx.PyEventBinder(EVT_STRK_TYPE, 1)
 
 
-class HandData(object):
-    def __init__(self):
-        self.hand = None
-        self.skel = None
-        self.class_name = None
-        self.fps = None
-
-    def add(self, hand, skel, class_name, fps):
-        self.hand = hand
-        self.skel = skel
-        self.class_name = class_name
-        self.fps = fps
-
-
 class StrokeData(object):
     def __init__(self):
         self.gesture = None
@@ -100,278 +79,7 @@ class StrokeData(object):
 
 
 
-class ROSPipelineElement(threading.Thread):
 
-    def __init__(self, name, loglevel='INFO'):
-        '''
-        `name`:: key given in ROSNodes in config.yaml
-        `loglevel`:: the logger level, defaults to `INFO`
-        '''
-        threading.Thread.__init__(self)
-        name = co.CONST['ROSNodes'][name]['name']
-        subscribe_channels = co.CONST['ROSNodes'][name]['subscribing_to']
-        publish_channels = co.CONST['ROSNodes'][name]['publishing_to']
-        self._name = name
-        self._loglevel = loglevel
-        (subscribe_channels,
-         subscribe_types) = self._check_channels(subscribe_channels)
-
-        (publish_channels,
-         publish_types) = self._check_channels(publish_channels)
-        if subscribe_channels is not None:
-            self.image_ts = mfilters.TimeSynchronizer(
-                [mfilters.Subscriber(channel,
-                                     channel_type) for channel, channel_type in
-                 zip(subscribe_channels, subscribe_types)], 30)
-            self.image_ts.registerCallback(self.get_callback)
-        if publish_channels is not None:
-            self._publishers = {channel: rospy.Publisher(channel, channel_type)
-                                for channel, channel_type
-                                in zip(publish_channels, publish_types)}
-        else:
-            self._publishers = None
-        self._stop_event = threading.Event()
-        self.bridge = CvBridge()
-
-    def _check_channels(self, channels):
-        '''
-        Check input channels integrity
-        '''
-        if channels is None:
-            return channels, None
-        assert isinstance(channels, (str, list)),\
-            'Incorrect argument type for channels'
-        if isinstance(channels, str):
-            channels = [channels]
-        channels_types = [literal_eval(co.CONST['ROSChannelsTypes'][channel])
-                          for channel in channels]
-        return channels, channels_types
-
-    def get_publisher(self, channel):
-        '''
-        Get requested publisher object
-        '''
-        try:
-            return self._publishers[channel]
-        except KeyError:
-            raise BaseException(
-                'Invalid provided channel, publisher does not exist')
-        except TypeError:
-            if self._publishers is None:
-                raise TypeError("No publishers exist"
-                                ", wrong class initialization")
-
-    def run(self):
-        rospy.init_node(self._name, anonymous=True, disable_signals=True)
-        rospy.spin()
-
-    def _callback(self, *channels_data):
-        self.get(*channels_data)
-        self.post()
-
-    def get(self, *channels_data):
-        '''
-        Callback to handle channels subscribers
-        '''
-        pass
-
-    def post(self):
-        '''
-        Function to handle channels publishers
-        '''
-        pass
-
-    def stop(self):
-        '''
-        Stop ROS Thread
-        '''
-        self._stop_event.set()
-
-    def stopped(self):
-        '''
-        Check if ROS Thread is stopped
-        '''
-        return self._stop_event.is_set()
-
-    def post_array(self, channel, array):
-        '''
-        Publish a numpy array to the given channel
-        '''
-        self.get_publisher(channel).publish(self.bridge.cv2_to_imgmsg(
-            np.atleast_2d(array)))
-
-    def get_array(self, ros_message):
-        '''
-        Get a numpy array from ros_message coming from a publisher,
-        who used post_array(). If error shows up, ignore it.
-        '''
-        try:
-            return self.bridge.imgmsg_to_cv2(ros_message,
-                                             desired_encoding="passthrough")
-        except CvBridgeError as err:
-            print(err)
-        return None
-
-    def post_time_reference(self, channel, data):
-        '''
-        Publish a data as time reference source to the given channel
-        '''
-        msg = TimeReference()
-        msg.source = data
-        msg.time_ref = Time()
-        t = rospy.Time.from_sec(time.time())
-        seconds = t.to_sec()  # floating point
-        nanoseconds = t.to_nsec()
-        msg.time_ref.secs = seconds
-        msg.time_ref.nsecs = nanoseconds
-        self.get_publisher(channel).publish(msg)
-
-    def get_time_reference(self, message):
-        return message.source
-
-
-class KinectSubscriber(ROSPipelineElement):
-    def __init__(self, loglevel='INFO'):
-        '''
-        Subscriber to Kinect bridge
-        '''
-        super(KinectSubscriber, self).__init__('Subscriber', loglevel)
-        self.depth = None
-        self.kinect_process = Popen(shlex.split(
-            'roslaunch kinect2_bridge kinect2_bidge.launch'))
-
-    def get(self, depth_message):
-        self.depth = self.get_array(depth_message)
-
-    def post(self):
-        self.post_array('depth', self.depth)
-
-    def stop(self):
-        self.kinect_process.send_signal(signal.SIGINT)
-        self.stop()
-
-
-class ArmExtractor(ROSPipelineElement):
-    def __init__(self, loglevel='INFO'):
-        '''
-        Preprocessor of supplied depth image
-        '''
-        super(ArmExtractor, self).__init__('ArmExtractor', loglevel)
-        self.arm = None
-
-    def preprocess_depth(self, frame):
-        try:
-            mog2_res = self.mog2.run(False,
-                                     frame.astype(np.float32))
-            if mog2_res is None:
-                return
-            mask1 = cv2.morphologyEx(
-                mog2_res.copy(),
-                cv2.MORPH_OPEN,
-                self.open_kernel)
-            check_sum = np.sum(mask1 > 0)
-            if not check_sum or check_sum == np.sum(frame > 0):
-                return
-            _, contours, _ = cv2.findContours(mask1, cv2.RETR_EXTERNAL,
-                                              cv2.CHAIN_APPROX_NONE)
-            cont_ind = np.argmax([cv2.contourArea(contour) for
-                                  contour in contours])
-            final_mask = np.zeros_like(mask1)
-            cv2.drawContours(final_mask, contours, cont_ind, 1, -1)
-            # cv2.imshow('test',mask1*255)
-            # cv2.waitKey(10)
-            return frame * final_mask
-        except BaseException:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            traceback.print_exception(exc_type,
-                                      exc_value,
-                                      exc_traceback, limit=10, file=sys.stdout)
-
-
-from hand_segmentation_alg import FindArmSkeleton
-
-class Skeletonizer(ROSPipelineElement):
-    def __init__(self, loglevel='INFO'):
-        super(Skeletonizer, self).__init__(self, 'Skeletonizer', loglevel)
-        self.skeleton = FindArmSkeleton()
-
-
-    def get(self, arm, arm_contour):
-        arm = self.get_array(arm)
-        arm_contour = self.get_array(arm_contour)
-        self.skeleton_found = self.skeleton.run(arm, arm_contour,
-                                                'longest_ray')
-
-    def post(self):
-        if self.skeleton_found:
-            self.post_time_reference('angle', self.skeleton.angle)
-            self.post_time_reference('center', self.skeleton.hand_start)
-            self.post_array(
-                'skeleton', np.array(
-                    self.skeleton.skeleton, np.int32))
-
-
-
-from hand_segmentation_alg import HandExtractor
-
-
-class HandExtractor(ROSPipelineElement):
-    def __init__(self, loglevel='INFO'):
-        super(HandExtractor, self).__init__('HandExtractor', loglevel)
-        self.hand_extractor = HandExtractor()
-        self.extracted_hand = False
-
-    def get(self, arm, skeleton, surrounding_skel):
-        arm = self.get_array(arm)
-        skeleton = self.get_array(skeleton)
-        surrounding_skel = self.get_array(surrounding_skel)
-        self.extracted_hand = False
-        if self.hand_extractor.run(*args):
-            self.extracted_hand = True
-            self.hand = self.hand_extractor.hand_mask * arm
-
-    def post(self):
-        self.post_array('hand', self.hand)
-
-
-class GestureRecognition(ROSPipelineElement):
-    def __init__(self, loglevel='INFO'):
-        super(GestureRecognition, self).__init__(
-            'GestureRecogntion', loglevel)
-        self.used_classifier = cs.construct_passive_actions_classifier(
-            train=False, test=False,
-            visualize=False,
-            test_against_all=True,
-            for_app=True)
-
-    def get(self, hand, skeleton):
-        scores_exist, _ = self.used_classifier.run_testing(hand,
-                                                           derot_angle=angle,
-                                                           derot_center=center,
-                                                           online=True)
-        # DEBUGGING
-        # cv2.imshow('test',(frame%256).astype(np.uint8))
-        # cv2.waitKey(10)
-        time2 = time.time()
-        self.cnt_timed_frames += 1
-        if self.cnt_timed_frames < self.MAX_TIMED_FRAMES:
-            self.time += time2 - time1
-        self.classified = False
-        if (self.used_classifier.recognized_classes is not None
-            and len(self.used_classifier.recognized_classes) > 0
-                and scores_exist):
-            self.classified = True
-
-    def post(self):
-        try:
-            self.post_time_reference('gesture',
-                                     self.used_classifier.train_classes[
-                                         self.used_classifier.recognized_classes[
-                                             -1]])
-        except TypeError:
-            self.post_time_reference('gesture',
-                                     self.used_classifier.recognized_classes[
-                                         -1].name)
 
 
 
@@ -593,7 +301,7 @@ class Canvas(wx.Window):
         self.scale_frame()
         painter.Clear()
         painter.DrawBitmap(
-            getbitmap(self, self.data), 0, 0)
+            getbitmap(self.data), 0, 0)
 
     def on_size(self, event):
         if not self.init:
@@ -613,10 +321,9 @@ class MainFrame(wx.Frame):
         wx.Frame.__init__(self, parent, id_, title)
         self.Bind(EVT_ROS, self.on_ros_process)
         self.Bind(EVT_STRK, self.on_stroke_process)
-        self.data = HandData()
         self.drawing_im = None
         self.canvas = None
-        self.ros_thread = ROSThread(self, self.data, loglevel)
+        self.ros_thread = ROSThread(self, loglevel)
         self.ros_thread.start()
         self.stroke_data = StrokeData()
         self.stroke_recog_thread = StrokeRecognitionThread(self,

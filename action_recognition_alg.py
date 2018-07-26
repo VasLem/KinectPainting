@@ -634,10 +634,11 @@ class Actions(object):
                                         + str([len(feat) for feat in features])
                                         + ' ...repeating')
                     redo = True
-            except Exception as e:
+            except BaseException as e:
                 for count, feat in enumerate(features):
                     if feat is None:
-                        print 'Features[' + str(count) + '] is None'
+                        self.logger.warning(
+                            'Features[' + str(count) + '] is None')
                 self.logger.warning(str(e))
                 redo = True
                 pass
