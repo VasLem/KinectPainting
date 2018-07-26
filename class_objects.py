@@ -30,9 +30,6 @@ def timeit(method):
     return timed
 
 
-def find_nonzero(arr):
-    return np.fliplr(cv2.findNonZero(arr).squeeze())
-
 
 def makedir(path):
     try:
@@ -1302,91 +1299,88 @@ class FileOperations(object):
 class ImagesFolderOperations(object):
 
     def load_frames_data(self,
-                         input_data,
-                         imgs_fold_name=None,
-                         masks_fold_name=None,
-                         masks_needed=False,
-                         derot_centers=None, derot_angles=None,
+                         path,
                          filetype='png'):
         '''
-        <input_data> is the name of the folder including images.
-        If there are two subfolders, the first one including the images and
-        the second the masks to segment them, then <masks_needed> should be
-        set to True and <imgs_fold_name> and <masks_fold_name> need to be set.
-        The <derot_centers> and <derot_angles> can be provided if a rotation
-        of each input image is wanted, but if not provided, such lists will be
-        loaded from the subfolders, if <angles.txt> and <centers.txt> exist.
-        The directory structure inside <input_data> or in both <imgs_fold_name> and
-        <masks_fold_name> should be either in the form ./occurence number/frames
-        or ./frames, with each frame being of <filetype> type.
+        <path> is the name of the folder including images.
+        Inside can reside three subfolders. One will hold the frames, one will hold the masks, one will hold any other properties. Only the frames subfolder is required to exist. In the properties folder there can be arbitrary number of subfolders whose name denotes the property.
+        The directory structure inside the three subfolders should be either in the form ./occurence number/data or ./data, with each frame being of <filetype> type.
 
         Returns images, masks, a vector <sync> keeping the numeric part of the name of each
         image, the angles if found, the centers if found and a vector <utterance_indices>
         keeping the number of the occurence folder of each frame, if it exists.
         '''
-        if masks_needed:
-            if imgs_fold_name is None:
-                imgs_fold_name = CONST['mv_obj_fold_name']
-            if masks_fold_name is None:
-                masks_fold_name = CONST['hnd_mk_fold_name']
+        print(path)
+        imgs_fold_name = os.path.join(path, CONST['frames_fold_name'])
+        masks_fold_name = os.path.join(path, CONST['masks_fold_name'])
+        masks_needed = os.path.isdir(masks_fold_name)
+        properties_fold_name = os.path.join(path, CONST['properties_fold_name'])
+        properties_needed = os.path.isdir(properties_fold_name)
         files = []
         masks = []
         utterance_indices = []
-        angles = []
-        centers = []
+        angles = None
+        centers = None
         # check if multiple subfolders/samples exist
         try:
-            mult_samples = (os.path.isdir(os.path.join(input_data, '0')) or
-                            os.path.isdir(os.path.join(input_data, imgs_fold_name, '0')))
+            mult_samples = all([os.path.isdir(os.path.join(imgs_fold_name, elem))
+                                for elem in os.listdir(imgs_fold_name)])
         except BaseException:
             mult_samples = False
         sync = []
-        for root, dirs, filenames in os.walk(input_data):
+        for root, dirs, filenames in os.walk(imgs_fold_name):
             if not mult_samples:
                 folder_sep = os.path.normpath(root).split(os.sep)
             for filename in sorted(filenames):
                 fil = os.path.join(root, filename)
                 if mult_samples:
                     folder_sep = os.path.normpath(fil).split(os.sep)
-                if filename.endswith('png'):
-                    ismask = False
-                    if masks_needed:
-                        if mult_samples:
-                            ismask = folder_sep[-3] == masks_fold_name
-                        else:
-                            ismask = folder_sep[-2] == masks_fold_name
-                    par_folder = folder_sep[-2]
-                    try:
-                        ind = int(par_folder) if mult_samples else 0
-                        if ismask:
-                            masks.append(fil)
-                        else:
-                            files.append(fil)
-                            sync.append(int(filter(
-                                str.isdigit, os.path.basename(fil))))
-                            utterance_indices.append(ind)
-                    except ValueError:
-                        pass
-                elif filename.endswith('angles.txt'):
-                    with open(fil, 'r') as inpf:
-                        angles += map(float, inpf)
-                elif filename.endswith('centers.txt'):
-                    with open(fil, 'r') as inpf:
-                        for line in inpf:
-                            center = [
-                                float(num) for num
-                                in line.split(' ')]
-                            centers += [center]
+                par_folder = folder_sep[-2]
+                try:
+                    ind = int(par_folder) if mult_samples else 0
+                    files.append(fil)
+                    sync.append(int(filter(
+                        str.isdigit, os.path.basename(fil))))
+                    utterance_indices.append(ind)
+                except ValueError:
+                    pass
+        unique_utterances = np.unique(utterance_indices)
+        if properties_needed:
+            for ind in unique_utterances:
+                if mult_samples:
+                    fold = os.path.join(properties_fold_name, str(ind))
+                else:
+                    fold = properties_fold_name
+                for property_fil in os.listdir(fold):
+                    property_fil = os.path.join(fold, property_fil)
+                    if filename.endswith('angles.txt'):
+                        if angles is None:
+                            angles = []
+                        with open(fil, 'r') as inpf:
+                            angles += map(float, inpf)
+                    elif filename.endswith('centers.txt'):
+                        if centers is None:
+                            centers = []
+                        with open(fil, 'r') as inpf:
+                            for line in inpf:
+                                center = [
+                                    float(num) for num
+                                    in line.split(' ')]
+                                centers += [center]
         utterance_indices = np.array(utterance_indices)
         imgs = [cv2.imread(filename, -1) for filename
                 in files]
+        masks = []
         if masks_needed:
-            masks = [cv2.imread(filename, -1) for filename in masks]
+            for ind in unique_utterances:
+                if mult_samples:
+                    fold = os.path.join(masks_fold_name, str(ind))
+                else:
+                    fold = masks_fold_name
+                masks.append(cv2.imread(os.path.join(fold, fil)) for
+                             fil in os.listdir(fold))
         else:
-            masks = [None] * len(imgs)
-        if derot_angles is not None and derot_centers is not None:
-            centers = derot_centers
-            angles = derot_angles
+            masks = None
 
         act_len = sync[-1]
         return (imgs, masks, sync, angles, centers, utterance_indices)

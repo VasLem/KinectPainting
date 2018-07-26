@@ -17,6 +17,9 @@ def makedir(path):
             raise
 
 
+
+
+
 class CombinedGesturesClassifier(clfs.Classifier):
 
     def __init__(self, dynamic_classifier=None,
@@ -35,7 +38,8 @@ class CombinedGesturesClassifier(clfs.Classifier):
                                            + str(passive_classifier.classifier_folder),
                                            'Dynamic Cl:' +
                                            str(self.enhanced_dyn.classifier_folder)],
-                                 add_info=add_info, *args, **kwargs)
+                                 add_info=add_info, frames_preproc=self.frames_preproc,
+                                 *args, **kwargs)
         self.parameters['sub_classifiers'] = [
             passive_classifier.classifier_folder,
             dynamic_classifier.classifier_folder]

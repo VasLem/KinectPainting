@@ -7,18 +7,16 @@ from math import pi
 import numpy as np
 from numpy.linalg import pinv
 import cv2
-from . import initialize_logger, timeit, PRIM_X, PRIM_Y, FLNT, find_nonzero
+from __init__ import initialize_logger, timeit, PRIM_X, PRIM_Y, FLNT, find_nonzero
 import class_objects as co
 import sparse_coding as sc
 import hand_segmentation_alg as hsa
-import hist4d as h4d
 from matplotlib import pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.widgets import Button
 import cPickle as pickle
 import descriptors
-
-
+from features_visualization import FeatureVisualization
+from buffer_operations import BufferOperations
+from data_streamer import DataLoader
 
 def checktypes(objects, classes):
     '''
@@ -96,168 +94,6 @@ def prepare_im(img, contour=None, square=False):
     return hand_patch, hand_patch_pos, contour
 
 
-class BufferOperations(object):
-
-    def __init__(self, parameters, reset_time=True):
-        self.logger = logging.getLogger('BufferOperations')
-        initialize_logger(self.logger)
-        self.parameters = parameters
-        self.buffer = []
-        self.depth = []
-        self.testing = parameters['testing']
-        self.action_type = parameters['action_type']
-        self.samples_indices = []
-        self.buffer_start_inds = []
-        self.buffer_end_inds = []
-        if not self.action_type == 'Passive':
-            self.ptpca = parameters['PTPCA']
-            self.ptpca_components = parameters['PTPCA_params'][
-                'PTPCA_components']
-        self.bbuffer = [[] for i in range(len(parameters['descriptors']))]
-        if not self.action_type == 'Passive':
-            self.buffer_size = parameters['dynamic_params']['buffer_size']
-            try:
-                self.buffer_confidence_tol = parameters['dynamic_params'][
-                    'buffer_confidence_tol']
-                self.ptpca = parameters['PTPCA']
-                self.ptpca_components = parameters['PTPCA_params'][
-                    'PTPCA_components']
-            except (KeyError, IndexError, TypeError):
-                self.buffer_confidence_tol = None
-            self.pca_features = []
-        else:
-            self.buffer_size = 1
-        self.sync = []
-        self.frames_inds = []
-        self.samples_inds = []
-        self.buffer_components = []
-        self.depth_components = []
-        self.real_samples_inds = []
-        if reset_time:
-            self.time = []
-
-    def reset(self, reset_time=False):
-        self.__init__(self.parameters, reset_time=reset_time)
-
-    def check_buffer_integrity(self, buffer):
-        check_sam = True
-        check_cont = True
-        check_len = len(buffer) == self.buffer_size
-        if check_len:
-            if not self.action_type == 'Passive':
-
-                check_cont = np.all(np.abs(np.diff(self.frames_inds[-self.buffer_size:])) <=
-                                    self.buffer_size * self.buffer_confidence_tol)
-                # check if buffer frames belong to the same sample, in case of
-                # training
-                check_sam = self.testing or len(np.unique(
-                    self.samples_inds[-self.buffer_size:])) == 1
-            else:
-                check_cont = True
-                check_sam = True
-                check_len = True
-        return check_len and check_cont and check_sam
-
-    @timeit
-    def perform_post_time_pca(self, inp):
-        reshaped = False
-        if self.buffer_size == 1:
-            return
-        if np.shape(inp)[0] == 1 or len(np.shape(inp)) == 1:
-            reshaped = True
-            inp = np.reshape(inp, (self.buffer_size, -1))
-        mean, inp = cv2.PCACompute(
-            np.array(inp),
-            np.array([]),
-            maxComponents=self.ptpca_components)
-        inp = (np.array(inp) + mean)
-        if reshaped:
-            return inp.ravel()
-        return inp
-
-    def update_buffer_info(self, sync, samples_index=0,
-                           samples=None, depth=None):
-        self.frames_inds.append(sync)
-        self.samples_inds.append(samples_index)
-        if samples is not None:
-            self.buffer_components.append(samples)
-            del self.buffer_components[:-self.buffer_size]
-        if depth is not None:
-            self.depth_components.append(depth)
-            del self.depth_components[:-self.buffer_size]
-
-    def add_buffer(self, buffer=None, depth=None, sample_count=None,
-                   already_checked=False):
-        '''
-        <buffer> should have always the same size.
-        <self.bbuffer> is a list of buffers. It can have a size limit, after which it
-        acts as a buffer (useful for shifting window
-        operations (filtering etc.))
-        '''
-        # check buffer contiguousness
-        if buffer is None:
-            buffer = self.buffer_components
-        if depth is None:
-            fmask = np.isfinite(self.depth_components)
-            if np.sum(fmask):
-                depth = np.mean(np.array(self.depth_components)[fmask])
-        if not already_checked:
-            check = self.check_buffer_integrity(buffer[-self.buffer_size:])
-        else:
-            check = True
-        if not self.parameters['testing_params']['online']:
-            self.real_samples_inds += [-1] * (self.frames_inds[-1] + 1 -
-                                              len(self.buffer))
-            self.depth += [None] * (self.frames_inds[-1] + 1
-                                    - len(self.buffer))
-            self.buffer += [None] * (self.frames_inds[-1] + 1
-                                     - len(self.buffer))
-        if check:
-            self.buffer_start_inds.append(self.frames_inds[-self.buffer_size])
-            self.buffer_end_inds.append(self.frames_inds[-1])
-            if not self.parameters['testing_params']['online']:
-                self.buffer[self.frames_inds[-1]] = np.array(
-                    buffer)
-                self.depth[self.frames_inds[-1]] = depth
-            else:
-                self.buffer = np.array(buffer)
-                self.depth = depth
-            if not self.parameters['testing_params']['online']:
-                self.real_samples_inds[self.frames_inds[-1]] = (np.unique(self.samples_inds[
-                    -self.buffer_size:])[0])
-        else:
-            if self.parameters['testing_params']['online']:
-                self.buffer = None
-                self.depth = None
-
-    def extract_buffer_list(self):
-        '''
-        Returns a 2d numpy array, which has as first dimension the number of
-        saved features sets inside <self.bbuffer>,
-        as second dimension a flattened buffer. In case it is online, the first
-        dimension is 1. In case there are None samples inside, those are turned
-        to None arrays.
-        '''
-        if self.parameters['testing_params']['online']:
-            if self.bbuffer is None:
-                return None
-        else:
-            buffer_len = 0
-            for _buffer in self.buffer:
-                if _buffer is not None:
-                    buffer_len = np.size(_buffer)
-                    break
-            if not buffer_len:
-                self.logger.debug('No valid buffer')
-                return None
-        npbuffer = np.zeros((len(self.buffer), buffer_len))
-        for buffer_count in range(len(self.buffer)):
-            if self.buffer[buffer_count] is None:
-                self.buffer[buffer_count] = np.zeros(buffer_len)
-                self.buffer[buffer_count][:] = np.nan
-            npbuffer[buffer_count, ...] =\
-                np.array(self.buffer[buffer_count]).T.ravel()
-        return npbuffer, self.real_samples_inds, self.depth
 
 
 class Action(object):
@@ -299,7 +135,10 @@ class Actions(object):
         self.available_descriptors = {'3DHOF': descriptors.TDHOF,
                                       'ZHOF': descriptors.ZHOF,
                                       'GHOG': descriptors.GHOG,
-                                      '3DXYPCA': descriptors.TDXYPCA}
+                                      '3DXYPCA': descriptors.TDXYPCA,
+                                      'CONTOUR_STATS':descriptors.ContourStatistics}
+        self.required_properties = [('VAR',descriptors.VAR),
+                                    ('MEDIAN', descriptors.MEDIAN)]
         self.actions = []
         self.names = []
         self.coders = coders
@@ -322,6 +161,8 @@ class Actions(object):
         self.coders_info = [None] * len(self.parameters['descriptors'])
         self.buffer_class = ([BufferOperations(self.parameters)] *
                              len(self.parameters['descriptors']))
+        self.frames_preproc = FramesPreprocessing(
+                                self.parameters)
 
     def save_action_features_to_mem(self, data, filename=None,
                                     action_name=None):
@@ -442,15 +283,23 @@ class Actions(object):
         return self.coders_info[count]
 
     def retrieve_descriptor_possible_ids(self, count, assume_existence=False):
-        descriptor = self.parameters['descriptors'][count]
+        if isinstance(count, int):
+            is_property = False
+            descriptor = self.parameters['descriptors'][count]
+        else:
+            is_property = True
+            descriptor = count
         file_ids = [co.dict_oper.create_sorted_dict_view(
             {'Descriptor': descriptor}),
             co.dict_oper.create_sorted_dict_view(
             {'ActionType': self.parameters['action_type']}),
-            co.dict_oper.create_sorted_dict_view(
+            (co.dict_oper.create_sorted_dict_view(
             {'DescriptorParams': co.dict_oper.create_sorted_dict_view(
-                self.parameters['features_params'][descriptor]['params'])})]
+                self.parameters['features_params'][descriptor]['params'])})
+            if not is_property else None)]
         ids = ['Features']
+        if is_property:
+            return ids, file_ids
         if self.sparsecoded:
             self.load_sparse_coder(count)
         if (self.parameters['sparsecoded'] == 'Features'
@@ -486,6 +335,40 @@ class Actions(object):
                     ids.append('PTPCA')
         return ids, file_ids
 
+
+    def get_action_properties(self, action, path):
+        total_properties = {}
+        dl = None
+        for prop_name, prop_constructor in self.required_properties:
+            ids, file_ids = self.retrieve_descriptor_possible_ids(prop_name)
+            key_ids = [ids[0]] + file_ids + [action]
+            loaded_data = co.file_oper.load_labeled_data(key_ids)
+            if loaded_data is None:
+                extracted_properties = []
+                self.frames_preproc.reset()
+                extractor = prop_constructor(self.frames_preproc)
+                if dl is None:
+                    dl = DataLoader(path)
+                for img, img_count in enumerate(dl.imgs):
+
+                    check = self.frames_preproc.update(img,
+                                                       dl.sync[img_count],
+                                                       mask=dl.masks[img_count],
+                                                       angle=dl.angles[img_count],
+                                                       center=dl.centers[img_count])
+                    if not check:
+                        extracted_properties.append(None)
+                    else:
+                        extracted_properties.append(extractor.extract())
+                total_properties[prop_name] = extracted_properties
+                co.file_oper.save_labeled_data(key_ids, total_properties[prop_name])
+            else:
+                total_properties[prop_name] = loaded_data
+        return total_properties
+
+
+
+
     def add_action(self, data=None,
                    mv_obj_fold_name=None,
                    hnd_mk_fold_name=None,
@@ -505,7 +388,6 @@ class Actions(object):
                    feat_filename=None,
                    calc_mean_depths=False,
                    to_visualize=[],
-                   n_vis_frames=9,
                    exit_after_visualization=False,
                    offline_vis=False):
         '''
@@ -521,19 +403,19 @@ class Actions(object):
         self.name = name
         if name is None:
             self.name = os.path.basename(data)
-        loaded_data = [[] for i in range(len(self.parameters['descriptors']))]
         readimagedata = False
-        features = [None] * len(self.parameters['descriptors'])
-        buffers = [None] * len(self.parameters['descriptors'])
-        samples_indices = [None] * len(self.parameters['descriptors'])
-        median_depth = [None] * len(self.parameters['descriptors'])
+        descriptors_num = len(self.parameters['descriptors'])
+        loaded_data = [[] for i in range(descriptors_num)]
+        features = [None] * descriptors_num
+        samples_indices = [None] * descriptors_num
         times = {}
         valid = False
         redo = False
         if 'raw' in to_visualize:
             load = False
+        properties, dl = self.get_action_properties(self.name, data)
         while not valid:
-            for count, descriptor in enumerate(self.parameters['descriptors']):
+            for count, descriptor in enumerate(descriptors):
                 nloaded_ids = {}
                 loaded_ids = {}
                 ids, file_ids = self.retrieve_descriptor_possible_ids(count)
@@ -556,34 +438,12 @@ class Actions(object):
                         continue
                     if nloaded_id == 'Features':
                         if not readimagedata:
-                            (imgs, masks, sync, angles,
-                             centers,
-                             samples_inds) = co.imfold_oper.load_frames_data(
-                                 data, mv_obj_fold_name,
-                                 hnd_mk_fold_name, masks_needed,
-                                 derot_centers, derot_angles)
-                            if 'raw' in to_visualize:
-                                montage = co.draw_oper.create_montage(imgs[:],
-                                                                      max_ims=n_vis_frames,
-                                                                      draw_num=False)
-                                fig = plt.figure()
-                                tmp_axes = fig.add_subplot(111)
-                                tmp_axes.imshow(montage[:, :, :-1])
-                                plt.axis('off')
-                                fig.savefig('frames_sample.pdf',
-                                            bbox_inches='tight')
-                                to_visualize.remove('raw')
-                                if (not to_visualize and
-                                        exit_after_visualization):
-                                    return
+                            if dl is None:
+                                dl = DataLoader(data)
                             for cnt in range(len(samples_indices)):
-                                samples_indices[cnt] = samples_inds.copy()
+                                samples_indices[cnt] = dl.samples_inds.copy()
                             readimagedata = True
-                        if not self.frames_preproc:
-                            self.frames_preproc = FramesPreprocessing(
-                                self.parameters)
-                        else:
-                            self.frames_preproc.reset()
+                        self.frames_preproc.reset()
                         if not self.descriptors[descriptor]:
                             self.descriptors[
                                 descriptor] = self.available_descriptors[
@@ -592,38 +452,33 @@ class Actions(object):
                                                 viewer=(
                                                     FeatureVisualization(
                                                         offline_vis=offline_vis,
-                                                        n_frames=len(imgs)) if
+                                                        n_frames=len(dl.imgs)) if
                                                     to_visualize else None))
                         else:
                             self.descriptors[descriptor].reset()
                         features[count] = []
-                        median_depth[count] = []
                         valid = []
-                        for img_count, img in enumerate(imgs):
+                        for img_count, img in enumerate(dl.imgs):
                             '''
                             #DEBUGGING
                             cv2.imshow('t', (img%256).astype(np.uint8))
                             cv2.waitKey(30)
                             '''
                             check = self.frames_preproc.update(img,
-                                                               sync[img_count],
-                                                               mask=masks[img_count],
-                                                               angle=angles[img_count],
-                                                               center=centers[img_count])
+                                                               dl.sync[img_count],
+                                                               mask=dl.masks[img_count],
+                                                               angle=dl.angles[img_count],
+                                                               center=dl.centers[img_count])
                             if 'features' in to_visualize:
                                 self.descriptors[descriptor].set_curr_frame(
                                     img_count)
                             if check:
+                                extracted_features = self.descriptors[descriptor].extract()
 
-                                extracted_features = self.descriptors[descriptor].extract(
-                                )
                                 if extracted_features is not None:
                                     features[count].append(extracted_features)
-                                    median_depth[count].append(
-                                        np.median(self.frames_preproc.curr_patch))
                                 else:
                                     features[count].append(None)
-                                    median_depth[count].append(None)
                                 if 'features' in to_visualize:
                                     self.descriptors[descriptor].visualize()
                                     self.descriptors[descriptor].draw()
@@ -636,10 +491,10 @@ class Actions(object):
                                     self.descriptors[descriptor].draw()
                                     continue
                                 features[count].append(None)
-                                median_depth[count].append(None)
                         if 'Features' not in times:
                             times['Features'] = []
                         times['Features'] += self.descriptors[descriptor].time
+
                         if self.preproc_time is None:
                             self.preproc_time = []
                         self.preproc_time += self.frames_preproc.time
@@ -648,16 +503,14 @@ class Actions(object):
                                                        + loaded_ids[nloaded_id] +
                                                        [self.name],
                                                        [np.array(features[count]),
-                                                        (sync,
+                                                        (dl.sync,
                                                          samples_indices[count]),
-                                                        median_depth[count],
                                                         times])
                     elif nloaded_id == 'Sparse Features':
                         if features[count] is None:
                             [features[count],
                              (sync,
                               samples_indices[count]),
-                             median_depth[count],
                              times] = co.file_oper.load_labeled_data(
                                  [ids[ids.index(nloaded_id) - 1]] +
                                  loaded_ids[ids[ids.index(nloaded_id) - 1]] + [self.name])
@@ -676,7 +529,6 @@ class Actions(object):
                                                        [np.array(features[count]),
                                                         (sync,
                                                          samples_indices[count]),
-                                                        median_depth[count],
                                                         times])
                     elif nloaded_id == 'Buffered Features':
                         if features[count] is None or samples_indices[count] is None:
@@ -684,7 +536,6 @@ class Actions(object):
                                 count],
                              (sync,
                               samples_indices[count]),
-                             median_depth[count],
                              times] = co.file_oper.load_labeled_data(
                                 [ids[ids.index(nloaded_id) - 1]] +
                                 loaded_ids[
@@ -697,22 +548,20 @@ class Actions(object):
                                 sync[sample_count],
                                 samples_indices[count][sample_count],
                                 samples=features[count][sample_count],
-                                depth=median_depth[count][sample_count])
+                                depth=properties['MEDIAN'][sample_count])
                             self.buffer_class[count].add_buffer()
-                        features[count], samples_indices[count], median_depth[count] = self.buffer_class[count].extract_buffer_list(
+                        features[count], samples_indices[count], properties['MEDIAN'] = self.buffer_class[count].extract_buffer_list(
                         )
                         loaded_ids[nloaded_id] = nloaded_file_id
                         co.file_oper.save_labeled_data([nloaded_id] + loaded_ids[nloaded_id]
                                                        + [self.name],
                                                        [np.array(features[count]),
                                                         samples_indices[count],
-                                                        median_depth[count],
                                                         times])
                     elif nloaded_id == 'Sparse Buffers':
                         if features[count] is None:
                             [features[count],
                              samples_indices[count],
-                             median_depth[count],
                              times] = co.file_oper.load_labeled_data(
                                 ['Buffered Features'] +
                                 loaded_ids['Buffered Features']
@@ -731,13 +580,11 @@ class Actions(object):
                                                        + [self.name],
                                                        [np.array(features[count]),
                                                         samples_indices[count],
-                                                        median_depth[count],
                                                         times])
                     elif nloaded_id == 'PTPCA':
                         if features[count] is None:
                             [features[count],
                              samples_indices[count],
-                             median_depth[count],
                              times] = co.file_oper.load_labeled_data(
                                 [ids[ids.index('PTPCA') - 1]] +
                                  loaded_ids[ids[ids.index('PTPCA') - 1]]
@@ -757,13 +604,11 @@ class Actions(object):
                                                        [np.array(
                                                            features[count]),
                                                         samples_indices[count],
-                                                        median_depth[count],
                                                         times])
                 if features[count] is None:
                     try:
                         [features[count],
                          samples_indices[count],
-                         median_depth[count],
                          times] = loaded_data
                         if isinstance(samples_indices[count], tuple):
                             samples_indices[count] = samples_indices[count][-1]
@@ -799,9 +644,7 @@ class Actions(object):
         return (features,
                 samples_indices[np.argmax([len(sample) for sample in
                                            samples_indices])],
-                median_depth[np.argmax([len(median_depth) for
-                                        median_depth in
-                                        samples_indices])],
+                properties['MEDIAN'],
                 self.name, self.coders, self.descriptors_id)
 
     def save(self, save_path=None):
@@ -936,8 +779,6 @@ class ActionsSparseCoding(object):
             pickle.dump((self.sparse_coders, self.codebooks), output, -1)
 
 
-
-
 class FramesPreprocessing(object):
 
     def __init__(self, parameters, reset_time=True):
@@ -980,10 +821,13 @@ class FramesPreprocessing(object):
 
     @timeit
     def update(self, img, img_count, use_dexter=False, mask=None, angle=None,
-               center=None, masks_needed=False, isderotated=False):
+               center=None, masks_needed=False, isderotated=False,
+               preprocessed=False):
         '''
         Update frames
         '''
+        if isinstance(img, int):
+            self.logger.warning('Supplied image is integer')
 
         if use_dexter:
             mask, hand_patch, hand_patch_pos = prepare_dexter_im(
@@ -1100,245 +944,6 @@ class FramesPreprocessing(object):
         return not (any_none or self.curr_patch is None)
 
 
-class FeatureVisualization(object):
-
-    def __init__(self, offline_vis=False, n_frames=None,
-                 n_saved=4, init_frames=50):
-        import matplotlib.pyplot as plt
-        self.logger = logging.getLogger(self.__class__.__name__)
-        if offline_vis:
-            self.n_to_plot = n_frames / n_saved
-        else:
-            self.n_to_plot = None
-        self.offline_vis = offline_vis
-        self.n_frames = n_frames
-        self.init_frames = init_frames
-        gs = gridspec.GridSpec(120, 100)
-        initialize_logger(self.logger)
-        if not self.offline_vis:
-            plt.ion()
-            self.fig = plt.figure()
-            self.patches3d_plot = self.fig.add_subplot(
-                gs[:50, 60:100], projection='3d')
-            self.patches2d_plot = self.fig.add_subplot(gs[:50, :50])
-            self.hist4d = h4d.Hist4D()
-            self.hof_plots = (self.fig.add_subplot(gs[60:100 - 5, :45], projection='3d'),
-                              self.fig.add_subplot(gs[60:100 - 5, 45:50]),
-                              self.fig.add_subplot(gs[100 - 4:100 - 2, :50]),
-                              self.fig.add_subplot(gs[100 - 2:100, :50]))
-            self.plotted_hof = False
-            self.pause_key = Button(
-                self.fig.add_subplot(gs[110:120, 25:75]), 'Next')
-            self.pause_key.on_clicked(self.unpause)
-            self.hog_plot = self.fig.add_subplot(gs[70:100, 70:100])
-            plt.show()
-        else:
-            self.fig = plt.figure()
-            self.hog_fig = plt.figure()
-            self.patches3d_fig = plt.figure()
-            self.patches2d_fig = plt.figure()
-            self.xypca_fig = plt.figure()
-            self.patches3d_plot = self.patches2d_fig.add_subplot(111)
-            self.patches2d_plot = self.patches3d_fig.add_subplot(111)
-            self.xypca_plot = self.xypca_fig.add_subplot(111)
-            self.hog_plot = self.hog_fig.add_subplot(111)
-            self.hof_plots = (self.fig.add_subplot(gs[60:100 - 5, :45], projection='3d'),
-                              self.fig.add_subplot(gs[60:100 - 5, 45:50]),
-                              self.fig.add_subplot(gs[100 - 4:100 - 2, :50]),
-                              self.fig.add_subplot(gs[100 - 2:100, :50]))
-            self.patches3d_fig.tight_layout()
-            self.patches2d_fig.tight_layout()
-            self.fig.tight_layout()
-            self.hog_fig.tight_layout()
-            self.xypca_fig.tight_layout()
-            self.hogs = []
-            self.patches2d = []
-            self.patches3d = []
-            self.xypca = []
-            self.hof = None
-        self.curr_frame = None
-
-    def to_plot(self):
-        if not self.offline_vis or self.curr_frame is None:
-            return True
-        return not ((
-            self.curr_frame - self.init_frames) % self.n_to_plot)
-
-    def set_curr_frame(self, num):
-        self.curr_frame = num
-
-    def plot(self, name, features, edges):
-        if 'hog' in name:
-            self.plot_hog(features, edges)
-        elif 'hof' in name:
-            self.plot_hof(features, edges)
-        elif 'pca' in name:
-            self.plot_xypca(features, edges)
-
-    def plot_hog(self, ghog_features, ghog_edges):
-        if self.to_plot():
-            hog_hist = ghog_features
-            hog_bins = ghog_edges
-            width = 0.7 * (hog_bins[0][1] - hog_bins[0][0])
-            center = (hog_bins[0][:-1] + hog_bins[0][1:]) / 2
-            self.hog_plot.clear()
-            self.hog_plot.bar(center, hog_hist, align='center', width=width)
-
-    def plot_hof(self, hof_features, hof_edges):
-        if self.to_plot():
-            if not self.plotted_hof:
-                if self.offline_vis:
-                    self.plotted_hof = True
-                self.hist4d.draw(
-                    hof_features,
-                    hof_edges,
-                    fig=self.fig,
-                    all_axes=self.hof_plots)
-                self.hof = self.convert_plot2array(self.fig)
-
-    def plot_xypca(self, pca_features, xticklabels):
-        if self.to_plot():
-            width = 0.35
-            ind = np.arange(len(xticklabels))
-            self.xypca_plot.clear()
-            self.xypca_plot.set_xticks(ind + width / 2)
-            self.xypca_plot.set_xticklabels(xticklabels)
-            self.xypca.append(self.convert_plot2array(self.xypca_fig))
-
-    def plot_3d_projection(self, roi, prev_roi_patch, curr_roi_patch):
-        if self.to_plot():
-            nonzero_mask = (prev_roi_patch * curr_roi_patch) > 0
-            yx_coords = (find_nonzero(nonzero_mask.astype(np.uint8)).astype(float) -
-                         np.array([[PRIM_Y - roi[0, 0],
-                                    PRIM_X - roi[1, 0]]]))
-            prev_z_coords = prev_roi_patch[nonzero_mask][:,
-                                                         None].astype(float)
-            curr_z_coords = curr_roi_patch[nonzero_mask][:,
-                                                         None].astype(float)
-            prev_yx_proj = yx_coords * prev_z_coords / (FLNT)
-            curr_yx_proj = yx_coords * curr_z_coords / (FLNT)
-            prev_yx_proj = prev_yx_proj[prev_z_coords.ravel() != 0]
-            curr_yx_proj = curr_yx_proj[curr_z_coords.ravel() != 0]
-            self.patches3d_plot.clear()
-            self.patches3d_plot.scatter(prev_yx_proj[:, 1], prev_yx_proj[:, 0],
-                                        prev_z_coords[prev_z_coords != 0],
-                                        zdir='z', s=4, c='r', depthshade=False, alpha=0.5)
-            self.patches3d_plot.scatter(curr_yx_proj[:, 1], curr_yx_proj[:, 0],
-                                        curr_z_coords[curr_z_coords != 0],
-                                        zdir='z', s=4, c='g', depthshade=False, alpha=0.5)
-            if self.offline_vis:
-                self.patches3d.append(
-                    self.convert_plot2array(
-                        self.patches3d_fig))
-            '''
-            zprevmin,zprevmax=self.patches3d_plot.get_zlim()
-            yprevmin,yprevmax=self.patches3d_plot.get_ylim()
-            xprevmin,xprevmax=self.patches3d_plot.get_xlim()
-            minlim=min(xprevmin,yprevmin,zprevmin)
-            maxlim=max(xprevmax,yprevmax,zprevmax)
-            self.patches3d_plot.set_zlim([minlim,maxlim])
-            self.patches3d_plot.set_xlim([minlim,maxlim])
-            self.patches3d_plot.set_ylim([minlim,maxlim])
-            '''
-
-    def convert_plot2array(self, fig):
-        data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-        data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-
-    def plot_3d_patches(self, roi, prev_roi_patch, curr_roi_patch):
-        if self.to_plot:
-            self.patches3d_plot.clear()
-            x_range = np.arange(roi[0, 0], roi[0, 1])
-            y_range = np.arange(roi[1, 0], roi[1, 1])
-            xmesh, ymesh = np.meshgrid(y_range, x_range)
-            xmesh = xmesh.ravel()
-            ymesh = ymesh.ravel()
-            curr_vals = curr_roi_patch.ravel()
-            self.patches3d_plot.scatter(xmesh[curr_vals > 0],
-                                        ymesh[curr_vals > 0],
-                                        zs=curr_vals[curr_vals > 0],
-                                        zdir='z',
-                                        s=4,
-                                        c='r',
-                                        depthshade=False,
-                                        alpha=0.5)
-            prev_vals = prev_roi_patch.ravel()
-            self.patches3d_plot.scatter(xmesh[prev_vals > 0],
-                                        ymesh[prev_vals > 0],
-                                        zs=prev_vals[prev_vals > 0],
-                                        zdir='z',
-                                        s=4,
-                                        c='g',
-                                        depthshade=False,
-                                        alpha=0.5)
-            if self.offline_vis:
-                self.patches3d.append(
-                    self.convert_plot2array(
-                        self.patches3d_fig))
-
-    def plot_2d_patches(self, prev_roi_patch, curr_roi_patch):
-        self.patches2d_plot.clear()
-        self.patches2d_plot.imshow(prev_roi_patch, cmap='Reds', alpha=0.5)
-        self.patches2d_plot.imshow(curr_roi_patch, cmap='Greens', alpha=0.5)
-        if self.offline_vis:
-            self.patches2d.append(self.convert_plot2array(self.patches2d_fig))
-
-    def _draw_single(self, fig):
-        import time
-        if not self.offline_vis:
-            fig.canvas.draw()
-            try:
-                fig.canvas.start_event_loop(30)
-            except BaseException:
-                time.sleep(1)
-
-    def draw(self):
-        if not self.offline_vis:
-            self._draw_single(self.fig)
-        else:
-            if self.to_plot():
-                self._draw_single(self.hog_fig)
-                self._draw_single(self.fig)
-                self._draw_single(self.patches3d_fig)
-                self._draw_single(self.patches2d_fig)
-
-            if self.curr_frame == self.n_frames - 1:
-                import pickle
-                with open('visualized_features', 'w') as out:
-                    pickle.dump((self.hof, self.hogs,
-                                 self.patches2d,
-                                 self.patches3d), out)
-                tmp_fig = plt.figure()
-                tmp_axes = tmp_fig.add_subplot(111)
-                if self.hogs:
-                    hogs_im = co.draw_oper.create_montage(
-                        self.hogs, draw_num=False)
-                    tmp_axes.imshow(hogs_im[:, :, :3])
-                    plt.axis('off')
-                    tmp_fig.savefig('ghog.pdf', bbox_inches='tight')
-                if self.hof is not None:
-                    tmp_axes.imshow(self.hof[:, :, :3])
-                    plt.axis('off')
-                    tmp_fig.savefig('3dhof.pdf', bbox_inches='tight')
-                if self.patches2d:
-                    patches2d_im = co.draw_oper.create_montage(
-                        self.patches2d, draw_num=False)
-                    tmp_axes.imshow(patches2d_im[:, :, :3])
-                    plt.axis('off')
-                    tmp_fig.savefig('patches2d.pdf', bbox_inches='tight')
-                if self.patches3d:
-                    patches3d_im = co.draw_oper.create_montage(
-                        self.patches3d, draw_num=False)
-                    tmp_axes.imshow(patches3d_im[:, :, :3])
-                    plt.axis('off')
-                    tmp_fig.savefig('patches3d.pdf', bbox_inches='tight')
-                if self.xypca:
-                    tmp_axes.imshow(self.hof[:, :, :3])
-                    plt.axis('off')
-                    tmp_fig.savefig('3dxypca.pdf', bbox_inches='tight')
-
-    def unpause(self, val):
-        plt.gcf().canvas.stop_event_loop()
 
 
 class ActionRecognition(object):

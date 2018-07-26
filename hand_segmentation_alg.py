@@ -39,7 +39,7 @@ at n-th joint defined by previous directions.
 '''
 import logging
 from math import pi
-import os, sys
+import os
 # import time
 import numpy as np
 import cv2
@@ -49,7 +49,7 @@ if __name__ == '__main__':
     import yaml
     import timeit
     import cProfile as profile
-
+from __init__ import get_real_coordinate
 
 def with_laplacian(binarm):
     '''
@@ -353,6 +353,105 @@ class LHOGE(object):
         self.frame = frame
 
 
+class HandExtractor(object):
+
+
+    def get_point_depth(self, depth, x, y, tol=5):
+        part = depth[max(0, y - tol): min(y + tol, depth.shape[0] - 1),
+                        max(0, x - tol): min(x + tol, depth.shape[1] - 1)]
+        return np.median(part[np.logical_and(part>0, np.isfinite(part))])
+
+
+    def calculate_visible_arm_length(self, depth, skeleton):
+        length = 0
+        for link in skeleton:
+            length += np.linalg.norm(
+                get_real_coordinate(link[0][0], link[0][1],
+                                    self.get_point_depth(depth, *link[0])) -
+                get_real_coordinate(link[1][0], link[1][1],
+                                    self.get_point_depth(depth, *link[1])))
+        return length
+
+    def get_point_vertical_vector(self, depth, point, patch_area=1):
+        x_vec = (get_real_coordinate(point[0] + patch_area, point[1],
+                                     depth[point[1], point[0] + patch_area]) -
+                 get_real_coordinate(point[0] - patch_area, point[1],
+                                     depth[point[1], point[0] - patch_area]))
+        y_vec = (get_real_coordinate(point[0], point[1] + patch_area,
+                                     depth[point[1] + patch_area, point[0]]) -
+                 get_real_coordinate(point[0], point[1] - patch_area,
+                                     depth[point[1] - patch_area, point[0]]))
+        point_vec = np.cross(x_vec, y_vec)
+        return point_vec
+
+    def refine_skeleton(self, depth, skeleton):
+        new_skeleton = []
+        for link in skeleton:
+            vec10 = link[0]
+            vec11 = self.get_point_vertical_vector(depth, link[0])
+            vec20 = link[1]
+            vec21 = self.get_point_vertical_vector(depth, link[1])
+            vec30 = (link[0] + link[1]) / 2
+            vec31 = self.get_point_vertical_vector(depth, (link[0] + link[1]) / 2)
+
+
+
+
+
+
+    def predict_joints_displacement(self, depth, skeleton):
+        skeleton_joints = np.vstack((skeleton[0], skeleton[1][:-1]))
+        if len(skeleton) == len(self.prev_skeleton):
+            prev_skeleton_joints = np.vstack((skeleton[0], skeleton[1][:-1]))
+            skeleton - prev_skeleton
+        corrected_skeleton = (skeleton - prev_skeleton)
+        skeleton - prev_skeleton
+
+
+    def approx_hand(self, arm, skeleton, surrounding_skel):
+        '''
+        run longest_ray method to use this function
+        '''
+        arm_contour = cv2.findContours(
+            arm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[1][0]
+        box = cv2.boxPoints(cv2.minAreaRect(arm_contour.squeeze()[
+            surrounding_skel[-1], :]))[:, ::-1].astype(int)
+        # find box corners closest to skeleton end
+        hand_corners_inds = np.argsort(
+            calculate_cart_dists(box, skeleton[-1][1]))[:2]
+        hand_corners_inds = np.sort(hand_corners_inds)
+        without_corn_inds = np.concatenate((box[:hand_corners_inds[0], :],
+                                            box[hand_corners_inds[0] +
+                                                1:hand_corners_inds[1], :],
+                                            box[hand_corners_inds[1] + 1:, :]))
+        far_from_hand_corn0_ind = np.argmin(calculate_cart_dists(
+            without_corn_inds, box[hand_corners_inds[0], :]))
+        far_from_hand_corn1_ind = np.argmin(calculate_cart_dists(
+            without_corn_inds, box[hand_corners_inds[1], :]))
+        width = calculate_cart_dists(box[hand_corners_inds])
+        length = calculate_cart_dists(box[hand_corners_inds[0], :][None, :],
+                                      without_corn_inds[far_from_hand_corn0_ind, :])
+        rate = 1.7 * width / float(length)
+        point_close_to_corn0 = ((1 - rate) * box[hand_corners_inds[0], :]
+                                + rate * without_corn_inds[far_from_hand_corn0_ind, :]).astype(int)
+        point_close_to_corn1 = ((1 - rate) * box[hand_corners_inds[1], :]
+                                + rate * without_corn_inds[far_from_hand_corn1_ind, :]).astype(int)
+        new_box = np.concatenate((box[hand_corners_inds, :],
+                                  point_close_to_corn0[None, :],
+                                  point_close_to_corn1[None, :]), axis=0)
+        self.hand_mask = np.zeros(self.frame.shape, np.uint8)
+        self.hand_start =  np.array([(point_close_to_corn0[0] +
+                                      point_close_to_corn1[0]) / 2.0,
+                                     (point_close_to_corn0[1] +
+                                      point_close_to_corn1[1]) / 2.0])
+        cv2.drawContours(self.hand_mask, [cv2.convexHull(
+            new_box).squeeze()[:, ::-1]], 0, 1, -1)
+
+    def run(self, arm, skeleton, surrounding_skel):
+        self.approx_hand(arm, skeleton, surrounding_skel)
+
+
+
 class FindArmSkeleton(object):
     '''
     Class to find arm skeleton and segment arm contour relatively to joints
@@ -401,42 +500,6 @@ class FindArmSkeleton(object):
             self.all_polar_positions = co.meas.polar_positions
         self.car_res = np.sqrt(2) / 2.0
 
-    def approx_hand(self):
-        '''
-        run longest_ray method to use this function
-        '''
-        box = cv2.boxPoints(cv2.minAreaRect(self.contour.squeeze()[
-            self.surrounding_skel[-1], :]))[:, ::-1].astype(int)
-        # find box corners closest to skeleton end
-        hand_corners_inds = np.argsort(
-            calculate_cart_dists(box, self.skeleton[-1][1]))[:2]
-        hand_corners_inds = np.sort(hand_corners_inds)
-        without_corn_inds = np.concatenate((box[:hand_corners_inds[0], :],
-                                            box[hand_corners_inds[0] +
-                                                1:hand_corners_inds[1], :],
-                                            box[hand_corners_inds[1] + 1:, :]))
-        far_from_hand_corn0_ind = np.argmin(calculate_cart_dists(
-            without_corn_inds, box[hand_corners_inds[0], :]))
-        far_from_hand_corn1_ind = np.argmin(calculate_cart_dists(
-            without_corn_inds, box[hand_corners_inds[1], :]))
-        width = calculate_cart_dists(box[hand_corners_inds])
-        length = calculate_cart_dists(box[hand_corners_inds[0], :][None, :],
-                                      without_corn_inds[far_from_hand_corn0_ind, :])
-        rate = 1.7 * width / float(length)
-        point_close_to_corn0 = ((1 - rate) * box[hand_corners_inds[0], :]
-                                + rate * without_corn_inds[far_from_hand_corn0_ind, :]).astype(int)
-        point_close_to_corn1 = ((1 - rate) * box[hand_corners_inds[1], :]
-                                + rate * without_corn_inds[far_from_hand_corn1_ind, :]).astype(int)
-        new_box = np.concatenate((box[hand_corners_inds, :],
-                                  point_close_to_corn0[None, :],
-                                  point_close_to_corn1[None, :]), axis=0)
-        self.hand_mask = np.zeros(self.frame.shape, np.uint8)
-        self.hand_start =  np.array([(point_close_to_corn0[0] +
-                                      point_close_to_corn1[0]) / 2.0,
-                                     (point_close_to_corn0[1] +
-                                      point_close_to_corn1[1]) / 2.0])
-        cv2.drawContours(self.hand_mask, [cv2.convexHull(
-            new_box).squeeze()[:, ::-1]], 0, 1, -1)
 
     def detect_entry_upgraded(self, hull, hull_inds=None):
         '''
@@ -543,7 +606,6 @@ class FindArmSkeleton(object):
         if not self.surrounding_skel:
             return False
         self.surrounding_skel[-1][self.filter_mask] = True
-        self.approx_hand()
         return True
 
     def detect_longest_ray_inside_contour(self, polar=None,
@@ -721,7 +783,6 @@ class FindArmSkeleton(object):
             if not self.rectangle_approx_single_link(self.polar):
                 break
             used_polar_size = self.filter_mask.sum()
-        self.approx_hand()
 
     def find_used_polar(self):
         if self.filter_mask is None:
@@ -1167,10 +1228,10 @@ def detect_entry(bin_mask):
             else:
                 return np.array([])
         except:
-            print 'lims', co.edges.nonconvex_edges_lims
-            print 'hull', approx_entry_points
-            print 'aprox segments', approx_entry_segments
-            print 'segments', entry_segments
+            print('lims', co.edges.nonconvex_edges_lims)
+            print('hull', approx_entry_points)
+            print('aprox segments', approx_entry_segments)
+            print('segments', entry_segments)
             raise
     approx_entry_orient = np.diff(approx_entry_points, axis=0)
     try:
@@ -1178,7 +1239,7 @@ def detect_entry(bin_mask):
                                calculate_cart_dists(
                                    approx_entry_points)[:, None])
     except:
-        print approx_entry_points
+        print(approx_entry_points)
         raise
     approx_entry_vert_orient = np.dot(
         approx_entry_orient, np.array([[0, -1], [1, 0]]))
@@ -1547,9 +1608,9 @@ def find_hand(*args):
     try:
         angles_bound = angles_bound[dig_rad]
     except IndexError as e:
-        print 'dig_rad', dig_rad
-        print 'bins', bins
-        print 'angles_bound', angles_bound
+        print('dig_rad', dig_rad)
+        print('bins', bins)
+        print('angles_bound', angles_bound)
         raise(e)
     angles_thres = np.abs(polar[crit_ind::-1, 1]) < angles_bound
     # Compmat holds in every column elements of the same radius bin

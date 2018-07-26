@@ -17,11 +17,13 @@ path_depth: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Depth
 path_color: /media/vassilis/Thesis/Datasets/PersonalFarm/MovingObject/Color
 #directories to load train data
 actions_path: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/training
-mv_obj_fold_name : mv_obj
-hnd_mk_fold_name : hnd_mk
+frames_fold_name : frames
+masks_fold_name : masks
+properties_fold_name : properties
 #rosbag files location
 rosbag_location : /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions
-#pathname of calibrated image eges
+rosbag_temporary_location : /media/vassilis/Thesis
+#pathname of calibrated image edges
 cal_edges_path: /home/vassilis/Thesis/KinectPainting/Calibration_Edges.jpg
 cal_frame_path: /home/vassilis/Thesis/KinectPainting/Calibration_Frame.jpg
 #files to save images
@@ -29,7 +31,7 @@ save_depth: Depth
 save_color: Color
 #folders to save datasets and ground truths
 test_save_path : /media/vassilis/Thesis/Datasets/PersonalFarm/actions/testing
-ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/TrainingActions/ground_truths
+ground_truth_fold: /media/vassilis/Thesis/Datasets/PersonalFarm/actions/GroundTruth
 #folder to save data
 save_path: /media/vassilis/Thesis/Data/
 class_save_path: /media/vassilis/Thesis/Data/Classifiers
@@ -131,3 +133,40 @@ max_gamma: 0.0001
 results: display
 #App configuration
 AppData: AppData
+#ROS Nodes names
+#Kinect channel to use
+ROSNodes:
+  - Subscriber:
+    - name: KinectSubscriber
+    - subscribing_to: /kinect2/sd/image_depth
+    - publishing_to: depth
+  - ArmExtractor: 
+    - name: ArmExtractor
+    - subscribing_to: depth
+    - publishing_to: [arm, arm_contour]
+  - Skeletonizer:
+    - name: Skeletonizer
+    - subscribing_to: [arm, arm_contour]
+    - publishing_to: [skeleton, surrounding_skel]
+  - HandExtractor:
+    - name: HandExtractor
+    - subscribing_to: [arm, skeleton, surrounding_skel]
+    - publishing_to: hand
+  - GestureRecognizer:
+    - name: GestureRecognizer
+    - subscribing_to: [hand, skeleton]
+    - publishing_to: gesture
+  - StrokeRecognizer:
+    - name: StrokeRecognizer
+    - subscribing_to: [hand, skeleton, gesture]
+    - publishing_to: stroke
+ROSChannelsTypes:
+  - depth: Image
+  - hand: Image
+  - arm: Image
+  - arm_contour: Image
+  - skeleton: Image
+  - surrounding_skel: Image
+  - gesture: TimeReference
+  - stroke: TimeReference
+

@@ -19,6 +19,7 @@ def makedir(path):
 
 
 
+
 class EnhancedDynamicClassifier(clfs.Classifier):
     '''
     CLassifier that combines a specified SVMs classifier <dynamic_classifier>,
@@ -205,7 +206,12 @@ class EnhancedDynamicClassifier(clfs.Classifier):
         self.train_all = train_all
         if classifier_savename is not None:
             self.classifier_savename = classifier_savename
-        if self.unified_classifier is None or not load:
+
+        try:
+             self.coherence_matrix = self.additional_params[0][0]
+        except BaseException:
+            pass
+        if self.unified_classifier is None or not load or self.coherence_matrix is None:
             LOG.info('Training ' + self.classifier_savename)
             LOG.info('Gathering passive actions classifier traindata..')
             self.extract_pred_and_gt()
@@ -223,8 +229,6 @@ class EnhancedDynamicClassifier(clfs.Classifier):
                                                 (self.coherence_matrix,
                                                 self.min,
                                                 self.max))])
-        else:
-             self.coherence_matrix = self.additional_params[0][0]
         if self.classifier_savename not in self.classifiers_list:
             with open('trained_classifiers_list.yaml', 'a') as out:
                 out.write(self.classifier_savename + ': ' +
@@ -330,11 +334,19 @@ class EnhancedDynamicClassifier(clfs.Classifier):
             fin_dynamic_probs.T,fin_inv_passive_scores.T):
             fin_scores.append([])
             for j in range(len(self.dynamic_actions)):
-                p_aj_t = dyn_probs[j]*np.sum(self.coherence_matrix[:,j]*
+                try:
+                    p_aj_t = dyn_probs[j]*np.sum(self.coherence_matrix[:,j]*
                                      inv_pas_probs*
                                      np.sum(self.coherence_matrix[
                                          :,:]*dyn_probs[None,:],axis=1),
                                      axis=0)
+                except TypeError:
+                    print("Type Error while handling the following variables:\n"
+                                      + '\n'.join(
+                                          [var + ' :' + str(eval(var)) for var
+                                           in ['dyn_probs','self.coherence_matrix',
+                                               'inv_pas_probs']]))
+                    raise
 
                 fin_scores[-1].append(p_aj_t)
         fin_scores = np.array(fin_scores).T

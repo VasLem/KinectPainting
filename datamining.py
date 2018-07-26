@@ -4,23 +4,34 @@ Dataset farmer application
 # pylint: disable=unused-argument,too-many-ancestors,too-many-instance-attributes
 # pylint: disable=too-many-arguments
 import os
+import sys
 import logging
-import warnings
 import errno
 import time
+import tempfile
+import traceback
+import signal
+import subprocess
+import shlex
+from Queue import Queue
+from sensor_msgs.msg import Image
+import psutil
 import wx
 import wx.lib.mixins.listctrl as listmix
-from skimage import io, exposure, img_as_uint
+from skimage import io
 import numpy as np
 import yaml
 import rosbag
 import cv2
-from cv_bridge import CvBridge, CvBridgeError
 import class_objects as co
 import moving_object_detection_alg as moda
 import hand_segmentation_alg as hsa
 import extract_and_process_rosbag as epr
 import full_actions_registration as far
+from __init__ import terminate_process
+from __init__ import check_if_running
+from __init__ import run_on_external_terminal
+from canvas import KinectSubscriber
 io.use_plugin('freeimage')
 ID_LOAD_CSV = wx.NewId()
 ID_BAG_PROCESS = wx.NewId()
@@ -37,15 +48,29 @@ ID_MASK_RECOMPUTE = wx.NewId()
 ID_ACT_SAVE = wx.NewId()
 ID_BAG_RECORD = wx.NewId()
 ID_SAMPLES_SAVE = wx.NewId()
+ID_START_RECORD = wx.NewId()
+ID_STOP_RECORD = wx.NewId()
 CURR_DIR = os.getcwd()
 ACTIONS_SAVE_PATH = os.path.join(CURR_DIR, 'actions')
 ROSBAG_WHOLE_RES_SAVE_PATH = os.path.join(CURR_DIR, 'whole_result')
 START_COUNT = 0  # 300
 STOP_COUNT = 0  # 600
+EVT_ROS_TYPE = wx.NewEventType()
+EVT_ROS = wx.PyEventBinder(EVT_ROS_TYPE, 1)
+
+#pylint disable=R0903
+class CreateEvent(wx.PyCommandEvent):
+    '''
+    Event signaler
+    '''
+    def __init__(self, *args, **kwargs):
+        wx.PyCommandEvent.__init__(self, *args, **kwargs)
+
+
 try:
     with open('descriptions.yaml', 'r') as inp:
         DESCRIPTIONS = yaml.load(inp)
-except:
+except BaseException:
     DESCRIPTIONS = None
 
 
@@ -73,7 +98,8 @@ def getbitmap(main_panel, img):
             if np.max(copy) > 5000:
                 copy = copy % 256
             else:
-                copy = (copy / float(np.max(copy))) * 255
+                if np.any(copy):
+                    copy = (copy / float(np.max(copy))) * 255
             copy = copy.astype(np.uint8)
         image = wx.Image(copy.shape[1], copy.shape[0])
         image.SetData(copy.tostring())
@@ -99,11 +125,11 @@ class NamedTextCtrl(wx.BoxSizer):
     def __init__(self, parent, name, orientation=wx.VERTICAL,
                  flags=wx.ALL):
         wx.BoxSizer.__init__(self, orientation)
-        centeredLabel = wx.StaticText(parent, -1, name)
+        centered_label = wx.StaticText(parent, -1, name)
         if orientation == wx.VERTICAL:
-            self.Add(centeredLabel, 0, wx.ALIGN_CENTER_HORIZONTAL)
+            self.Add(centered_label, 0, wx.ALIGN_CENTER_HORIZONTAL)
         else:
-            self.Add(centeredLabel, 0, wx.ALIGN_CENTER_VERTICAL)
+            self.Add(centered_label, 0, wx.ALIGN_CENTER_VERTICAL)
         self.ctrl = wx.TextCtrl(parent, -1, name=name)
         self.Add(self.ctrl, 1, wx.EXPAND | wx.ALL)
 
@@ -123,8 +149,8 @@ class LabeledSpinStepCtrlSizer(wx.BoxSizer):
                  set_range=(0.0, 100.0)):
         self.name = name
         wx.BoxSizer.__init__(self, orientation)
-        centeredLabel = wx.StaticText(parent, -1, name)
-        self.Add(centeredLabel, flag=wx.ALIGN_CENTER_HORIZONTAL)
+        centered_label = wx.StaticText(parent, -1, name)
+        self.Add(centered_label, flag=wx.ALIGN_CENTER_HORIZONTAL)
         self.ctrl = SpinStepCtrl(parent, step=step,
                                  init_val=init_val,
                                  min_val=set_range[0],
@@ -174,22 +200,21 @@ class StreamChoice(wx.Frame):
         name = 'Convert to video :'
         self._data = data
         self._parent = parent
-        centeredLabel = wx.StaticText(self, -1, name)
-        self.choice = wx.Choice(self,-1,choices=data.keys())
+        centered_label = wx.StaticText(self, -1, name)
+        self.choice = wx.Choice(self, -1, choices=data.keys())
         self.choice.Bind(wx.EVT_CHOICE, self.on_choice)
-        sizer.AddMany(([centeredLabel, wx.ALIGN_CENTER_HORIZONTAL],
-                        self.choice))
+        sizer.AddMany(([centered_label, wx.ALIGN_CENTER_HORIZONTAL],
+                       self.choice))
         self.SetSizerAndFit(sizer)
 
-
-    def on_choice(self,event):
+    def on_choice(self, event):
         chosen = self.choice.GetStringSelection()
-        path = os.path.join(co.CONST['results_fold'],'Videos')
+        path = os.path.join(co.CONST['results_fold'], 'Videos')
         makedir(path)
         dlg = wx.FileDialog(self, "Save stream as..",
                             path,
-                            os.path.basename(self._data[chosen].name.split(':')[0])+
-                            '_'+
+                            os.path.basename(self._data[chosen].name.split(':')[0]) +
+                            '_' +
                             os.path.basename(chosen),
                             "*.avi", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
         result = dlg.ShowModal()
@@ -209,7 +234,7 @@ class StreamChoice(wx.Frame):
                                         | wx.PD_CAN_ABORT)
                 video = None
                 try:
-                    framesize=None
+                    framesize = None
                     for frame in self._data[chosen].frames:
                         if frame is not None:
                             framesize = frame.shape[:2][::-1]
@@ -221,23 +246,23 @@ class StreamChoice(wx.Frame):
                         self.Close()
                         return
                     video = cv2.VideoWriter(
-                        path,cv2.VideoWriter_fourcc(*'MJPG'),30,framesize)
+                        path, cv2.VideoWriter_fourcc(*'MJPG'), 30, framesize)
                     for count in range(len(self._data[chosen].frames)):
                         frame = self._data[chosen].frames[count]
                         sync = self._data[chosen].sync[count]
                         if frame is not None:
                             if len(frame.shape) < 2 or len(frame.shape) > 3:
-                                raise Exception('Invalid frame of shape '+
-                                                frame.shape+' was given')
+                                raise Exception('Invalid frame of shape ' +
+                                                frame.shape + ' was given')
                             elif len(frame.shape) == 2:
-                                inp = np.tile(frame[...,None],(1,1,3))
+                                inp = np.tile(frame[..., None], (1, 1, 3))
                             else:
                                 inp = frame
                             video.write(inp.astype(np.uint8))
                         else:
-                            video.write(np.zeros(framesize,np.uint8))
+                            video.write(np.zeros(framesize, np.uint8))
                         wx.Yield()
-                        keepGoing,_=dlg.Update(count)
+                        keepGoing, _ = dlg.Update(count)
                         if not keepGoing:
                             cv2.destroyAllWindows()
                             video.release()
@@ -257,6 +282,7 @@ class StreamChoice(wx.Frame):
         elif result == wx.ID_CANCEL:
             return
 
+
 class FrameToVideoOperations(wx.Panel):
 
     def __init__(self, parent, main_panel, data):
@@ -266,7 +292,7 @@ class FrameToVideoOperations(wx.Panel):
         self.save_vid = wx.Button(
             self, ID_VIDEO_SAVE, "Save as Video")
         sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(self.save_vid,wx.ALIGN_CENTER_HORIZONTAL)
+        sizer.Add(self.save_vid, wx.ALIGN_CENTER_HORIZONTAL)
         self.SetSizerAndFit(sizer)
         self.Bind(wx.EVT_BUTTON, self.on_selection, id=ID_VIDEO_SAVE)
 
@@ -277,7 +303,7 @@ class FrameToVideoOperations(wx.Panel):
             dlg.ShowModal()
             dlg.Destroy()
             return
-        choice_frame = StreamChoice(None,-1,self._data)
+        choice_frame = StreamChoice(None, -1, self._data)
         choice_frame.Show()
 
 
@@ -297,6 +323,23 @@ class TButton(wx.Button):
         wx.Button.__init__(self, parent, id, label,
                            pos, size, style,
                            validator, name)
+        if descr == '':
+            if DESCRIPTIONS is not None:
+                if label in DESCRIPTIONS.keys():
+                    self.SetToolTip(wx.ToolTip(DESCRIPTIONS[label]))
+        else:
+            self.SetToolTip(wx.ToolTip(descr))
+
+
+class ShapeTButton(wx.BitmapButton):
+    def __init__(self, parent, img_path,
+                 id=-1, label=wx.EmptyString, pos=wx.DefaultPosition,
+                 size=wx.DefaultSize, style=0, validator=wx.DefaultValidator,
+                 name=wx.ButtonNameStr, descr=''):
+        image = wx.Image(img_path, wx.BITMAP_TYPE_ANY).ConvertToBitmap()
+        super(ShapeTButton, self).__init__(parent, id, bitmap=image,
+                                           pos=pos, size=size, style=style,
+                                           validator=validator, name=name)
         if descr == '':
             if DESCRIPTIONS is not None:
                 if label in DESCRIPTIONS.keys():
@@ -347,16 +390,16 @@ class TopicsNotebook(wx.Notebook):
         max_len = 0
         for topic in data.keys():
             max_len = max(len(data[topic].frames), max_len)
-        for topic_count,topic in enumerate(data.keys()):
+        for topic_count, topic in enumerate(data.keys()):
             if data[topic].frames:
                 inp = [None] * max_len
                 for count, sync_count in enumerate(data[topic].sync):
                     inp[sync_count] = data[topic].frames[count]
                 try:
                     self.pages[topic_count] = VideoPanel(self, inp, self.fps,
-                                                 self.start_frame_handler,
-                                                 self.end_frame_handler,
-                                                 self.forced_frame_handler)
+                                                         self.start_frame_handler,
+                                                         self.end_frame_handler,
+                                                         self.forced_frame_handler)
                 except IndexError:
                     self.pages.append(VideoPanel(self, inp, self.fps,
                                                  self.start_frame_handler,
@@ -550,6 +593,256 @@ class VideoPanel(wx.Panel):
             self.count = self.start
 
 
+class KinectPreview(wx.Panel):
+    '''
+    Kinect Channel Previewer
+    '''
+    def __init__(self, parent, *args, **kwargs):
+        self.init = True
+        wx.Panel.__init__(self, parent, *args, **kwargs)
+        [self.height, self.width] = [250, 250]
+        self.SetMinSize(wx.Size(self.width, self.height))
+        self.SetBackgroundStyle(wx.BG_STYLE_CUSTOM)
+        self.data = np.zeros((self.height, self.width))
+        self.timer = wx.Timer(self)
+        self.replay = True
+        self.Bind(wx.EVT_TIMER, self.on_timer)
+        self.Bind(wx.EVT_PAINT, self.on_paint)
+        self.Bind(wx.EVT_SIZE, self.on_size)
+
+
+
+    def update_drawing(self):
+        '''
+        enable video
+        '''
+        self.Refresh(False)
+
+    def on_timer(self, event):
+        '''
+        set timer for video playing
+        '''
+        self.update_drawing()
+
+    def set_size(self, wx_size):
+        self.SetInitialSize(wx_size)
+
+    def set_data(self, data):
+        self.data = data
+
+    def on_paint(self, event):
+        painter = wx.AutoBufferedPaintDC(self)
+        self.scale_frame()
+        painter.Clear()
+        painter.DrawBitmap(
+            getbitmap(self, self.data), 0, 0)
+
+    def on_size(self, event):
+        if not self.init:
+            self.width, self.height = self.GetClientSize()
+            self.scale_frame()
+        self.init = False
+
+    def scale_frame(self):
+        r = min(self.height / float(self.data.shape[0]),
+                self.width / float(self.data.shape[1]))
+        dim = (int(self.data.shape[1] * r), int(self.data.shape[0] * r))
+        self.data = cv2.resize(self.data, dim, interpolation=cv2.INTER_AREA)
+
+
+class HandData(object):
+    def __init__(self):
+        self.hand = None
+        self.skel = None
+        self.class_name = None
+        self.fps = None
+
+    def add(self, hand, skel, class_name, fps):
+        self.hand = hand
+        self.skel = skel
+        self.class_name = class_name
+        self.fps = fps
+
+
+class KinectRecorder(wx.Frame):
+    def __init__(self, parent, *args, **kwargs):
+        self.loglevel = 'INFO'
+        self.init = True
+        wx.Window.__init__(self, parent, *args, **kwargs)
+        self.Bind(EVT_ROS, self.on_ros_process)
+        self.Bind(wx.EVT_SIZE, self.on_size)
+        self.Bind(wx.EVT_CLOSE, self.on_close)
+        self.Bind(wx.EVT_BUTTON, self.on_start_record,
+                  id=ID_START_RECORD)
+        self.Bind(wx.EVT_BUTTON, self.on_stop_record,
+                  id=ID_STOP_RECORD)
+
+        self.inter_pnl = wx.Panel(self, wx.NewId())
+        self.kinect_preview_pnl = KinectPreview(self)
+        self.record_button = ShapeTButton(self,
+                                          os.path.join(
+                                              co.CONST['AppData'],
+                                              'Buttons',
+                                              'record.png'),
+                                          id=ID_START_RECORD)
+        self.stop_button = ShapeTButton(self,
+                                        os.path.join(
+                                            co.CONST['AppData'],
+                                            'Buttons',
+                                            'stop.png'),
+                                        id=ID_STOP_RECORD)
+        inter_box = wx.BoxSizer(wx.VERTICAL)
+        inter_box.AddMany([(self.record_button, 0),
+                           (self.stop_button, 0)])
+        self.inter_pnl.SetSizer(inter_box)
+        main_box = wx.BoxSizer(wx.VERTICAL)
+        main_box.AddMany([(self.inter_pnl, 0),
+                          (self.kinect_preview_pnl, 0)])
+        self.SetSizerAndFit(main_box)
+
+        self.ros_thread = None
+        self.started_roscore = 0
+        self.started_kinect2_bridge = 0
+        self.depths = []
+        self.rosbag_record = None
+        self.data_queue = Queue()
+        self.data_queue.put(HandData())
+        self.start_kinect()
+
+    def on_size(self, event):
+        if not self.init:
+            self.width, self.height = self.GetClientSize()
+            self.scale_frame()
+        self.init = False
+
+    def scale_frame(self):
+        data = self.data_queue.get()
+        r = min(self.height / float(data.hand.shape[0]),
+                self.width / float(data.hand.shape[1]))
+        dim = (int(data.hand.shape[1] * r), int(data.hand.shape[0] * r))
+        data.hand = cv2.resize(data.hand, dim, interpolation=cv2.INTER_AREA)
+        data.skel = np.dstack((dim[0] * data.skel[:, :, 0],
+                               dim[1] * data.skel[:, :, 1]))
+
+    def on_ros_process(self, event):
+        self.scale_frame()
+        data = self.data_queue.get()
+        try:
+            inp = np.tile(data.hand[:, :, None] % 255, (1, 1, 3))
+            try:
+                ypnt = data.skel[-1, -1, 0]
+                xpnt = data.skel[-1, -1, 1]
+                tip = data.hand[ypnt - 20:ypnt + 20, xpnt - 20:xpnt + 20]
+                dep = np.median(tip[tip != 0])
+            except IndexError:
+                print data.skel
+            if np.isfinite(dep):
+                self.depths.append(dep)
+                del self.depths[:-20]
+            else:
+                if len(self.depths) == 0:
+                    return
+            dep = np.median(np.array(self.depths))
+            init_dep = dep
+            inp = inp.astype(np.uint8)
+            for link in data.skel:
+                cv2.line(inp, tuple(link[0][::-1]), tuple(link[1][::-1]),
+                         [255, 0, 0], 3)
+            inp = cv2.flip(inp, -1)
+            co.tag_im(inp, 'Median Hand Tip depth: ' + str(init_dep) +
+                      '\nFPS: ' + str(data.fps), loc='bot right',
+                      fontscale=0.4, color=(255, 255, 255))
+            if self.kinect_preview_pnl.size is None:
+                self.kinect_preview_pnl.set_size(wx.Size(inp.shape[1],
+                                                         inp.shape[0]))
+                self.Fit()
+            self.frame = inp
+            self.kinect_preview_pnl.set_data(data)
+            self.Refresh(False)
+            self.data_queue.put(data)
+        except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            traceback.print_exception(exc_type,
+                                      exc_value,
+                                      exc_traceback, limit=2, file=sys.stdout)
+
+    def on_start_record(self, evt):
+        temp_file = tempfile.NamedTemporaryFile('rw', dir=co.CONST[
+            'rosbag_temporary_location'])
+        temp_file.close()
+        self.temp_path = os.path.join(co.CONST['rosbag_temporary_location'],
+                                      temp_file.name)
+        if self.rosbag_record is None:
+            self.rosbag_record = RosbagRecord(co.CONST['channel'],
+                                              self.temp_path)
+        self.rosbag_record.__enter__()
+
+    def on_stop_record(self, evt):
+        self.rosbag_record.__exit__(None, None, None)
+        self.save_as()
+
+    def on_close(self):
+        self.ros_thread.stop()
+        while not self.ros_thread.stopped():
+            wx.BusyInfo("Closing, please wait...")
+            time.sleep(1)
+        self.stop_kinect()
+        self.MakeModal(False)
+        self.destroy()
+
+    def start_kinect(self):
+        if not check_if_running('roscore'):
+            self.started_roscore = run_on_external_terminal('roscore')
+        if not check_if_running('kinect2_bridge'):
+            self.started_kinect2_bridge = run_on_external_terminal(
+                "roslaunch kinect2_bridge kinect2_bridge.launch")
+        self.ros_thread = KinectSubscriber('KinectSubscriber', self,
+                                           self.data_queue, self.loglevel,
+                                           co.CONST['channel'], Image)
+        self.ros_thread.start()
+
+    def stop_kinect(self):
+        if self.started_roscore:
+            terminate_process(self.started_roscore, use_pid=True)
+            self.started_roscore = 0
+        if self.started_kinect2_bridge:
+            terminate_process(self.started_kinect2_bridge, use_pid=True)
+            self.started_kinect2_bridge = 0
+        self.ros_thread.stop()
+
+    def save_as(self):
+        '''
+        save rosbag as
+        '''
+        dlg = wx.FileDialog(self, "Save rosbag as..",
+                            co.CONST['rosbag_location'],
+                            '',
+                            "*.csv", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+        result = dlg.ShowModal()
+        dlg.Destroy()
+        if result == wx.ID_OK:
+            path = dlg.GetPath()
+            os.rename(self.temp_path, path)
+        elif result == wx.ID_CANCEL:
+            return
+
+
+class RosbagRecord(object):
+    def __init__(self, channel, path):
+        self.channel = channel
+        self.path = path
+
+    def __enter__(self):
+        args = shlex.split('rosbag record -o' + self.path + ' ' +
+                           self.channel)
+        self.process = subprocess.Popen(args)
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.process.send_signal(signal.SIGINT)
+        while self.process.poll() is None:
+            time.sleep(1)
+
+
 class MainFrame(wx.Frame):
     '''
     Main Processing Window
@@ -589,7 +882,7 @@ class MainFrame(wx.Frame):
         self.mog_pnl = None
         #self.mog_pnl = MOG2params(self, self.main_panel)
         self.mog_pnl = FrameToVideoOperations(self, self.main_panel, self.data)
-        #self.recompute_mog2 = wx.Button(
+        # self.recompute_mog2 = wx.Button(
         #    self.main_panel, ID_MASK_RECOMPUTE, "Calculate hand masks")
         #self.Bind(wx.EVT_BUTTON, self.on_recompute_mask, id=ID_MASK_RECOMPUTE)
 
@@ -599,9 +892,11 @@ class MainFrame(wx.Frame):
                                 majorDimension=1, style=wx.RA_SPECIFY_ROWS)
         self.rbox.SetSelection(0)
         self.append = wx.CheckBox(self.act_pnl, -1, 'Append to existent data')
-        self.samples_cb = wx.CheckBox(self.act_pnl, label = 'Montage Samples')
+        self.samples_cb = wx.CheckBox(self.act_pnl, label='Montage Samples')
         self.append.SetValue(1)
         self.load_csv = TButton(self.act_pnl, ID_LOAD_CSV, 'Load csv')
+        self.record_bag = TButton(
+            self.inter_pnl, ID_BAG_RECORD, 'Record bag')
         self.process_bag = TButton(
             self.inter_pnl, ID_BAG_PROCESS, 'Process bag')
         self.process_all = TButton(
@@ -645,10 +940,10 @@ class MainFrame(wx.Frame):
             (self.add, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),
             (self.remove, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL)])
         act_bot_but_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        act_bot_but_sizer.AddMany([(
-            self.act_save, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),(
-            self.append, 1, wx.EXPAND | wx.ALIGN_LEFT |wx.ALL), (
-            self.samples_cb, 1, wx.EXPAND | wx.ALIGN_LEFT |wx.ALL)])
+        act_bot_but_sizer.AddMany([
+            (self.act_save, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),
+            (self.append, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL),
+            (self.samples_cb, 1, wx.EXPAND | wx.ALIGN_LEFT | wx.ALL)])
         act_sizer.AddMany([(act_top_but_sizer, 0, wx.EXPAND |
                             wx.ALIGN_LEFT | wx.ALL),
                            (self.txt_inp, 0, wx.EXPAND |
@@ -665,8 +960,9 @@ class MainFrame(wx.Frame):
         process_box = wx.StaticBoxSizer(wx.HORIZONTAL,
                                         self.inter_pnl,
                                         'Rosbag file processing')
-        process_box.AddMany([(self.rbox, 0), (self.process_bag, 0),
-                             (self.process_all,0)])
+        process_box.AddMany([(self.rbox, 0), (self.record_bag, 0),
+                             (self.process_bag, 0),
+                             (self.process_all, 0)])
         mis_box = wx.StaticBoxSizer(wx.HORIZONTAL,
                                     self.inter_pnl,
                                     'Starting Frame')
@@ -675,16 +971,17 @@ class MainFrame(wx.Frame):
                                     'Ending Frame')
         mas_box.Add(self.slider_max, 0)
         mis_box.Add(self.slider_min, 0)
-        inter_box = wx.BoxSizer(wx.VERTICAL)
         slid_box = wx.StaticBoxSizer(wx.VERTICAL,
                                      self.inter_pnl,
                                      'Frames Partition')
         slid_box.AddMany([(mis_box, 0), (mas_box, 0)])
+        inter_box = wx.BoxSizer(wx.VERTICAL)
         inter_box.AddMany([(process_box, 0),
                            (vid_ctrl_box, 0),
                            (slid_box, 0)])
         self.sb = self.CreateStatusBar()
         self.nb = None
+        self.nb_box = None
         self.min_pnl = None
         self.max_pnl = None
         self.inter_pnl.SetSizer(inter_box)
@@ -694,7 +991,7 @@ class MainFrame(wx.Frame):
         if self.mog_pnl is not None:
             sboxSizer = wx.StaticBoxSizer(wx.VERTICAL, self.main_panel,
                                           'Stream Postprocessing')
-            sboxSizer.Add(self.mog_pnl,wx.ALIGN_CENTER_HORIZONTAL,1)
+            sboxSizer.Add(self.mog_pnl, wx.ALIGN_CENTER_HORIZONTAL, 1)
             #sboxSizer.AddMany([(self.mog_pnl, 1), (self.recompute_mog2)])
             self.lft_box.Add(sboxSizer)
         self.main_box = wx.BoxSizer(wx.HORIZONTAL)
@@ -717,17 +1014,19 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.slider_min.Bind(wx.EVT_SLIDER, self.on_min_slider)
         self.slider_max.Bind(wx.EVT_SLIDER, self.on_max_slider)
-        self.csv_name ='actions.csv'
+        self.csv_name = 'actions.csv'
         wx.CallLater(200, self.SetFocus)
         self._buffer = None
         self.exists_hand_count = None
-
 
     def on_record(self, event):
         '''
         record rosbag and process on the fly or after the record
         '''
-        raise NotImplementedError
+        self.kinect_recorder = KinectRecorder(self)
+        self.kinect_recorder.Show()
+        self.kinect_recorder.SetFocus()
+        return True
 
     def on_lst_item_select(self, event):
         ind = self.lst.GetFocusedItem()
@@ -802,7 +1101,10 @@ class MainFrame(wx.Frame):
             self.rosbag_process.save_samples = int(cb.GetValue()) * 9
 
     def on_actions_save(self, event):
-        self.actionfarming.run(self.lst,self.bag_path, append=self.append.GetValue())
+        self.actionfarming.run(
+            self.lst,
+            self.bag_path,
+            append=self.append.GetValue())
 
     def on_frame_change(self, event, slider, main_panel):
         '''
@@ -975,7 +1277,7 @@ class MainFrame(wx.Frame):
         if result == wx.ID_OK:
             self.bag_path = dlg.GetPath()
             self.csv_name = os.path.splitext(
-                os.path.basename(self.bag_path))[0]+'.csv'
+                os.path.basename(self.bag_path))[0] + '.csv'
             self.default_csv_path = os.path.join(
                 co.CONST['ground_truth_fold'], self.csv_name)
             if os.path.exists(self.default_csv_path):
@@ -1007,7 +1309,7 @@ class MainFrame(wx.Frame):
             bg_ratio = self.mog_pnl.bg_ratio.GetValue()
             var_thres = self.mog_pnl.var_thres.GetValue()
             history = self.mog_pnl.history.GetValue()
-        except:
+        except BaseException:
             gmm_num = co.CONST['gmm_num']
             bg_ratio = co.CONST['bg_ratio']
             var_thres = co.CONST['var_thres']
@@ -1018,8 +1320,8 @@ class MainFrame(wx.Frame):
         append = self.append.GetValue()
         self.data.clear()
         self.data.update(self.rosbag_process.run(self.bag_path,
-                                            dialog=dlg, low_ram=1 - rbox_sel,
-                                               save_res=rbox_sel,append=append))
+                                                 dialog=dlg, low_ram=1 - rbox_sel,
+                                                 save_res=rbox_sel, append=append))
         lengths = [len(self.data[key].frames) for key in self.data.keys()]
         baglength = max(lengths)
         dlg.Destroy()
@@ -1072,7 +1374,7 @@ class MainFrame(wx.Frame):
             self.rgt_box = wx.StaticBox(self.main_panel, -1)
             self.rgt_sizer = wx.StaticBoxSizer(self.rgt_box, wx.VERTICAL)
             self.rgt_sizer.AddMany([(self.nb_sizer, 1, wx.EXPAND),
-                                  (self.ref_sizer, 1, wx.SHAPED | wx.EXPAND)])
+                                    (self.ref_sizer, 1, wx.SHAPED | wx.EXPAND)])
             self.main_box.Add(self.rgt_sizer, 1)
             self.main_box.Layout()
             self.SetSizerAndFit(self.framesizer)
@@ -1109,9 +1411,9 @@ class MainFrame(wx.Frame):
         self.saved = 1
 
     def on_process_all(self, event):
-        ground_truths =[os.path.splitext(fil)[0] for fil
-                        in os.listdir(co.CONST['ground_truth_fold'])
-                        if fil.endswith('.csv')]
+        ground_truths = [os.path.splitext(fil)[0] for fil
+                         in os.listdir(co.CONST['ground_truth_fold'])
+                         if fil.endswith('.csv')]
         rosbags = [os.path.splitext(fil)[0] for fil in
                    os.listdir(co.CONST['rosbag_location'])
                    if fil.endswith('.bag')]
@@ -1119,12 +1421,12 @@ class MainFrame(wx.Frame):
                                                        and not
                                                        rosbag.startswith('test'))]
         ground_truths = [os.path.join(
-            co.CONST['ground_truth_fold'],name+'.csv') for name in to_process]
+            co.CONST['ground_truth_fold'], name + '.csv') for name in to_process]
         rosbags = [os.path.join(
-            co.CONST['rosbag_location'],name+'.bag') for name in to_process]
+            co.CONST['rosbag_location'], name + '.bag') for name in to_process]
         count = 0
-        for rosbag,ground_truth in zip(rosbags, ground_truths):
-            self.actionfarming.run(ground_truth,rosbag, append=count>0)
+        for rosbag, ground_truth in zip(rosbags, ground_truths):
+            self.actionfarming.run(ground_truth, rosbag, append=count > 0)
             count += 1
 
 
@@ -1135,6 +1437,7 @@ CH.setFormatter(logging.Formatter(FORMAT))
 LOG.addHandler(CH)
 LOG.setLevel(logging.DEBUG)
 
+
 def main():
     '''
     main function
@@ -1144,6 +1447,7 @@ def main():
     frame = MainFrame(None, -1, 'Data Mining')
     frame.Show(True)
     app.MainLoop()
+
 
 if __name__ == '__main__':
     main()

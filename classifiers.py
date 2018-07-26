@@ -13,25 +13,10 @@ import os.path
 import cPickle as pickle
 import logging
 import yaml
-import time
+from __init__ import initialize_logger, timeit, PRIM_X, PRIM_Y, FLNT, find_nonzero
 from OptGridSearchCV import optGridSearchCV
 # pylint: disable=no-member,R0902,too-many-public-methods,too-many-arguments
 # pylint: disable=too-many-locals, too-many-branches, too-many-statements
-
-
-def timeit(func):
-    '''
-    Decorator to time extraction
-    '''
-
-    def wrapper(self, *arg, **kw):
-        t1 = time.time()
-        res = func(self, *arg, **kw)
-        t2 = time.time()
-        self.time.append(t2 - t1)
-        del self.time[:-5000]
-        return res
-    return wrapper
 
 
 class Classifier(object):
@@ -61,7 +46,6 @@ class Classifier(object):
                  add_info=None,
                  sparsecoding_level=None,
                  kernel=None,
-                 save_all_steps=False,
                  post_scores_processing_method=None,
                  hardcore=False,
                  for_app=False):
@@ -586,7 +570,7 @@ class Classifier(object):
             take place after the whole data has been processed from the trainer
             of the coder.<init_dict_traindata_num> denotes how many samples
             will be used in the first iteration of the sparse coder training
-        For svm training:
+        For classifiers training:
             Train ClassifierS with <num_of_cores>.
             Save them if <classifier_save> is True to <classifiers_savepath>. Do not train
             if <classifiers_savepath> already exists and <classifiers_retrain> is False.
@@ -606,8 +590,14 @@ class Classifier(object):
             LOG.info('Classifier will be retrained')
             classifiers_retrain = True
         else:
+            LOG.info('Loaded trained classifier:' + str(self.unified_classifier))
             if not self.sparsecoded:
-                return
+                try:
+                    if getattr(getattr(self, 'enhanced_dyn'),
+                               'coherence_matrix') is not None:
+                        return
+                except AttributeError:
+                    return
         self.prepare_training_data(training_datapath, max_act_samples,
                                    visualize_feat=visualize_feat)
         if just_sparse:
@@ -1350,7 +1340,8 @@ class Classifier(object):
                 self.testdata[self.test_ind]['TestTime'] = test_times
 
     def process_single_sample(self, data, img_count,
-                              derot_angle=None, derot_center=None):
+                              derot_angle=None, derot_center=None,
+                              preprocessed=False):
         if data is None:
             self.scores.append(None)
             return False, np.array([[None] *
@@ -1361,7 +1352,8 @@ class Classifier(object):
                                           center=derot_center,
                                           masks_needed=True,
                                           img_count=self.img_count,
-                                          isderotated=False):
+                                          isderotated=False,
+                                         preprocessed=preprocessed):
             return False, np.array([None] * len(self.train_classes))
         descriptors = [descriptor.extract() for
                     descriptor in self.features_extractors]
@@ -1399,8 +1391,10 @@ class Classifier(object):
         return True, np.array(score).reshape(1, -1)
 
     def process_online_data(self, data, img_count=None,
-                            derot_angle=None, derot_center=None,
-                            just_scores=False):
+                            derot_angle=None,
+                            derot_center=None,
+                            just_scores=False,
+                            preprocessed=False):
         '''
         <data> is the frame with frame number <img_count> or increasing by one
         relatively to the previous frame. Scores are filtered with a filter of
@@ -2426,8 +2420,8 @@ def construct_dynamic_actions_classifier(testname='test2', train=False,
 def construct_passive_actions_classifier(testname='test2',
                                          train=True, test=True, visualize=True,
                                          test_against_all=False,
-                                         descriptors='3DXYPCA',
-                                         post_scores_processing_method='CProb',
+                                         descriptors=['RDF', 'GHOG', 'CONTOUR_STATS'],
+                                         post_scores_processing_method='CSTD',
                                          for_app=False):
     '''
     Constructs a random forests passive_actions classifier with input 3DXYPCA descriptors

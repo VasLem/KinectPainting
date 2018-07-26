@@ -1,11 +1,15 @@
 #encoding=utf-8
-from classifiers import *
-from CDBIMM import *
+from classifiers import Classifier
+from CDBIMM import EnhancedDynamicClassifier
 from mixed_classifier import CombinedGesturesClassifier
 from itertools import product
 import logging
 import ast
+import os
 import pandas as pd
+import numpy as np
+import class_objects as co
+import sparse_coding as sc
 LOG = logging.getLogger('__name__')
 
 
@@ -18,7 +22,7 @@ def perform_single_experiment(dict_param, filt=None, metric='Accuracy',
             clas = EnhancedDynamicClassifier(**dict_param)
         elif variation.lower() == 'combined':
             clas = CombinedGesturesClassifier(**dict_param)
-    except Exception as e:
+    except BaseException as e:
         print e
         return None, None, None, None
     clas.run_training()
@@ -75,7 +79,8 @@ def perform_experiments_on_dynamic_actions(metric_typ='Macro'):
         ['GHOG','3DHOF'],['3DXYPCA','ZHOF'],
                    ['3DXYPCA','3DHOF'],
         ['GHOG', '3DXYPCA', 'ZHOF'],
-        ['GHOG', '3DXYPCA', '3DHOF']
+        ['GHOG', '3DXYPCA', '3DHOF'],
+        ['GHOG', '3DXYPCA', '3DHOF', 'CONTOUR_STATS']
     ]]
     classifiers = [{'classifiers_used':x} for x in ['rdf','svm','platt svm']]
     sparsecoding = [{'sparsecoding_level':x} for x in [#'Features',
@@ -91,8 +96,9 @@ def perform_experiments_on_dynamic_actions(metric_typ='Macro'):
 
 def perform_experiments_on_passive_actions(metric_typ='Macro'):
     descriptors = [{'descriptors':x} for x in
-        ['GHOG','3DXYPCA',['GHOG','3DXYPCA']]]
-    sparsecoding = [{'sparsecoding_level':x} for x in ['Features', None]]
+        ['GHOG','3DXYPCA', 'CONTOUR_STATS', ['GHOG','3DXYPCA'],['GHOG', '3DXYPCA', 'CONTOUR_STATS']]]
+    sparsecoding = [{'sparsecoding_level':x} for x in [#'Features',
+                                                       None]]
     classifiers = [{'classifiers_used':x} for x in ['rdf', 'svm', 'adaboost']]
     extraction_method = [{'post_scores_processing_method':x} for
                          x in ['CProb','CSTD']]
@@ -185,7 +191,7 @@ def create_unified_tex(action_type,  filt, n=3, bypass=0, ignore = []):
         test_env_descr = ast.literal_eval(classifier.return_description(all_catalog, testing['Index'][0]))[1:]
         parameters_fil = 'Parameters-'+str(action_type)+'-' + str(count) + str(bypass) + '.pdf'
         graph = co.draw_oper.draw_nested(test_env_descr,'Parameters')
-        graph.write_pdf(os.path.join(save_res_path, parameters_fil))
+        graph.write(os.path.join(save_res_path, parameters_fil) + '.pdf')
         pdffiles = []
         captions = []
         pdffiles.append(os.path.join(save_res_path, parameters_fil))
@@ -224,7 +230,7 @@ def create_unified_tex(action_type,  filt, n=3, bypass=0, ignore = []):
                             captions.append(preamble + 'Ακρίβειες Ταξινόμησης')
                         pdffiles.append(os.path.join(path,
                                                  fil.replace('.tex', '.pdf')))
-            except Exception as e:
+            except BaseException as e:
                 print e
                 pass
         if action_type == 'Dynamic':
@@ -389,7 +395,7 @@ def literal_eval(elems):
             elif isinstance(elem, tuple):
                 try:
                     elem = (elem[0],ast.literal_eval(elem[1]))
-                except Exception as e:
+                except BaseException as e:
                     pass
                 if isinstance(elem[1], list) or isinstance(elem[1], tuple):
                     elem = (elem[0], literal_eval(elem[1]))
@@ -764,14 +770,21 @@ def create_best_classifiers_table(dynamic_row, passive_row):
     with open(save_path, 'w') as out:
         out.write(latex_table)
 
-if __name__=='__main__':
-    dyn_row = process_dynamic_actions(False)
-    process_dynamic_actions(False,on_valid=True)
-    pas_row = process_passive_actions(False)
-    process_passive_actions(False,on_valid=True)
+import argparse
+def main():
+    parser = argparse.ArgumentParser(description='Experiment with the system.')
+    parser.add_argument('--force',help='force experimentation', action='store_true')
+    args = parser.parse_args()
+    dyn_row = process_dynamic_actions(args.force)
+    process_dynamic_actions(args.force,on_valid=True)
+    pas_row = process_passive_actions(args.force)
+    process_passive_actions(args.force, on_valid=True)
     create_best_classifiers_table(dyn_row, pas_row)
     _ , cdbimm = process_dynamic_CDBIMM_actions(in_sync=False)
     process_valid_dynamic_CDBIMM_actions(in_sync=False)
     create_CDBIMM_CLDYN_table()
     process_dynamic_CDBIMM_actions(in_sync=True)
     process_combined_actions()
+
+if __name__=='__main__':
+    main()

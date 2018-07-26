@@ -344,10 +344,13 @@ class DataProcess(object):
                         self.append_data = True
                 if save_res:
                         makedir(os.path.join(self.save_path,
-                                             co.CONST['mv_obj_fold_name'],
+                                             co.CONST['frames_fold_name'],
                                      str(self.fold_count)))
                         makedir(os.path.join(self.save_path,
-                                             co.CONST['hnd_mk_fold_name'],
+                                             co.CONST['masks_fold_name'],
+                                     str(self.fold_count)))
+                        makedir(os.path.join(self.save_path,
+                                             co.CONST['properties_fold_name'],
                                      str(self.fold_count)))
 
                 if check or init_check:
@@ -364,7 +367,7 @@ class DataProcess(object):
                     if dialog is not None:
                         wx.Yield()
                         keep_going, _ = dialog.Update(
-                            self.sync_count - min(start_inds))
+                            max(0, self.sync_count - min(start_inds)))
                         if not keep_going:
                             break
                     if self.sync_count == stop_inds[
@@ -375,23 +378,23 @@ class DataProcess(object):
                             self.seg_count += 1
                             self.fold_count += 1
                             if save_res and os.path.isdir(os.path.join(
-                                self.save_path,co.CONST['mv_obj_fold_name'],
+                                self.save_path,co.CONST['frames_fold_name'],
                                 str(self.fold_count))):
                                 [os.remove(os.path.join(
-                                    self.save_path,co.CONST['mv_obj_fold_name'],
+                                    self.save_path,co.CONST['frames_fold_name'],
                                     str(self.fold_count),
                                     f)) for f in os.listdir(
                                         os.path.join(self.save_path,
-                                                     co.CONST['mv_obj_fold_name'],
+                                                     co.CONST['frames_fold_name'],
                                                      str(self.fold_count)))
                                  if f.endswith('.png') or
                                  f.endswith('.txt')]
                                 [os.remove(os.path.join(
-                                    self.save_path,co.CONST['hnd_mk_fold_name'],
+                                    self.save_path,co.CONST['masks_fold_name'],
                                     str(self.fold_count),
                                     f)) for f in os.listdir(
                                         os.path.join(self.save_path,
-                                                     co.CONST['mv_obj_fold_name'],
+                                                     co.CONST['frames_fold_name'],
                                                      str(self.fold_count)))
                                  if f.endswith('.png') or
                                  f.endswith('.txt')]
@@ -550,44 +553,37 @@ class DataProcess(object):
                                 self.data[reg_key].frames.append(res*(hand_mask>0))
                             self.data[reg_key].info.append([derotate_angle,
                                                             derotate_center])
-                            '''
-                            self.data[reg_key].info.append(HandInfoStruct())
-                            self.data[reg_key].info[
-                                -1].skeleton = self.skeleton.skeleton
-                            self.data[reg_key].info[
-                                -1].skeleton_widths = self.skeleton.skeleton_widths
-                            '''
                             self.data[reg_key].sync.append(frame_sync)
                         else:
                             cv2.imwrite(os.path.join(
-                                self.save_path,co.CONST['mv_obj_fold_name'],
+                                self.save_path,co.CONST['frames_fold_name'],
                                 str(self.fold_count),
                                 str(frame_sync).zfill(self.str_len)) + '.png',res)
                             cv2.imwrite(os.path.join(
-                                self.save_path,co.CONST['hnd_mk_fold_name'],
+                                self.save_path,co.CONST['masks_fold_name'],
                                 str(self.fold_count),
                                 str(frame_sync).zfill(self.str_len)) + '.png',hand_mask)
 
                             with open(os.path.join(self.save_path,
-                                                   co.CONST['mv_obj_fold_name'],
+                                                   co.CONST['properties_fold_name'],
                                                    str(self.fold_count),
                                                    'angles.txt'), 'a') as out:
                                 out.write("%f\n" % derotate_angle)
                             with open(os.path.join(self.save_path,
-                                                   co.CONST['mv_obj_fold_name'],
+                                                   co.CONST['properties_fold_name'],
                                                    str(self.fold_count),
                                                    'centers.txt'), 'a') as out:
                                 out.write("%f %f\n" % (derotate_center[0],
                                             derotate_center[1]))
                             try:
                                 self.skeletons[os.path.join(
-                                    self.save_path,co.CONST['mv_obj_fold_name'],
+                                    self.save_path,co.CONST['properties_fold_name'],
                                     str(self.fold_count))].append(
                                         [self.skeleton.skeleton,
                                          self.skeleton.skeleton_widths])
                             except KeyError:
                                 self.skeletons[os.path.join(
-                                    self.save_path,co.CONST['mv_obj_fold_name'],
+                                    self.save_path,co.CONST['properties_fold_name'],
                                     str(self.fold_count))] = [
                                         [self.skeleton.skeleton,
                                          self.skeleton.skeleton_widths]]
