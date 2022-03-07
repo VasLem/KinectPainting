@@ -99,5 +99,3 @@ Report Issues/ Feedback/ Copyright
 ---
 
 Any issue that anyone has can  be reported, as I am a solo team and some things might have skipped my attention, but I do not guarantee immediate response.
-Furthermore, due to the fact that this project is under development and it is directed to become product of a Thesis, I am not able to use any help from volunteers, 
-until at least my thesis is completed, which is programmed to happen before upcoming March. Until then, I am happy to share my findings with you
